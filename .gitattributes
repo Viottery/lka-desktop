@@ -1,0 +1,10 @@
+# Canonical text blobs; native Windows launchers use CRLF on checkout.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.bat text eol=crlf
+*.cmd text eol=crlf
+*.png binary
+*.jpg binary
+*.gif binary
+*.skel binary
+*.jar binary

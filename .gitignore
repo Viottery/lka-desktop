@@ -1,0 +1,83 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.pytest_cache/
+
+# Virtual env
+.venv/
+venv/
+env/
+
+# Environment variables
+.env
+
+# OS
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+
+# Docker
+docker-data/
+
+# Test artifacts
+.coverage
+htmlcov/
+
+# Bytecode
+*.pyc
+
+# Generated knowledge-base artifacts
+data/raw/prts-wiki/
+data/raw/**/_manifest.json
+data/raw/**/_index_manifest.json
+data/pet/state.json
+
+# Runtime outputs
+.runtime/
+logs/
+smoke_output/
+backups/
+*.pid
+
+# Local data
+data/memory/*.db
+data/qdrant-local/
+data/qq/
+.env.qq-reader
+
+# Java desktop pet build outputs
+desktop-pet-java/.gradle/
+desktop-pet-java/build/
+
+# Private environment variants (examples remain distributable)
+.env.*
+!.env.example
+!.env.*.example
+
+# Local persistence, caches and optional browser test dependencies
+*.db
+*.db-wal
+*.db-shm
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+.cache/
+.mypy_cache/
+.ruff_cache/
+node_modules/
+test-results/
+playwright-report/
+
+# Local manual probes; preserved on disk
+/hello.txt
+/hello2.txt

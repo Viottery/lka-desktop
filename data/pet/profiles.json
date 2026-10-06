@@ -1,0 +1,67 @@
+[
+  {
+    "id": "truth-default-build",
+    "name": "Truth Default",
+    "role": "spine desktop companion",
+    "accent": "#527f95",
+    "description": "PRTS Spine 3.5 default build profile",
+    "spine": {
+      "runtime": "spine-webgl",
+      "skeleton_url": "/desktop-pet/assets/truth/default/build/build_char_195_glassb.skel",
+      "atlas_url": "/desktop-pet/assets/truth/default/build/build_char_195_glassb.atlas",
+      "texture_url": "/desktop-pet/assets/truth/default/build/build_char_195_glassb.png",
+      "runtime_script_url": "/desktop-pet/vendor/spine-webgl-3.6-binary.js",
+      "animation_map": {
+        "idle": "Relax",
+        "wave": "Interact",
+        "poke": "Interact",
+        "sit": "Sit",
+        "think": "Default",
+        "work": "Default",
+        "sleep": "Sleep",
+        "move": "Move"
+      },
+      "skeleton_scale": 0.52,
+      "x_offset": 0,
+      "floor_offset": 24,
+      "premultiplied_alpha": false
+    },
+    "animations": ["idle", "poke", "move", "sleep", "wave", "think", "work"],
+    "default_animation": "idle",
+    "min_scale": 0.7,
+    "max_scale": 1.4
+  },
+  {
+    "id": "truth-book-build",
+    "name": "Truth Book",
+    "role": "spine desktop companion",
+    "accent": "#8d6f4f",
+    "description": "PRTS Spine 3.5 book build profile",
+    "spine": {
+      "runtime": "spine-webgl",
+      "skeleton_url": "/desktop-pet/assets/truth/book/build/build_char_195_glassb_kitchen_1.skel",
+      "atlas_url": "/desktop-pet/assets/truth/book/build/build_char_195_glassb_kitchen_1.atlas",
+      "texture_url": "/desktop-pet/assets/truth/book/build/build_char_195_glassb_kitchen_1.png",
+      "runtime_script_url": "/desktop-pet/vendor/spine-webgl-3.6-binary.js",
+      "animation_map": {
+        "idle": "Relax",
+        "wave": "Interact",
+        "poke": "Interact",
+        "sit": "Sit",
+        "special": "Special",
+        "think": "Special",
+        "work": "Special",
+        "sleep": "Sleep",
+        "move": "Move"
+      },
+      "skeleton_scale": 0.52,
+      "x_offset": 0,
+      "floor_offset": 24,
+      "premultiplied_alpha": false
+    },
+    "animations": ["idle", "poke", "move", "sleep", "wave", "think", "work"],
+    "default_animation": "idle",
+    "min_scale": 0.7,
+    "max_scale": 1.4
+  }
+]

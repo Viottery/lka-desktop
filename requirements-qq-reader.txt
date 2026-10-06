@@ -1,0 +1,2 @@
+# Install separately to enable the optional QQ Reader websocket client.
+websockets>=15,<17

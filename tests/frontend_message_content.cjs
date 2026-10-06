@@ -1,0 +1,14 @@
+'use strict';
+const assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm');
+const window={};vm.runInNewContext(fs.readFileSync(path.join(__dirname,'../app/web/pet/message-content.js'),'utf8'),{window});
+const describe=item=>JSON.parse(JSON.stringify(window.LkaMessageContent.describe(item)));
+assert.deepEqual(describe({content_kind:'unsupported',text:'  '}).media,[{kind:'unsupported',name:''}]);
+assert.equal(describe({segments:[{type:'text',data:{text:'第一段'}},{type:'face',data:{id:178}},{type:'text',data:{text:'第二段'}}]}).text,'第一段第二段');
+assert.equal(describe({segments:[{type:'face',data:{id:178}}]}).media[0].name,'编号 178');
+assert.equal(describe({text:'正文[CQ:image,url=https://private.invalid/SECRET]'}).text,'正文');
+assert(!JSON.stringify(describe({text:'[CQ:video,url=https://private.invalid/SECRET]'})).includes('SECRET'));
+const cached=describe({ui_content_parts:[{ordinal:1,kind:'sticker'}],attachments:[{ordinal:1,kind:'image',state:'cached',attachment_id:'safe_id',file_name:'emoji.gif'}]});
+assert.equal(cached.media.length,1);assert.equal(cached.media[0].kind,'sticker');
+const mixed=describe({text:'说明',content_parts:[{kind:'mention',mention:{kind:'all'}},{kind:'unsupported'}],ui_content_parts:[{ordinal:1,kind:'record'}]});
+assert.deepEqual(mixed.media.map(m=>m.kind),['mention','record']);assert.equal(mixed.media[0].name,'@所有人');
+console.log('frontend message content contract tests passed');

@@ -1,0 +1,97 @@
+.pet-settings-button {
+    -fx-background-color: #e4f1ef;
+    -fx-border-color: #b6d5d2;
+    -fx-border-radius: 9;
+    -fx-background-radius: 9;
+    -fx-text-fill: #195e64;
+    -fx-font-family: "Microsoft YaHei UI";
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-padding: 8 11;
+}
+.pet-settings-button:hover, .pet-settings-button:showing {
+    -fx-background-color: #d4eae7;
+    -fx-border-color: #70aaa8;
+}
+.pet-settings-button .arrow-button { -fx-padding: 0 1 0 10; }
+.pet-settings-button .arrow { -fx-background-color: #195e64; }
+
+.context-menu {
+    -fx-background-color: #ffffff;
+    -fx-background-radius: 13;
+    -fx-border-color: #ccdedf;
+    -fx-border-width: 1;
+    -fx-border-radius: 13;
+    -fx-padding: 8;
+    -fx-effect: dropshadow(gaussian, rgba(19, 49, 56, 0.20), 18, 0, 0, 8);
+}
+.context-menu .menu-item {
+    -fx-background-radius: 8;
+    -fx-padding: 8 12;
+}
+.context-menu .menu-item:focused { -fx-background-color: #e6f3f1; }
+.context-menu .menu-item .label {
+    -fx-text-fill: #19313a;
+    -fx-font-family: "Microsoft YaHei UI";
+    -fx-font-size: 12px;
+}
+.context-menu .menu-item:focused .label { -fx-text-fill: #195e64; }
+.context-menu .danger-menu-item .label { -fx-text-fill: #a8453e; }
+.context-menu .danger-menu-item:focused { -fx-background-color: #fff0ed; }
+.context-menu .separator .line { -fx-border-color: #e0eaeb; }
+.context-menu .check-menu-item .left-container { -fx-padding: 0 9 0 0; }
+.context-menu .check-menu-item:checked .check { -fx-background-color: #237b80; }
+
+.pet-model-combo {
+    -fx-background-color: #f6faf9;
+    -fx-border-color: #c4d9d9;
+    -fx-border-width: 1;
+    -fx-border-radius: 9;
+    -fx-background-radius: 9;
+    -fx-padding: 2 4;
+}
+.pet-model-combo:hover, .pet-model-combo:focused { -fx-border-color: #237b80; }
+.pet-model-combo .list-cell { -fx-text-fill: #19313a; -fx-font-size: 12px; }
+.pet-model-combo .arrow { -fx-background-color: #237b80; }
+.combo-box-popup .list-view {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #ccdedf;
+    -fx-border-radius: 10;
+    -fx-background-radius: 10;
+    -fx-padding: 5;
+    -fx-effect: dropshadow(gaussian, rgba(19, 49, 56, 0.18), 14, 0, 0, 6);
+}
+.combo-box-popup .list-cell { -fx-padding: 8 10; -fx-background-radius: 7; }
+.combo-box-popup .list-cell:filled:hover,
+.combo-box-popup .list-cell:filled:selected { -fx-background-color: #e6f3f1; -fx-text-fill: #195e64; }
+
+.pet-native-composer { -fx-alignment: top-center; -fx-padding: 7 2 0 2; }
+.pet-native-input {
+    -fx-font-family: "Microsoft YaHei UI";
+    -fx-font-size: 13px;
+    -fx-text-fill: #203940;
+    -fx-prompt-text-fill: #718d91;
+    -fx-background-color: #f6faf9;
+    -fx-border-color: #c9dadd;
+    -fx-border-width: 1;
+    -fx-border-radius: 11;
+    -fx-background-radius: 11;
+    -fx-pref-height: 63;
+    -fx-min-height: 63;
+    -fx-max-height: 110;
+}
+.pet-native-input:focused { -fx-border-color: #237b80; }
+.pet-native-input .content { -fx-background-color: #f6faf9; -fx-background-radius: 11; }
+.pet-native-send {
+    -fx-font-family: "Microsoft YaHei UI";
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-text-fill: white;
+    -fx-background-color: #237b80;
+    -fx-background-radius: 11;
+    -fx-pref-width: 76;
+    -fx-min-width: 76;
+    -fx-pref-height: 40;
+}
+.pet-native-send:hover { -fx-background-color: #1b6268; }
+.pet-native-send:disabled { -fx-background-color: #9ab2b2; -fx-opacity: 0.7; }

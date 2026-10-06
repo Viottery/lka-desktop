@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>理事所 · 真理</title>
+  <link rel="icon" type="image/png" href="./assets/ursus-student-emblem.png">
+  <script>if (new URLSearchParams(location.search).get("mode") === "panel") location.replace("/desktop-pet/chat.html?mode=quick");</script>
+  <link rel="stylesheet" href="./pet.css?v=20260427-2322">
+</head>
+<body>
+  <main class="pet-shell" data-panel="closed">
+    <section class="stage" aria-label="桌宠入口">
+      <div class="bubble" id="bubble" role="status">正在连接...</div>
+      <button class="pet-hitbox pywebview-drag-region" id="petHitbox" type="button" title="打开菜单" aria-label="打开桌宠菜单">
+        <div id="spineMount" class="spine-mount" aria-hidden="true"></div>
+        <canvas id="petCanvas" width="320" height="360" aria-hidden="true"></canvas>
+      </button>
+      <div class="pet-menu" id="petMenu" role="menu" aria-label="桌宠菜单" hidden>
+        <button type="button" role="menuitem" data-menu-action="open_interaction">打开面板</button>
+        <button type="button" role="menuitem" data-menu-action="open_workbench">打开工作台</button>
+        <button type="button" role="menuitem" data-menu-action="poke">互动</button>
+        <button type="button" role="menuitem" data-menu-action="move">移动</button>
+        <button type="button" role="menuitem" data-menu-action="set_animation" data-animation="idle">待机</button>
+        <button type="button" role="menuitem" data-menu-action="sleep">休息</button>
+      </div>
+      <nav class="pet-dock" aria-label="桌宠操作">
+        <button class="icon-button" id="openPanel" type="button" title="打开交互面板" aria-label="打开交互面板">
+          <span aria-hidden="true">+</span>
+        </button>
+        <button class="icon-button" id="wavePet" type="button" title="挥手" aria-label="挥手">
+          <span aria-hidden="true">~</span>
+        </button>
+        <button class="icon-button" id="sleepPet" type="button" title="待机" aria-label="待机">
+          <span aria-hidden="true">o</span>
+        </button>
+      </nav>
+    </section>
+
+    <aside class="interaction-panel" id="interactionPanel" aria-label="交互面板">
+      <header class="panel-header">
+        <div>
+          <p class="kicker">理事所</p>
+          <h1>真理 · 快速任务</h1>
+        </div>
+        <button class="icon-button" id="closePanel" type="button" title="关闭面板" aria-label="关闭面板">
+          <span aria-hidden="true">x</span>
+        </button>
+      </header>
+
+      <section class="chat-log" id="chatLog" aria-live="polite"></section>
+
+      <section class="agent-settings" aria-label="Agent 运行设置">
+        <label><span>Workspace</span><input id="agentWorkspaceInput" placeholder="C:/Projects/..." autocomplete="off"></label>
+        <label><span>LLM 模型</span><input id="agentModelInput" placeholder="默认模型" autocomplete="off"></label>
+        <label><span>安全审查</span><select id="agentSafetyMode"><option value="backend">跟随后端配置</option><option value="manual">人工确认</option><option value="llm">模型审查</option><option value="skip">自动通过</option></select></label>
+        <label class="agent-check"><input id="agentStreamToggle" type="checkbox" checked><span>流式</span></label>
+        <button id="indexWorkspace" type="button">索引</button>
+      </section>
+
+      <form class="composer" id="composer">
+        <label class="sr-only" for="messageInput">输入消息</label>
+        <textarea id="messageInput" rows="3" placeholder="让桌宠帮你查资料、跑命令、整理文件..."></textarea>
+        <button class="send-button" type="submit" title="发送" aria-label="发送">
+          <span aria-hidden="true">&gt;</span>
+        </button>
+      </form>
+
+      <section class="settings-strip" aria-label="桌宠设置">
+        <label>
+          <span>形态</span>
+          <select id="profileSelect"></select>
+        </label>
+        <label>
+          <span>动作</span>
+          <select id="animationSelect"></select>
+        </label>
+        <label>
+          <span>缩放</span>
+          <input id="scaleInput" type="range" min="0.7" max="1.6" step="0.05" value="1">
+        </label>
+        <label class="toggle-row">
+          <input id="manualToggle" type="checkbox">
+          <span>手动</span>
+        </label>
+        <label class="toggle-row">
+          <input id="transparentToggle" type="checkbox">
+          <span>穿透</span>
+        </label>
+      </section>
+    </aside>
+  </main>
+  <link rel="stylesheet" href="./markdown.css?v=20260930-markdown">
+  <script src="./vendor/markdown-it-15.0.2.umd.min.js"></script>
+  <script src="./markdown.js?v=20260930-markdown"></script>
+  <script src="./vendor/spine-webgl-3.6-binary.js"></script>
+  <script src="./pet.js?v=20260930-markdown"></script>
+</body>
+</html>

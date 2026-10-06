@@ -1,0 +1,59 @@
+plugins {
+    id 'application'
+    id 'org.openjfx.javafxplugin' version '0.1.0'
+}
+
+repositories {
+    mavenCentral()
+}
+
+java {
+    toolchain {
+        languageVersion = JavaLanguageVersion.of(21)
+    }
+}
+
+javafx {
+    version = '21.0.5'
+    modules = ['javafx.controls', 'javafx.swing', 'javafx.web']
+}
+
+dependencies {
+    implementation 'net.java.dev.jna:jna-platform:5.14.0'
+    implementation 'com.google.code.gson:gson:2.11.0'
+    implementation 'com.badlogicgames.gdx:gdx:1.11.0'
+    implementation 'com.badlogicgames.gdx:gdx-backend-lwjgl3:1.11.0'
+    runtimeOnly 'com.badlogicgames.gdx:gdx-platform:1.11.0:natives-desktop'
+    implementation 'com.esotericsoftware.spine:spine-libgdx:3.5.51.1'
+}
+
+application {
+    mainClass = 'com.agenticrag.pet.DesktopPetJavaApp'
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+tasks.register('runSpine', JavaExec) {
+    classpath = sourceSets.main.runtimeClasspath
+    mainClass = 'com.agenticrag.pet.SpinePetGdxLauncher'
+}
+
+tasks.register('verifyPetMotion', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.agenticrag.pet.PetMotionCheck'
+}
+
+tasks.register('verifyPetInteraction', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.agenticrag.pet.PetClickSequenceCheck'
+}
+
+tasks.register('verifyPetMemoryBridge', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.agenticrag.pet.PetMemoryBridgeCheck'
+}

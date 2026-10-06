@@ -1,0 +1,10 @@
+fastapi[standard-no-fastapi-cloud-cli]
+langgraph
+langchain
+pydantic-settings
+qdrant-client
+pytest
+httpx>=0.27,<1
+langchain-openai
+torch
+sentence-transformers[openvino]

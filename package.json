@@ -1,0 +1,14 @@
+{
+  "name": "lka-windows-frontend-tests",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Isolated browser regressions for the LKA desktop frontend",
+  "scripts": {
+    "test:sessions": "node tests/frontend_session_lifecycle_smoke.cjs",
+    "test:chat": "node tests/frontend_chat_turn_smoke.cjs",
+    "test:messages": "node tests/frontend_messages_smoke.cjs"
+  },
+  "devDependencies": {
+    "playwright-core": "1.59.1"
+  }
+}

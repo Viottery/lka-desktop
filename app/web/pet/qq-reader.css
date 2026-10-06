@@ -1,0 +1,48 @@
+.qq-plugin { margin-top: 16px; border: 1px solid var(--line, #deddd6); border-radius: 12px; background: var(--paper, #faf9f5); padding: 12px; }
+.qq-plugin summary { cursor: pointer; font-weight: 600; font-size: 13px; }
+.qq-plugin summary span { float: right; font-weight: 400; color: var(--muted, #68726e); }
+.qq-plugin dl { display: grid; grid-template-columns: 64px minmax(0, 1fr); gap: 8px; margin: 14px 0; font-size: 12px; }
+.qq-plugin dt { color: var(--muted, #68726e); }
+.qq-plugin dd { margin: 0; overflow-wrap: anywhere; }
+.qq-plugin p { color: var(--muted, #68726e); font-size: 12px; line-height: 1.6; margin-bottom: 0; }
+.qq-plugin button:disabled { opacity: .5; }
+.message-history > p { margin: 10px 0; }
+.message-history label { display: grid; gap: 5px; margin: 9px 0; font-size: 12px; }
+.message-history input, .message-history select { min-width: 0; width: 100%; border: 1px solid var(--line, #deddd6); border-radius: 7px; padding: 7px 8px; color: inherit; background: var(--paper, #faf9f5); font: inherit; }
+.message-history small { color: var(--muted, #68726e); font-size: 11px; line-height: 1.45; }
+.message-policy-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
+.message-policy-form .message-check { display: flex; align-items: center; gap: 7px; }
+.message-policy-form .message-check input { width: auto; }
+.message-policy-form > button { align-self: end; justify-self: start; margin: 9px 0; }
+.message-history-list { display: grid; gap: 8px; margin-top: 12px; }
+.message-history-row { display: grid; gap: 5px; padding: 9px 0; border-top: 1px solid var(--line, #deddd6); overflow-wrap: anywhere; }
+.message-history-row strong { font-size: 12px; }
+.message-history-actions { display: flex; flex-wrap: wrap; gap: 4px 10px; }
+.message-history-detail { margin-top: 12px; padding: 10px; border: 1px solid var(--line, #deddd6); border-radius: 8px; white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-history-page { white-space: pre-wrap; overflow-wrap: anywhere; }
+
+/* Reading extends the workbench palette, type hierarchy and quiet dividers. */
+.message-reading { margin-block: 14px; border-block: 1px solid var(--line, #d8e4e6); padding-block: 12px; }
+.message-reading h3 { margin: 0 0 10px; font-size: 14px; color: var(--ink, #19313a); }
+.message-reading h4 { margin: 12px 0 7px; font-size: 12px; }
+.reading-tabs { display: flex; flex-wrap: wrap; gap: 3px 8px; }
+.reading-tabs [aria-selected="true"] { color: var(--teal-dark, #195e64); border-bottom: 2px solid var(--teal, #237b80); }
+.reading-filters, .reading-form { display: grid; gap: 8px; min-width: 0; }
+.reading-filters { margin-block: 10px; }
+.reading-row, .reading-coverage { border-top: 1px solid var(--line, #d8e4e6); padding-block: 8px; overflow-wrap: anywhere; }
+.message-reading p { margin: 6px 0; font-size: 12px; line-height: 1.6; max-width: 76ch; }
+.reading-row strong { font-size: 12px; }
+.reading-detail:empty { display: none; }
+.reading-detail { margin-top: 12px; padding: 10px; border: 1px solid var(--line, #d8e4e6); background: var(--surface, #fff); border-radius: 8px; }
+.reading-quote { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--teal, #237b80); background: var(--paper, #f5f8f8); }
+.reading-quote p, .message-reading pre { white-space: pre-wrap; overflow-wrap: anywhere; }
+.message-reading pre { max-height: 260px; overflow: auto; font: inherit; font-size: 11px; }
+.reading-form textarea { width: 100%; min-height: 72px; resize: vertical; color: inherit; background: var(--paper, #f5f8f8); border: 1px solid var(--line, #d8e4e6); border-radius: 7px; padding: 7px; font: inherit; box-sizing: border-box; }
+.reading-form [hidden] { display: none; }
+.reading-form .message-check { display: flex; align-items: center; gap: 7px; }
+.reading-form .message-check input { width: auto; }
+.reading-confirmation:not(:empty) { padding: 9px; border: 1px solid var(--gold, #d8a959); border-radius: 7px; }
+.message-reading > details { margin-top: 12px; }
+#messageHistoryStatus { max-height: 150px; overflow: auto; white-space: pre-wrap; overflow-wrap: anywhere; }
+#messageHistoryStatus.error { color: #a33c35; }
+@media (max-width: 520px) { .message-policy-form { grid-template-columns: minmax(0, 1fr); } }

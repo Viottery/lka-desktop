@@ -1,0 +1,144 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta http-equiv="Cache-Control" content="no-store">
+  <title>理事所 · 工作台</title>
+  <link rel="icon" type="image/png" href="./assets/ursus-student-emblem.png">
+  <link rel="stylesheet" href="./chat.css?v=20261006-session-ux">
+  <link rel="stylesheet" href="./markdown.css?v=20260930-markdown">
+  <link rel="stylesheet" href="./memory.css?v=20261002-projects">
+  <link rel="stylesheet" href="./qq-reader.css?v=20261005">
+  <link rel="stylesheet" href="./messages-center.css?v=20261006-people-names">
+</head>
+<body>
+  <main class="chat-shell" id="chatShell">
+    <div class="sidebar-backdrop" id="sidebarBackdrop" hidden></div>
+    <aside class="session-sidebar" id="sessionSidebar" aria-label="会话列表">
+      <header class="sidebar-header">
+        <div class="brand-lockup"><span class="brand-mark" aria-hidden="true"></span><div><strong>理事所</strong></div></div>
+        <button id="newSessionButton" type="button" class="side-action" title="新建会话">新建</button>
+      </header>
+      <div class="sidebar-tools"><div class="sidebar-tools-heading"><p class="sidebar-caption" id="sessionListCaption">最近的工作</p><div class="project-sidebar-actions"><button id="openProjectsButton" type="button" class="sidebar-view-switch">项目</button><button id="toggleDeletedSessionsButton" type="button" class="sidebar-view-switch">已删除</button></div></div><label class="sr-only" for="sessionSearchInput">搜索会话</label><input id="sessionSearchInput" type="search" placeholder="搜索会话" maxlength="200" autocomplete="off"></div>
+      <section class="session-list" id="sessionList"></section>
+      <div class="sidebar-footer"><button id="loadMoreSessionsButton" type="button" class="sidebar-load-more" hidden>加载更早的会话</button><span id="sessionListStatus" role="status" aria-live="polite"></span></div>
+    </aside>
+
+    <section class="chat-main">
+      <header class="chat-topbar">
+        <button id="toggleSidebarButton" type="button" class="icon-button" aria-label="打开会话列表" title="会话列表">☰</button>
+        <div class="chat-session-meta"><strong id="activeSessionTitle">新会话</strong><span id="activeSessionSubtitle">准备就绪</span></div>
+        <div class="topbar-actions">
+          <button id="newQuickSessionButton" type="button" class="quiet-button" title="新建会话">＋<span>新会话</span></button>
+          <button id="continueWorkbenchButton" type="button" class="quiet-button continue-button" title="在工作台继续当前任务" disabled>继续<span>在工作台</span></button>
+          <button id="openWorkbenchButton" type="button" class="quiet-button workbench-button" title="打开工作台">▣<span>工作台</span></button>
+          <button id="openMessagesButton" type="button" class="icon-button message-entry" title="消息中心" aria-label="打开消息中心"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5H9l-5.5 3V6A1.5 1.5 0 0 1 5 4.5Z"/><path d="M7.5 9h9m-9 4h6"/></svg></button>
+          <button id="toggleSettingsButton" type="button" class="icon-button settings-button" aria-label="工作设置" title="工作设置">⚙</button>
+        </div>
+      </header>
+
+      <div class="context-strip">
+        <span class="context-dot" aria-hidden="true"></span>
+        <div class="context-copy"><span>当前工作区</span><strong id="workspaceSummary">正在准备独立工作区…</strong></div>
+        <button id="changeWorkspaceButton" type="button" class="text-action">切换</button>
+        <button id="newProjectSessionButton" type="button" class="text-action" title="沿用当前工作目录新建会话" disabled>项目内新建</button>
+        <button id="openMemoryQuickButton" type="button" class="text-action">记忆</button>
+      </div>
+
+      <div class="run-status" id="runStatus" role="status" aria-live="polite">就绪</div>
+      <details class="run-timeline" id="runTimeline" hidden><summary id="runTimelineSummary">任务进度</summary><ol id="runTimelineList"></ol></details>
+      <section class="multi-agent-status" id="multiAgentStatus" aria-live="polite" hidden></section>
+      <section class="approval-queue" id="approvalQueueStatus" aria-live="polite" role="dialog" aria-modal="true" aria-label="安全审查确认" hidden></section>
+
+      <section class="backend-offline" id="backendOfflinePanel" hidden>
+        <h3>后端服务未连接</h3>
+        <p id="backendOfflineReason">当前无法连接 LKA 后端服务。</p>
+        <div class="backend-offline-actions"><button id="startBackendButton" type="button" class="side-action">启动后端</button><button id="retryBackendButton" type="button" class="side-action">重试连接</button></div>
+      </section>
+
+      <section class="messages" id="messages" aria-label="对话内容" aria-live="polite"></section>
+
+      <form class="composer" id="chatForm">
+        <label class="sr-only" for="questionInput">输入任务</label>
+        <textarea id="questionInput" name="question" rows="2" placeholder="告诉真理你想完成什么…" autocomplete="off"></textarea>
+        <button id="sendButton" type="submit" title="发送任务">发送 <span aria-hidden="true">↗</span></button>
+        <p class="composer-hint">Enter 发送 · Shift + Enter 换行</p>
+      </form>
+    </section>
+
+    <aside class="context-rail" id="contextRail" aria-label="工作区与设置">
+      <header class="context-rail-header"><div><strong>工作区</strong><span>文件与运行设置</span></div><button id="closeSettingsButton" type="button" class="icon-button" aria-label="关闭右侧面板">×</button></header>
+      <div class="rail-tabs" role="tablist" aria-label="工作区面板"><button id="filesTabButton" type="button" role="tab" aria-controls="filesPanel" aria-selected="false">文件</button><button id="settingsTabButton" type="button" role="tab" aria-controls="settingsPanel" aria-selected="true">设置</button></div>
+      <div class="rail-panel files-panel" id="filesPanel" role="tabpanel" hidden><div class="file-toolbar"><button id="fileUpButton" type="button" class="text-action" title="返回上一级">上一级</button><button id="refreshFilesButton" type="button" class="text-action" title="刷新文件列表">刷新</button></div><p id="fileCurrentPath" class="file-current-path">当前工作区</p><div id="fileList" class="file-list" role="list"></div><div id="filePreview" class="file-preview" aria-live="polite">选择文件后在这里预览。</div></div>
+      <div class="rail-panel settings-panel" id="settingsPanel" role="tabpanel">
+      <section class="run-controls" aria-label="Agent 运行设置">
+        <label class="run-control workspace-control"><span>工作目录</span><input id="workspaceInput" type="text" placeholder="C:/Users/…/Workspaces/…" autocomplete="off"><small>新会话自动创建。输入已有目录可切换。</small></label>
+        <button id="indexWorkspaceButton" type="button" class="side-action">索引当前目录</button>
+        <div class="control-divider"></div>
+        <label class="run-control"><span>默认模型</span><select id="llmModelInput"><option value="">跟随后端默认模型</option></select></label>
+        <div class="model-catalog-row"><small id="modelCatalogStatus" role="status">正在读取可用模型…</small><button id="refreshModelsButton" type="button" class="text-action">刷新</button></div>
+        <label class="run-control compact-control"><span>安全审查</span><select id="safetyModeSelect"><option value="backend">跟随后端配置</option><option value="skip">自动通过</option><option value="llm">模型审查</option><option value="manual">每次确认</option></select></label>
+        <label class="stream-toggle"><input id="streamToggle" type="checkbox" checked><span>实时显示回复</span></label>
+        <div class="control-divider"></div>
+        <label class="run-control"><span>新会话工作区位置</span><input id="workspaceParentInput" type="text" placeholder="留空使用文档目录" autocomplete="off"><small>仅影响之后创建的新会话。</small></label>
+        <p id="defaultsSaveStatus" class="defaults-save-status" role="status">更改后自动保存默认设置</p>
+        <button id="resetDefaultsButton" type="button" class="text-action reset-defaults">恢复默认设置</button>
+        <div class="control-divider"></div>
+        <button id="openProjectCenterButton" type="button" class="side-action">项目与会话</button>
+        <button id="openMessageCenterButton" type="button" class="side-action">消息与 QQ</button>
+        <button id="openMemoryCenterButton" type="button" class="side-action">记忆与自动学习</button>
+        <small>查看、纠正记忆，管理当前项目的学习。</small>
+      </section>
+      <details class="qq-plugin" id="qqReaderPanel">
+        <summary>QQ 采集连接 <span id="qqReaderBadge">可选插件</span></summary>
+        <dl aria-live="polite"><dt>启用</dt><dd id="qqReaderEnabled">待查询</dd><dt>连接</dt><dd id="qqReaderConnection">—</dd><dt>接收时间</dt><dd id="qqReaderReceived">—</dd><dt>同步</dt><dd id="qqReaderSync">—</dd><dt>等待同步</dt><dd id="qqReaderPending">—</dd><dt>提示</dt><dd id="qqReaderError">—</dd></dl>
+        <button id="qqReaderRefresh" class="text-action" type="button">刷新状态</button>
+        <p>默认关闭。在 Windows 前端服务的本地配置中启用；这里仅显示采集状态。消息正文与会话设置在消息中心查看。</p>
+      </details>
+      <details class="qq-plugin message-history" id="messageHistoryPanel">
+        <summary>消息历史 <span id="messageHistoryBadge">本机管理</span></summary>
+        <p>仅导入已批准会话的后续消息。采集方向为单向；撤销后停止采集，已有历史保留。开启分析会把会话文本发送给后端配置的模型，可能产生模型费用。</p>
+        <p>管理凭据由 Windows 前端服务持有，页面不需要填写。尚未配对时请检查本机配置。</p>
+        <form id="messagePolicyForm" class="message-policy-form">
+          <label>平台<input id="messagePlatform" value="qq" maxlength="64" required></label>
+          <label>账号 ID<input id="messageAccount" maxlength="256" required></label>
+          <label>会话类型<select id="messageConversationType"><option value="private">私聊</option><option value="group">群聊</option><option value="channel">频道</option></select></label>
+          <label>会话 ID<input id="messageConversationId" maxlength="256" required></label>
+          <label>显示名称<input id="messageDisplayName" maxlength="512"></label>
+          <label>分析批量<input id="messageBatchSize" type="number" min="1" max="200" value="20"></label>
+          <label>最短分析间隔（秒）<input id="messageMinInterval" type="number" min="0" value="300"></label>
+          <label>尾批最长等待（秒）<input id="messageMaxWait" type="number" min="0" value="900"></label>
+          <label>时区<input id="messageTimezone" value="Asia/Shanghai" maxlength="64"></label>
+          <label class="message-check"><input id="messageRecordEnabled" type="checkbox">记录后续消息</label>
+          <label class="message-check"><input id="messageMediaEnabled" type="checkbox">缓存图片与视频</label>
+          <label class="message-check"><input id="messageStartFromNow" type="checkbox">首次启用分析只处理之后的新消息</label>
+          <label class="message-check"><input id="messageAnalysisEnabled" type="checkbox">允许发送到配置的模型分析</label>
+          <label class="message-check"><input id="messageProposalsEnabled" type="checkbox">允许生成事项候选（仍需逐项确认）</label>
+          <button type="submit">保存白名单</button>
+        </form>
+        <div id="messageHistoryList" class="message-history-list" aria-live="polite"></div>
+        <div id="messageHistoryDetail" class="message-history-detail" aria-live="polite"></div>
+        <p id="messageHistoryStatus" role="status" aria-live="polite">尚未载入消息管理接口。</p>
+      </details>
+      <div class="rail-note"><strong>按任务或项目安排目录</strong><p>普通新任务默认在文档目录创建工作区；项目内新建复用项目目录，也可单独切换。</p></div>
+      </div>
+    </aside>
+  </main>
+  <div class="undo-toast" id="undoToast" role="status" aria-live="polite" hidden><span id="undoToastText"></span><button id="undoDeleteButton" type="button">撤销</button><button id="dismissUndoButton" type="button" aria-label="关闭提示">×</button></div>
+  <div class="column-resizer sidebar-resizer" id="sidebarResizeHandle" role="separator" aria-label="调整会话列表宽度" aria-orientation="vertical" tabindex="0"></div>
+  <div class="column-resizer rail-resizer" id="railResizeHandle" role="separator" aria-label="调整工作区面板宽度" aria-orientation="vertical" tabindex="0"></div>
+  <script src="./vendor/markdown-it-15.0.2.umd.min.js"></script>
+  <script src="./markdown.js?v=20260930-markdown"></script>
+  <script src="./chat.js?v=20261006-session-ux"></script>
+  <script src="./memory.js?v=20261002-projects"></script>
+  <script src="./projects.js?v=20261006-session-ux"></script>
+  <script src="./qq-reader.js?v=20261005"></script>
+  <script src="./message-ui-api.js?v=20261005"></script>
+  <script src="./message-content.js?v=20261006-people-names"></script>
+  <script src="./message-names.js?v=20261006-people-names"></script>
+  <script src="./message-history.js?v=20261006-people-names"></script>
+  <script src="./message-reading.js?v=20261006-people-names"></script>
+  <script src="./messages-center.js?v=20261006-people-names"></script>
+</body>
+</html>
