@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="440" viewBox="0 0 1200 440" role="img" aria-labelledby="title desc">
+  <title id="title">LKA Desktop</title>
+  <desc id="desc">Interface illustration: a compact quick task panel beside a desktop companion, leading to a larger workbench with conversations, chat and workspace.</desc>
+  <defs>
+    <linearGradient id="background" x2="1" y2="1">
+      <stop stop-color="#f4f8fc"/>
+      <stop offset="1" stop-color="#edf6f5"/>
+    </linearGradient>
+    <pattern id="dots" width="24" height="24" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1" fill="#cbdbe6" opacity=".5"/>
+    </pattern>
+    <filter id="shadow" x="-20%" y="-20%" width="140%" height="150%">
+      <feDropShadow dx="0" dy="8" stdDeviation="12" flood-color="#23485d" flood-opacity=".09"/>
+    </filter>
+  </defs>
+  <rect width="1200" height="440" rx="24" fill="url(#background)"/>
+  <rect width="1200" height="440" rx="24" fill="url(#dots)"/>
+  <circle cx="1100" cy="60" r="160" fill="#d9eee9" opacity=".4"/>
+  <g font-family="Segoe UI, Arial, sans-serif">
+    <rect x="44" y="38" width="154" height="28" rx="14" fill="#e3eeef"/>
+    <text x="121" y="57" text-anchor="middle" font-size="11" font-weight="700" letter-spacing="1.4" fill="#168579">DESKTOP + WEB</text>
+    <text x="44" y="120" font-size="54" font-weight="700" letter-spacing="-2" fill="#152c45">LKA Desktop</text>
+    <text x="46" y="152" font-size="18" fill="#537086">A small start. Room for deeper work.</text>
+
+    <!-- Compact task panel: an illustration, without private conversations. -->
+    <g filter="url(#shadow)">
+      <rect x="44" y="188" width="302" height="178" rx="18" fill="#fff" stroke="#d6e3ed"/>
+    </g>
+    <circle cx="66" cy="210" r="4" fill="#168f87"/>
+    <text x="80" y="214" font-size="12" font-weight="600" fill="#385569">QUICK TASK</text>
+    <path d="M315 205v10m-5-5h10" stroke="#89a0b1" stroke-width="1.5" stroke-linecap="round"/>
+    <rect x="62" y="232" width="266" height="69" rx="10" fill="#f5f8fc"/>
+    <text x="75" y="257" font-size="13" fill="#537086">Ask a question or start a task...</text>
+    <path d="M76 278h138" stroke="#d4e0ea" stroke-width="5" stroke-linecap="round"/>
+    <text x="63" y="335" font-size="11" fill="#7c92a2">Enter to send</text>
+    <rect x="256" y="315" width="72" height="32" rx="10" fill="#4169d1"/>
+    <text x="292" y="336" text-anchor="middle" font-size="12" font-weight="600" fill="#fff">Send</text>
+
+    <!-- Right-click interaction; this diagram does not replace the character assets. -->
+    <circle cx="412" cy="299" r="31" fill="#e4f2ee" stroke="#c6dfd8"/>
+    <path d="M404 283v29l7-7 7 13 6-3-7-13 10-1z" fill="#168f87" stroke="#fff" stroke-width="2" stroke-linejoin="round"/>
+    <text x="412" y="351" text-anchor="middle" font-size="11" fill="#537086">Right click</text>
+
+    <path d="M474 271h42m-8-7 8 7-8 7" fill="none" stroke="#8aa7b6" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+
+    <!-- Full workbench: sessions, conversation, and workspace in one frame. -->
+    <g filter="url(#shadow)">
+      <rect x="542" y="68" width="614" height="298" rx="18" fill="#fff" stroke="#d6e3ed"/>
+    </g>
+    <path d="M560 68h578a18 18 0 0 1 18 18v25H542V86a18 18 0 0 1 18-18" fill="#f4f7fc"/>
+    <circle cx="563" cy="90" r="4" fill="#b8cbd8"/>
+    <circle cx="577" cy="90" r="4" fill="#b8cbd8"/>
+    <circle cx="591" cy="90" r="4" fill="#b8cbd8"/>
+    <text x="621" y="94" font-size="12" font-weight="600" fill="#385569">WORKBENCH</text>
+    <text x="1134" y="94" text-anchor="end" font-size="10" fill="#7c92a2">LKA</text>
+    <path d="M676 111v255M1000 111v255" stroke="#e3ebf2"/>
+    <rect x="554" y="125" width="110" height="28" rx="8" fill="#eaf0fd"/>
+    <path d="M568 139h9m-4.5-4.5v9" stroke="#4169d1" stroke-width="1.5" stroke-linecap="round"/>
+    <text x="586" y="143" font-size="11" font-weight="600" fill="#4169d1">New task</text>
+    <text x="560" y="179" font-size="9" font-weight="700" letter-spacing="1" fill="#8497a7">CONVERSATIONS</text>
+    <rect x="554" y="191" width="110" height="34" rx="8" fill="#f3f7fa"/>
+    <text x="566" y="212" font-size="11" fill="#385569">Project research</text>
+    <text x="566" y="249" font-size="11" fill="#7c92a2">Daily questions</text>
+    <text x="566" y="281" font-size="11" fill="#7c92a2">Reading notes</text>
+    <text x="696" y="144" font-size="14" font-weight="600" fill="#152c45">Project research</text>
+    <rect x="781" y="159" width="198" height="30" rx="9" fill="#eaf0fd"/>
+    <text x="794" y="178" font-size="11" fill="#4169d1">Help me understand this project.</text>
+    <circle cx="706" cy="214" r="9" fill="#e4f2ee"/>
+    <path d="m702 214 3 3 5-6" stroke="#168f87" stroke-width="1.5" fill="none" stroke-linecap="round"/>
+    <text x="724" y="218" font-size="11" font-weight="600" fill="#385569">A clear plan, with context</text>
+    <path d="M696 236h272M696 251h233M696 266h250" stroke="#e1e9f0" stroke-width="5" stroke-linecap="round"/>
+    <rect x="693" y="293" width="290" height="55" rx="10" fill="#f8fafc" stroke="#dde7ef"/>
+    <text x="706" y="316" font-size="11" fill="#8aa0af">Continue the conversation...</text>
+    <circle cx="963" cy="329" r="10" fill="#4169d1"/>
+    <path d="m959 329 4-4 4 4m-4-3v8" stroke="#fff" fill="none" stroke-width="1.3" stroke-linecap="round" stroke-linejoin="round"/>
+    <text x="1016" y="142" font-size="10" font-weight="700" fill="#385569">WORKSPACE</text>
+    <rect x="1013" y="157" width="129" height="26" rx="7" fill="#eff7f4"/>
+    <text x="1024" y="174" font-size="10" fill="#168f87">Independent folder</text>
+    <text x="1020" y="210" font-size="11" fill="#537086">Project notes</text>
+    <text x="1020" y="236" font-size="11" fill="#537086">Files &amp; previews</text>
+    <path d="M1016 253h122" stroke="#e3ebf2"/>
+    <text x="1016" y="278" font-size="10" font-weight="700" fill="#385569">RUN SETTINGS</text>
+    <rect x="1016" y="291" width="122" height="26" rx="7" fill="#f4f7fc"/>
+    <text x="1025" y="308" font-size="10" fill="#537086">Choose your model</text>
+    <text x="44" y="408" font-size="11" letter-spacing="1" fill="#738b9b">QUICK QUESTIONS · SHARED CONTEXT · FOCUSED WORK</text>
+    <text x="1156" y="408" text-anchor="end" font-size="10" fill="#8aa0af">INTERFACE ILLUSTRATION</text>
+  </g>
+</svg>
