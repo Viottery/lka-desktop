@@ -9,6 +9,8 @@ import java.util.function.Supplier;
 public final class PetChatBridge {
     private Consumer<String> memoryRequestHandler;
     private Consumer<String> qqReaderStatusRequestHandler;
+    private Consumer<Double> quickPanelHeightHandler;
+    private Consumer<String> quickContextLabelHandler;
     private final Consumer<String> payloadConsumer;
     private final Consumer<String> streamPayloadConsumer;
     private final BiFunction<String, String, String> safetyDecisionConsumer;
@@ -67,6 +69,22 @@ public final class PetChatBridge {
 
     public void setComposerBusy(boolean busy) {
         if (composerBusyHandler != null) composerBusyHandler.accept(busy);
+    }
+
+    public void setQuickPanelHeight(double contentHeight) {
+        if (quickPanelHeightHandler != null) quickPanelHeightHandler.accept(contentHeight);
+    }
+
+    public void setQuickContextLabel(String label) {
+        if (quickContextLabelHandler != null) quickContextLabelHandler.accept(label);
+    }
+
+    void setQuickPanelHeightHandler(Consumer<Double> handler) {
+        quickPanelHeightHandler = handler;
+    }
+
+    void setQuickContextLabelHandler(Consumer<String> handler) {
+        quickContextLabelHandler = handler;
     }
 
     void setMemoryRequestHandler(Consumer<String> handler) {

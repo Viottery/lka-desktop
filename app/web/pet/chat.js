@@ -33,6 +33,7 @@
   var runTimeline = document.querySelector("#runTimeline");
   var runTimelineSummary = document.querySelector("#runTimelineSummary");
   var runTimelineList = document.querySelector("#runTimelineList");
+  var liveAnswers = Object.create(null), runProcesses = Object.create(null), timelineViewKey = "";
   var multiAgentStatus = document.querySelector("#multiAgentStatus");
   var approvalQueueStatus = document.querySelector("#approvalQueueStatus");
   var workspaceSummary = document.querySelector("#workspaceSummary");
@@ -58,10 +59,11 @@
   var undoDeleteButton = document.querySelector("#undoDeleteButton");
   var dismissUndoButton = document.querySelector("#dismissUndoButton");
   var urlParams = new URLSearchParams(window.location.search);
-  var workMode = urlParams.get("mode") === "work";
+  var workMode = urlParams.get("mode") === "work" || urlParams.get("layout") === "mobile";
   var requestedSessionId = safeText(urlParams.get("session_id")).trim();
   var requestedRunId = safeText(urlParams.get("run_id")).trim();
   document.body.classList.toggle("work-mode", workMode);
+  document.body.classList.toggle("quick-mode", !workMode);
 
   if (!messages || !input || !sendButton || !form) {
     return;
@@ -75,6 +77,9 @@
   var deletedSnapshotsKey = sessionsKey + "-deleted-snapshots";
   var draftKeyPrefix = sessionsKey + "-draft-";
   var panelSizeKey = "agentic-rag-workbench-panel-sizes-v1";
+  var panelVisibilityKey = "lka-workbench-panel-visibility-v1";
+  var desktopPanels = workMode && urlParams.get("layout") !== "mobile";
+  var panelVisibility = { sidebar: true, rail: true };
   var deletedSessionIds = Object.create(null);
   var deletingSessionIds = Object.create(null);
   var deletedThisPage = Object.create(null);
@@ -130,6 +135,8 @@
   var defaultsSaveChain = Promise.resolve();
   var defaultsReady = Promise.resolve();
   var workspaceRequests = {};
+  var workspaceBindings = Object.create(null);
+  var workbenchOpening = false;
   var workspaceSwitchPromise = Promise.resolve(true);
   var bridgeWorkspaceRetryScheduled = false;
 
@@ -290,9 +297,15 @@
         configured = "";
       }
     }
-    if (!configured) {
-      configured = fallback;
-    }
+    var pageIsLocal = /^(?:localhost|127\.0\.0\.1|\[?::1\]?)$/i.test(window.location.hostname);
+    if (!configured) configured = pageIsLocal ? fallback : window.location.origin + "/workbench";
+    // A desktop bookmark's localhost target points to the phone itself remotely.
+    try {
+      var target = new URL(configured, window.location.origin);
+      if (!pageIsLocal && /^(?:localhost|127\.0\.0\.1|\[?::1\]?)$/i.test(target.hostname)) {
+        configured = window.location.origin + "/workbench";
+      }
+    } catch (ignored) {}
     configured = configured.replace(/\/+$/, "");
     try {
       localStorage.setItem("lka-current-backend-url", configured);
@@ -355,7 +368,7 @@
       return [];
     }
     return rawEvents
-      .filter(function (event) { return event && typeof event === "object"; })
+      .filter(function (event) { return event && typeof event === "object" && event.type !== "llm_delta"; })
       .map(function (event) {
         return {
           event_index: Number(event.event_index) || 0,
@@ -524,8 +537,8 @@
         ? savedSequence
         : Math.max(0, Number(rawSession.multiAgentSequence || rawSession.multi_agent_sequence) || 0),
       multiAgentSnapshot: null,
-      timelineEvents: Array.isArray(rawSession.timelineEvents) ? rawSession.timelineEvents.slice(-16).map(function (item) {
-        return { type: safeText(item.type), message: truncateText(item.message, 180), at: Number(item.at) || Date.now() };
+      timelineEvents: Array.isArray(rawSession.timelineEvents) ? rawSession.timelineEvents.slice(-100).map(function (item) {
+        return { type: safeText(item.type), message: truncateText(item.message, item.type === "safety_review_decided" ? 4000 : 180), at: Number(item.at) || Date.now() };
       }) : [],
       timelineState: safeText(rawSession.timelineState || ""),
       messages: normalizedMessages.slice(-180)
@@ -1083,9 +1096,7 @@
         method: "GET",
         headers: { "Accept": "application/json" }
       });
-      if (!listResponse.ok) {
-        return;
-      }
+      if (!listResponse.ok) throw new Error("HTTP " + listResponse.status);
       var listPayload = await listResponse.json();
       var backendSessions = Array.isArray(listPayload.sessions) ? listPayload.sessions : [];
       var needDetails = backendSessions.filter(function (summary) {
@@ -1155,7 +1166,9 @@
         renderWorkspaceSummary(activeAfter);
       }
       persistSessions();
-    } catch (ignored) {
+    } catch (error) {
+      historyError = "历史会话加载失败：" + safeText(error.message || error);
+      renderSessionList();
     }
     })();
     try { return await sessionSyncPromise; }
@@ -1221,7 +1234,45 @@
     return hours + ":" + minutes;
   }
 
+  function sidebarDocked() { return desktopPanels && window.innerWidth > 700; }
+  function railDocked() { return desktopPanels && window.innerWidth > 1180; }
+  function panelOpen(side) {
+    if (side === "sidebar") return sidebarDocked() ? panelVisibility.sidebar : chatShell.classList.contains("sidebar-open");
+    return railDocked() ? panelVisibility.rail : chatShell.classList.contains("settings-open");
+  }
+  function syncWorkbenchPanels() {
+    if (!desktopPanels || !chatShell) return;
+    var topbar = document.querySelector(".chat-topbar");
+    if (topbar) document.body.style.setProperty("--workbench-header-height", Math.ceil(topbar.getBoundingClientRect().height) + "px");
+    document.body.classList.toggle("work-sidebar-hidden", !panelVisibility.sidebar);
+    document.body.classList.toggle("work-rail-hidden", !panelVisibility.rail);
+    [["sidebar", toggleSidebarButton, "sessionSidebar", "会话列表"], ["rail", toggleSettingsButton, "contextRail", "工作区与设置"]].forEach(function (item) {
+      var open = panelOpen(item[0]), button = item[1], panel = document.getElementById(item[2]);
+      var docked = item[0] === "sidebar" ? sidebarDocked() : railDocked();
+      if (button) {
+        var label = (open ? (docked ? "收起" : "关闭") : "展开") + item[3];
+        button.setAttribute("aria-expanded", String(open));
+        button.setAttribute("aria-label", label); button.title = label;
+      }
+      if (panel) {
+        if (!open && panel.contains(document.activeElement) && button) button.focus({ preventScroll: true });
+        panel.inert = !open;
+      }
+    });
+  }
+  function setWorkbenchPanelVisible(side, open) {
+    panelVisibility[side] = !!open;
+    if (open) setPanelSize(side, panelSize(side));
+    try { localStorage.setItem(panelVisibilityKey, JSON.stringify(panelVisibility)); } catch (ignored) {}
+    syncWorkbenchPanels();
+  }
+
   function setSidebarOpen(isOpen) {
+    // Session selection closes a drawer; it should not collapse a docked list.
+    if (sidebarDocked()) {
+      if (isOpen) setWorkbenchPanelVisible("sidebar", true);
+      return;
+    }
     if (!chatShell) {
       return;
     }
@@ -1236,6 +1287,7 @@
         sidebarBackdrop.hidden = true;
       }
     }
+    syncWorkbenchPanels();
   }
 
   function setBackendOfflineState(isOffline, reasonText) {
@@ -1444,6 +1496,7 @@
   }
 
   function scrollMessagesToBottom() {
+    if (!workMode && typeof window.__petQuickScrollToLatest === "function") { window.__petQuickScrollToLatest(); return; }
     messages.scrollTop = messages.scrollHeight;
   }
 
@@ -1470,7 +1523,7 @@
 
   function renderActiveSessionMeta() {
     var session = getActiveSession();
-    if (continueWorkbenchButton) continueWorkbenchButton.disabled = !session || getSessionMessageCount(session) === 0;
+    if (continueWorkbenchButton) continueWorkbenchButton.disabled = workbenchOpening || !session || getSessionMessageCount(session) === 0;
     if (!session) {
       if (activeSessionTitle) {
         activeSessionTitle.textContent = "新会话";
@@ -1482,7 +1535,7 @@
     }
     applySessionTitle(session);
     if (activeSessionTitle) {
-      activeSessionTitle.textContent = session.title || "新会话";
+      activeSessionTitle.textContent = !workMode && session.project_name && !getSessionMessageCount(session) ? session.project_name + " · 新任务" : session.title || "新会话";
     }
     if (activeSessionSubtitle) {
       activeSessionSubtitle.textContent =
@@ -1992,9 +2045,10 @@
 
   function renderActiveMessages() {
     var session = getActiveSession();
+    if (!workMode && typeof window.__petQuickBeforeMessagesRender === "function") window.__petQuickBeforeMessagesRender();
     messages.innerHTML = "";
     if (!session) {
-      appendMessageToDom("assistant", defaultGreetingMessage().text, false);
+      if (workMode) appendMessageToDom("assistant", defaultGreetingMessage().text, false);
       renderMultiAgentSnapshot(null);
       renderRunTimeline(null);
       renderActiveSessionMeta();
@@ -2016,7 +2070,7 @@
     }
 
     session.messages.forEach(function (message, index) {
-      if (workMode && index === 0 && message.role === "assistant" &&
+      if (index === 0 && message.role === "assistant" &&
           message.text === defaultGreetingMessage().text) return;
       appendMessageToDom(
         message.role === "user" ? "user" : "assistant",
@@ -2419,11 +2473,14 @@
     }
   }
 
-  function focusComposer() {
+  function focusComposer(force) {
     if (document.body.classList.contains("native-composer")
         && window.petBridge && typeof window.petBridge.focusComposer === "function") {
       window.petBridge.focusComposer();
     } else {
+      // Returning to a conversation on touch devices must not summon the keyboard.
+      if (document.body.classList.contains("mobile-workbench")
+          && window.matchMedia("(pointer: coarse)").matches && !force && document.activeElement !== input) return;
       input.focus();
     }
   }
@@ -2927,6 +2984,11 @@
         fields.textContent = "涉及字段：" + head.input_fields.map(safeText).join("、");
         approvalQueueStatus.appendChild(fields);
       }
+      if (Array.isArray(head.workspace_access) && head.workspace_access.length) {
+        var paths = document.createElement("p");
+        paths.textContent = "申请访问工作区外路径：" + head.workspace_access.map(safeText).join("、");
+        approvalQueueStatus.appendChild(paths);
+      }
       if (head.child_run_id) {
         var child = document.createElement("p");
         child.textContent = "子 Agent：" + safeText(head.child_run_id);
@@ -3059,18 +3121,21 @@
   function applySavedRunEvent(session, eventName, data, eventId, turnState) {
     var currentSession = rememberStreamPosition(session, data, eventId) || session;
     recordRunEvent(currentSession, eventName, data);
-    if (turnState) {
-      var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
-      if (eventName === "llm_delta" && payload.display_target === "assistant_answer") {
-        turnState.answer = safeText(payload.content_snapshot || (turnState.answer + safeText(payload.delta)));
-        if (turnState.body) window.PetMarkdown.schedule(turnState.body, turnState.answer);
-      } else if (eventName === "final_answer") {
-        var metadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
-        if (typeof metadata.answer === "string" || (!turnState.answer && typeof data.message === "string")) {
-          turnState.answer = metadata.answer || data.message;
-          if (turnState.body) window.PetMarkdown.render(turnState.body, turnState.answer);
-        }
+    var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
+    var answer = turnState ? turnState.answer : liveAnswers[currentSession.id] || "";
+    if (eventName === "llm_delta" && payload.display_target === "assistant_answer") {
+      answer = safeText(payload.content_snapshot || (answer + safeText(payload.delta)));
+      var streamedBody = renderStreamingAnswer(currentSession, answer, false);
+      if (turnState) { turnState.answer = answer; turnState.body = streamedBody; }
+    } else if (eventName === "final_answer") {
+      var metadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
+      if (typeof metadata.answer === "string" || (!answer && typeof data.message === "string")) {
+        answer = metadata.answer || data.message;
+        var finalBody = renderStreamingAnswer(currentSession, answer, true);
+        if (turnState) { turnState.answer = answer; turnState.body = finalBody; }
       }
+    }
+    if (turnState) {
       if (eventName === "run_completed") turnState.terminalStatus = "completed";
       else if (eventName === "run_failed") turnState.terminalStatus = "failed";
       else if (eventName === "run_cancelled") turnState.terminalStatus = "cancelled";
@@ -3274,6 +3339,12 @@
     if (eventName === "llm_started") return "正在分析任务";
     if (eventName === "tool_started") return "调用工具：" + safeText(data && (data.tool_name || data.payload && data.payload.tool_name) || "处理中");
     if (eventName === "safety_review_required") return "等待安全审查";
+    if (eventName === "safety_review_decided") {
+      var review = data && data.payload && data.payload.review || {};
+      var result = review.status === "approved" ? "安全审批通过" : "安全审批未通过";
+      return result + "：" + safeText(review.tool_name || "工具调用")
+        + "；原因：" + safeText(review.decision_reason || review.reason || "未提供具体理由");
+    }
     if (eventName === "final_answer") return "正在整理回答";
     if (eventName === "run_completed") return "任务完成";
     if (eventName === "run_failed") return eventMessage(data) || "任务失败";
@@ -3282,50 +3353,200 @@
     return eventMessage(data);
   }
 
-  function renderRunTimeline(session) {
-    if (!runTimeline || !runTimelineList) return;
-    var events = session && Array.isArray(session.timelineEvents) ? session.timelineEvents : [];
-    if (!events.length && session && Array.isArray(session.messages)) {
-      for (var i = session.messages.length - 1; i >= 0; i -= 1) {
-        if (session.messages[i].progressEvents && session.messages[i].progressEvents.length) {
-          events = session.messages[i].progressEvents.slice(-12).map(function (item) {
-            return { type: item.type, message: item.message || item.status || "已完成", at: session.updated_at };
-          });
-          break;
-        }
-      }
+  function ensureLiveRunOutput(session, restoreAnswer) {
+    var output = messages.querySelector(".agent-live-output");
+    if (!output) {
+      var created = createMessageElement("assistant", "正在处理…", false);
+      output = created.article;
+      output.classList.add("agent-live-output");
+      messages.appendChild(output);
     }
-    runTimeline.hidden = !events.length;
-    if (!events.length) return;
-    var state = session.timelineState || "";
-    if (runTimelineSummary) runTimelineSummary.textContent = state === "running" ? "正在处理 · 查看步骤" :
-      state === "waiting" ? "等待安全审查 · 查看步骤" : state === "failed" ? "任务失败 · 查看步骤" : "任务进度 · " + events.length + " 步";
-    runTimelineList.textContent = "";
-    events.forEach(function (event, index) {
-      var item = document.createElement("li");
-      item.textContent = formatTimestamp(event.at) + "  " + (event.message || event.type || "步骤已完成");
-      if (index === events.length - 1 && (state === "running" || state === "waiting")) item.setAttribute("aria-current", "step");
-      runTimelineList.appendChild(item);
-    });
+    var body = output.querySelector(".message-content");
+    var answer = liveAnswers[session.id] || "";
+    body.hidden = !answer;
+    if (restoreAnswer !== false && answer && body._petMarkdownSource !== answer) window.PetMarkdown.render(body, answer);
+    return output;
   }
 
+  function renderStreamingAnswer(session, answer, complete) {
+    var first = !liveAnswers[session.id];
+    liveAnswers[session.id] = answer;
+    if (session.id !== activeSessionId) return null;
+    var output = ensureLiveRunOutput(session, false);
+    var body = output.querySelector(".message-content");
+    body.hidden = !answer;
+    if (complete || first) {
+      if (!workMode && typeof window.__petQuickBeforeMessagesRender === "function") window.__petQuickBeforeMessagesRender();
+      window.PetMarkdown.render(body, answer);
+    } else window.PetMarkdown.schedule(body, answer);
+    scrollMessagesToBottom();
+    return body;
+  }
+
+  function processEventTime(data) {
+    var timestamp = Date.parse(data && data.created_at || "");
+    return isFinite(timestamp) ? timestamp : Date.now();
+  }
+
+  function recordProcessOutput(session, eventName, data) {
+    var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
+    var runId = safeText(data && data.run_id || session.multiAgentRunId);
+    var process = runProcesses[session.id];
+    if (!process || (runId && process.runId !== runId)) {
+      process = runProcesses[session.id] = { runId: runId, sequence: 0, entries: [], serial: 0 };
+    }
+    var sequence = Number(data && data.sequence) || 0;
+    if (sequence && sequence <= process.sequence) return false;
+    if (sequence) process.sequence = sequence;
+    var entries = process.entries, entry = null, index;
+    // Backend emits decoded, user-visible progress after validating a decision.
+    // Raw agent_process deltas contain control JSON, never display text.
+    if (eventName === "llm_delta" || eventName === "llm_completed" || eventName === "llm_failed") return false;
+    if (eventName === "assistant_message") {
+      var text = safeText(data && data.message).trim();
+      if (!text) return false;
+      var step = Number(payload.metadata && payload.metadata.step_index) || 0;
+      if (step && entries.some(function (item) { return item.kind === "model" && item.step === step && item.content === text; })) return false;
+      entries.push({ key: ++process.serial, type: "assistant_message", kind: "model", step: step,
+        message: "过程说明", content: text, at: processEventTime(data) });
+    } else if (eventName === "tool_started" || eventName === "tool_completed" || eventName === "tool_failed") {
+      var toolName = safeText(data && data.tool_name || payload.tool_name) || "工具";
+      if (eventName !== "tool_started") {
+        for (index = entries.length - 1; index >= 0; index -= 1) {
+          if (entries[index].kind === "tool" && entries[index].toolName === toolName && entries[index].status === "running") {
+            entry = entries[index]; break;
+          }
+        }
+      }
+      if (!entry) {
+        entry = { key: ++process.serial, type: eventName, kind: "tool", toolName: toolName,
+          message: "调用工具：" + toolName, at: processEventTime(data), status: "running" };
+        entries.push(entry);
+      }
+      entry.status = eventName === "tool_started" ? "running" : eventName === "tool_failed" ? "failed" :
+        safeText(payload.status || data && data.status) || "ended";
+      entry.message = (entry.status === "running" ? "调用工具：" : entry.status === "completed" ? "工具完成：" :
+        entry.status === "failed" || entry.status === "error" ? "工具失败：" : "工具已结束：") + toolName;
+    } else if (eventName === "safety_review_decided") {
+      entries.push({ key: ++process.serial, type: eventName, kind: "review",
+        message: truncateText(timelineText(eventName, data), 4000), at: processEventTime(data) });
+    } else if (["run_started", "llm_started", "safety_review_required"].indexOf(eventName) >= 0) {
+      var message = truncateText(timelineText(eventName, data), 180);
+      if (!message) return false;
+      entries.push({ key: ++process.serial, type: eventName, kind: "event", message: message, at: processEventTime(data) });
+    } else return false;
+    process.entries = entries.slice(-100);
+    return true;
+  }
+
+  function renderProcessEntry(item, entry) {
+    item.className = "run-process-entry run-process-" + (entry.kind || "event");
+    item.setAttribute("data-process-key", String(entry.key || entry.at));
+    if (entry.kind === "model") {
+      var body = item.querySelector(".run-process-text");
+      if (!body) {
+        item.textContent = ""; body = document.createElement("div"); body.className = "run-process-text markdown-body";
+        body.setAttribute("aria-label", "过程说明"); item.appendChild(body);
+      }
+      if (item._processSource !== entry.content) {
+        item._processSource = entry.content;
+        window.PetMarkdown.render(body, entry.content);
+      }
+    } else if (entry.kind === "tool") {
+      var heading = item.querySelector(".run-process-heading");
+      if (!heading) {
+        item.textContent = ""; heading = document.createElement("div"); heading.className = "run-process-heading";
+        var label = document.createElement("span"), badge = document.createElement("span");
+        label.className = "run-process-label"; badge.className = "run-process-state";
+        heading.appendChild(label); heading.appendChild(badge); item.appendChild(heading);
+      }
+      heading.querySelector(".run-process-label").textContent = entry.toolName;
+      var badge = heading.querySelector(".run-process-state");
+      badge.textContent = { failed: "失败", error: "失败", completed: "完成", rejected: "未执行", blocked: "受阻",
+        cancelled: "已取消", timed_out: "超时", timeout: "超时" }[entry.status] ||
+        (entry.status === "running" ? "调用中" : "已结束");
+      badge.setAttribute("data-status", entry.status);
+    } else item.textContent = entry.message || entry.type || "步骤已完成";
+  }
+
+  function renderRunTimeline(session) {
+    if (!runTimeline || !runTimelineList) return;
+    if (!workMode && typeof window.__petQuickBeforeMessagesRender === "function") window.__petQuickBeforeMessagesRender();
+    var storedEvents = session && Array.isArray(session.timelineEvents) ? session.timelineEvents : [];
+    var process = session && runProcesses[session.id];
+    var events = process && process.entries.length ? process.entries : storedEvents;
+    var outputBlocks = events.filter(function (entry) { return entry.kind === "tool" || entry.kind === "review" || entry.kind === "model" && entry.content; });
+    if (outputBlocks.length) events = outputBlocks;
+    else events = events.slice(-1);
+    var state = session && session.timelineState || "";
+    var active = state === "running" || state === "waiting";
+    var hasFinal = storedEvents.some(function (item) { return item.type === "final_answer"; });
+    var visible = active && !hasFinal;
+    document.body.classList.toggle("run-progress-inline", visible);
+    runTimeline.hidden = !visible;
+    if (!visible) {
+      runTimeline.remove();
+      if (session && liveAnswers[session.id]) ensureLiveRunOutput(session);
+      return;
+    }
+    var output = ensureLiveRunOutput(session);
+    output.querySelector(".bubble").insertBefore(runTimeline, output.querySelector(".message-content"));
+    var key = session.id;
+    if (timelineViewKey !== key) { runTimeline.open = true; timelineViewKey = key; }
+    var latest = process && process.entries.length ? process.entries[process.entries.length - 1] : events[events.length - 1];
+    var preview = latest && latest.kind === "model" && latest.content ?
+      truncateText(latest.content.trim().replace(/\s+/g, " "), 140) :
+      latest ? latest.message || latest.type : "开始处理任务";
+    runTimelineSummary.textContent = runTimeline.open ? "收起过程" : preview;
+    runTimelineSummary.setAttribute("aria-live", "polite");
+    runTimelineSummary.title = runTimeline.open ? "收起本轮过程" : "展开过程说明与工具调用";
+    var existing = Array.prototype.slice.call(runTimelineList.children);
+    events.forEach(function (event, index) {
+      var key = String(event.key || event.at);
+      var item = existing.find(function (node) { return node.getAttribute("data-process-key") === key; });
+      if (!item) item = document.createElement("li");
+      renderProcessEntry(item, event);
+      if (index === events.length - 1) item.setAttribute("aria-current", "step");
+      else item.removeAttribute("aria-current");
+      if (runTimelineList.children[index] !== item) runTimelineList.insertBefore(item, runTimelineList.children[index] || null);
+    });
+    while (runTimelineList.children.length > events.length) runTimelineList.lastElementChild.remove();
+  }
+  if (runTimeline) runTimeline.addEventListener("toggle", function () {
+    runTimelineSummary.title = runTimeline.open ? "收起本轮过程" : "展开过程说明与工具调用";
+    renderRunTimeline(getActiveSession());
+  });
+
   function recordRunEvent(session, eventName, data) {
-    if (!session || eventName === "heartbeat" || eventName === "llm_delta") return;
-    var message = truncateText(timelineText(eventName, data), 180);
-    if (!message) return;
+    if (!session || eventName === "heartbeat") return;
+    var processChanged = recordProcessOutput(session, eventName, data);
+    if (eventName === "llm_delta") return;
+    var message = truncateText(timelineText(eventName, data), eventName === "safety_review_decided" ? 4000 : 180);
+    if (!message) {
+      if (processChanged && session.id === activeSessionId) renderRunTimeline(getSessionById(session.id) || session);
+      return;
+    }
     var live = getSessionById(session.id) || session;
     if (!Array.isArray(live.timelineEvents)) live.timelineEvents = [];
     var last = live.timelineEvents[live.timelineEvents.length - 1];
     if (!last || last.type !== eventName || last.message !== message) {
       live.timelineEvents.push({ type: eventName, message: message, at: Date.now() });
-      live.timelineEvents = live.timelineEvents.slice(-16);
+      live.timelineEvents = live.timelineEvents.slice(-100);
     }
     if (eventName === "safety_review_required") live.timelineState = "waiting";
     else if (eventName === "run_completed") live.timelineState = "completed";
     else if (eventName === "run_failed" || eventName === "run_timed_out") live.timelineState = "failed";
     else if (eventName === "run_cancelled") live.timelineState = "cancelled";
     else if (eventName === "run_started" || eventName === "llm_started" || eventName === "tool_started") live.timelineState = "running";
-    if (activeSessionId === live.id) renderRunTimeline(live);
+    if (activeSessionId === live.id) {
+      renderRunTimeline(live);
+      if (eventName === "safety_review_decided") {
+        var review = data && data.payload && data.payload.review || {};
+        setRunStatus(message + (review.status === "rejected" ? "。可在下一条消息中明确授权这项操作后重试。" : ""),
+          review.status === "rejected" ? "error" : "");
+      }
+    }
+    if (["run_completed", "run_failed", "run_timed_out", "run_cancelled"].indexOf(eventName) >= 0) delete runProcesses[live.id];
     persistSessions();
   }
 
@@ -3334,7 +3555,7 @@
     var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
     if (eventName === "llm_delta" && payload.display_target === "assistant_answer") {
       state.answer = safeText(payload.content_snapshot || (state.answer + safeText(payload.delta)));
-      if (state.body) window.PetMarkdown.schedule(state.body, state.answer);
+      state.body = renderStreamingAnswer(state.session, state.answer, false);
       setRunStatus("正在生成回答…");
       scrollMessagesToBottom();
       return;
@@ -3343,7 +3564,7 @@
       var finalMetadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
       if (typeof finalMetadata.answer === "string" || (!state.answer && typeof data.message === "string")) {
         state.answer = finalMetadata.answer || data.message;
-        if (state.body) window.PetMarkdown.render(state.body, state.answer);
+        state.body = renderStreamingAnswer(state.session, state.answer, true);
       }
     }
     if (eventName === "safety_review_required") {
@@ -3415,6 +3636,10 @@
       liveSession.conversation_id = newId;
       liveSession.workspace = session.workspace;
     }
+    if (Object.prototype.hasOwnProperty.call(liveAnswers, oldId)) {
+      liveAnswers[newId] = liveAnswers[oldId]; delete liveAnswers[oldId];
+    }
+    if (runProcesses[oldId]) { runProcesses[newId] = runProcesses[oldId]; delete runProcesses[oldId]; }
     if (activeSessionId === oldId) activeSessionId = newId;
     if (pendingState && pendingState.conversationId === oldId) pendingState.conversationId = newId;
     if (oldDraft) {
@@ -3425,6 +3650,16 @@
   }
 
   async function bindSessionWorkspace(session, requestedWorkspace) {
+    var workspace = requestedWorkspace === undefined ? session.workspace : requestedWorkspace;
+    var key = session.id + "\n" + (workspace || "");
+    if (workspaceBindings[key]) return workspaceBindings[key];
+    var binding = bindSessionWorkspaceNow(session, requestedWorkspace);
+    workspaceBindings[key] = binding;
+    try { return await binding; }
+    finally { if (workspaceBindings[key] === binding) delete workspaceBindings[key]; }
+  }
+
+  async function bindSessionWorkspaceNow(session, requestedWorkspace) {
     var workspace = requestedWorkspace === undefined ? session.workspace : requestedWorkspace;
     if (!workspace) return session.id;
     if (session.backendWorkspace === workspace) return session.id;
@@ -3504,6 +3739,9 @@
     abortActiveAgentEventStream();
 
     touchSession(session);
+    liveAnswers[session.id] = "";
+    delete runProcesses[session.id];
+    timelineViewKey = "";
     session.timelineEvents = [];
     session.timelineState = "running";
     recordRunEvent(session, "run_started", {});
@@ -3516,13 +3754,22 @@
     renderSessionList();
     renderActiveMessages();
 
-    appendMessageToDom("assistant", "正在处理…", false);
-    var liveBody = messages.lastElementChild ? messages.lastElementChild.querySelector(".message-content") : null;
+    var liveBody = ensureLiveRunOutput(session).querySelector(".message-content");
     setComposerDisabled(true);
     pendingState = {
       conversationId: session.id,
       generation: turnGeneration
     };
+
+    if (workMode) {
+      // History appends scroll before the live output and progress change the
+      // layout. An explicit send must reveal the whole new turn after those
+      // changes, without moving a different session if the user switches.
+      scrollMessagesToBottom();
+      window.requestAnimationFrame(function () {
+        if (turnGeneration === activeAgentTurnGeneration && session.id === activeSessionId) scrollMessagesToBottom();
+      });
+    }
 
     var payload = {
       question: cleaned,
@@ -3645,6 +3892,7 @@
       var existing = getSessionById(sessionId);
       if (!existing || (pendingState && pendingState.conversationId === sessionId)) return;
       // Backend history is authoritative once the run has completed.
+      delete liveAnswers[sessionId];
       existing.messages = remote.messages;
       touchSession(existing);
       if (activeSessionId === sessionId) renderActiveMessages();
@@ -3735,6 +3983,7 @@
       }
     }
 
+    if (hasAnswerText || shouldTreatAsHardError) { delete liveAnswers[session.id]; delete runProcesses[session.id]; }
     applySessionTitle(session);
     touchSession(session);
     pinSessionToTop(session.id);
@@ -3769,6 +4018,8 @@
 
   input.addEventListener("keydown", function (event) {
     if (event.key === "Enter" && !event.shiftKey && !event.isComposing) {
+      if (document.body.classList.contains("mobile-workbench")
+          && window.matchMedia("(pointer: coarse)").matches && !event.ctrlKey && !event.metaKey) return;
       event.preventDefault();
       submitCurrentInput();
     }
@@ -3793,8 +4044,8 @@
       if (!chatShell) {
         return;
       }
-      var willOpen = !chatShell.classList.contains("sidebar-open");
-      setSidebarOpen(willOpen);
+      if (sidebarDocked()) setWorkbenchPanelVisible("sidebar", !panelVisibility.sidebar);
+      else setSidebarOpen(!chatShell.classList.contains("sidebar-open"));
     });
   }
 
@@ -3868,33 +4119,54 @@
     if (pending) pending.then(retry, retry);
     else retry();
   };
-  if (openWorkbenchButton) openWorkbenchButton.addEventListener("click", function () {
-    persistSessions();
-    window.open("/desktop-pet/chat.html?mode=work&backend=" + encodeURIComponent(backendBaseUrl),
-      "lka-workbench", "width=1320,height=840");
-  });
-  if (continueWorkbenchButton) continueWorkbenchButton.addEventListener("click", async function () {
+  async function openCurrentWorkbench() {
+    if (workbenchOpening) return false;
     var session = getActiveSession();
-    if (!session || getSessionMessageCount(session) === 0) return;
-    continueWorkbenchButton.disabled = true;
+    if (!session) return false;
+    workbenchOpening = true;
+    if (openWorkbenchButton) openWorkbenchButton.disabled = true;
+    if (continueWorkbenchButton) continueWorkbenchButton.disabled = true;
+    var nativeOpener = window.petBridge && typeof window.petBridge.openWorkbenchSession === "function";
+    var browserWindow = null;
     try {
-      await ensureSessionWorkspace(session);
-      var sessionId = await bindSessionWorkspace(session);
+      // Reserve the browser window during the click, before any asynchronous binding.
+      if (!nativeOpener) {
+        browserWindow = window.open("about:blank", "lka-workbench", "width=1320,height=840");
+        if (!browserWindow) throw new Error("浏览器阻止了弹窗，请允许打开工作台后重试");
+      }
+      saveCurrentDraft();
+      var sessionId = "";
+      // An untouched new task stays local; opening the workbench must not create
+      // an empty database session. Existing conversations keep their exact ID.
+      if (getSessionMessageCount(session) > 0 || session.backendWorkspace) {
+        if (!await workspaceSwitchPromise) throw new Error("工作区切换失败，请检查路径后重试");
+        await ensureSessionWorkspace(session);
+        sessionId = await bindSessionWorkspace(session);
+      }
       persistSessions();
-      if (window.petBridge && typeof window.petBridge.openWorkbenchSession === "function") {
+      if (nativeOpener) {
         window.petBridge.openWorkbenchSession(sessionId, session.multiAgentRunId || "");
       } else {
-        window.open("/desktop-pet/chat.html?mode=work&backend=" + encodeURIComponent(backendBaseUrl)
-          + "&session_id=" + encodeURIComponent(sessionId)
-          + (session.multiAgentRunId ? "&run_id=" + encodeURIComponent(session.multiAgentRunId) : ""),
-          "lka-workbench", "width=1320,height=840");
+        browserWindow.location.href = "/desktop-pet/chat.html?mode=work&backend=" + encodeURIComponent(backendBaseUrl)
+          + (sessionId ? "&session_id=" + encodeURIComponent(sessionId) : "")
+          + (session.multiAgentRunId ? "&run_id=" + encodeURIComponent(session.multiAgentRunId) : "");
+        if (!workMode) window.close();
       }
+      setRunStatus("已在工作台打开当前任务");
+      return true;
     } catch (error) {
-      setRunStatus("无法在工作台继续：" + safeText(error.message || error), "error");
+      if (browserWindow && browserWindow.location.href === "about:blank") browserWindow.close();
+      setRunStatus("无法打开工作台：" + safeText(error.message || error), "error");
+      return false;
     } finally {
-      continueWorkbenchButton.disabled = false;
+      workbenchOpening = false;
+      if (openWorkbenchButton) openWorkbenchButton.disabled = false;
+      renderActiveSessionMeta();
     }
-  });
+  }
+  window.__petChatOpenWorkbench = openCurrentWorkbench;
+  if (openWorkbenchButton) openWorkbenchButton.addEventListener("click", openCurrentWorkbench);
+  if (continueWorkbenchButton) continueWorkbenchButton.addEventListener("click", openCurrentWorkbench);
 
   async function openRequestedSession() {
     if (!requestedSessionId) { openFreshTask(); return; }
@@ -3931,9 +4203,11 @@
     focusComposer();
   }
   function setSettingsOpen(open) {
-    if (chatShell) chatShell.classList.toggle("settings-open", !!open);
-    if (open) setRailTab("settings");
-    if (open && workspaceInput) workspaceInput.focus();
+    if (railDocked()) setWorkbenchPanelVisible("rail", open);
+    else if (chatShell) chatShell.classList.toggle("settings-open", !!open);
+    syncWorkbenchPanels();
+    if (open && !desktopPanels) setRailTab("settings");
+    if (open && workspaceInput && filesPanel.hidden) workspaceInput.focus();
   }
   if (filesTabButton) filesTabButton.addEventListener("click", function () { setRailTab("files"); });
   if (settingsTabButton) settingsTabButton.addEventListener("click", function () { setRailTab("settings"); });
@@ -3951,7 +4225,8 @@
     var other = panelSize(side === "sidebar" ? "rail" : "sidebar");
     var min = side === "sidebar" ? 210 : 250;
     var max = side === "sidebar" ? 380 : 520;
-    var centerReserve = window.innerWidth > 1180 ? other + 420 : 420;
+    var otherVisible = !desktopPanels || (side === "sidebar" ? railDocked() && panelVisibility.rail : sidebarDocked() && panelVisibility.sidebar);
+    var centerReserve = window.innerWidth > 1180 && otherVisible ? other + 420 : 420;
     var value = Math.max(min, Math.min(max, window.innerWidth - centerReserve, Math.round(requested)));
     document.body.style.setProperty(side === "sidebar" ? "--sidebar-width" : "--rail-width", value + "px");
     try {
@@ -3998,15 +4273,41 @@
       if (window.innerWidth > 1180) setPanelSize("rail", panelSize("rail"));
     });
   }
-  if (toggleSettingsButton) toggleSettingsButton.addEventListener("click", function () { setSettingsOpen(!chatShell.classList.contains("settings-open")); });
+  if (desktopPanels) {
+    try {
+      var savedVisibility = JSON.parse(localStorage.getItem(panelVisibilityKey) || "{}");
+      ["sidebar", "rail"].forEach(function (side) { if (typeof savedVisibility[side] === "boolean") panelVisibility[side] = savedVisibility[side]; });
+    } catch (ignored) {}
+    function panelIcon(right) {
+      return '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M' + (right ? '15' : '9') + ' 4v16"/></svg>';
+    }
+    toggleSidebarButton.innerHTML = panelIcon(false);
+    toggleSettingsButton.innerHTML = panelIcon(true);
+    closeSettingsButton.title = "收起工作区与设置";
+    new MutationObserver(syncWorkbenchPanels).observe(chatShell, { attributes: true, attributeFilter: ["class"] });
+    window.addEventListener("resize", function () {
+      if (sidebarDocked()) { chatShell.classList.remove("sidebar-open"); if (sidebarBackdrop) sidebarBackdrop.hidden = true; }
+      if (railDocked()) chatShell.classList.remove("settings-open");
+      syncWorkbenchPanels();
+    });
+    syncWorkbenchPanels();
+  }
+  if (toggleSettingsButton) toggleSettingsButton.addEventListener("click", function () { setSettingsOpen(!panelOpen("rail")); });
   if (closeSettingsButton) closeSettingsButton.addEventListener("click", function () { setSettingsOpen(false); });
-  if (changeWorkspaceButton) changeWorkspaceButton.addEventListener("click", function () { setSettingsOpen(true); });
+  if (changeWorkspaceButton) changeWorkspaceButton.addEventListener("click", function () {
+    if (window.LkaWorkspacePicker) window.LkaWorkspacePicker.open();
+    else setSettingsOpen(true);
+  });
   document.addEventListener("keydown", function (event) {
     if ((window.LkaProjects && window.LkaProjects.isOpen()) ||
         (document.getElementById("memoryOverlay") && !document.getElementById("memoryOverlay").hidden) ||
-        (document.getElementById("memoryEditorOverlay") && !document.getElementById("memoryEditorOverlay").hidden)) return;
-    if (event.key === "Escape") { setSettingsOpen(false); setSidebarOpen(false); }
-    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "k") { event.preventDefault(); focusComposer(); }
+        (document.getElementById("memoryEditorOverlay") && !document.getElementById("memoryEditorOverlay").hidden) ||
+        (document.getElementById("workspacePicker") && !document.getElementById("workspacePicker").hidden)) return;
+    if (event.key === "Escape") {
+      if (!railDocked()) setSettingsOpen(false);
+      setSidebarOpen(false);
+    }
+    if ((event.ctrlKey || event.metaKey) && !event.shiftKey && event.key.toLowerCase() === "k") { event.preventDefault(); focusComposer(true); }
     if ((event.ctrlKey || event.metaKey) && event.shiftKey && event.key.toLowerCase() === "k") {
       event.preventDefault(); setSidebarOpen(true); if (sessionSearchInput) sessionSearchInput.focus();
     }
@@ -4039,15 +4340,16 @@
     if (workspaceParentInput) workspaceParentInput.value = "";
     saveDefaultPreferences();
   });
-  if (workspaceInput) workspaceInput.addEventListener("change", function () {
+  function switchWorkspace(requestedWorkspace, expectedSessionId) {
     var session = getActiveSession();
-    if (!session) return;
-    var requestedWorkspace = workspaceInput.value.trim();
-    if (requestedWorkspace === safeText(session.workspace).trim()) return;
+    if (!session || (expectedSessionId && expectedSessionId !== session.id)) throw new Error("会话已改变，请重新选择工作目录。");
+    if (pendingState) throw new Error("请等待当前任务完成后切换工作目录。");
+    requestedWorkspace = safeText(requestedWorkspace).trim();
+    if (requestedWorkspace === safeText(session.workspace).trim()) return Promise.resolve(true);
     if (!requestedWorkspace) {
       renderWorkspaceSummary(session);
       setRunStatus("请输入要切换到的工作目录", "error");
-      return;
+      return Promise.resolve(false);
     }
     var switchTask = workspaceSwitchPromise.then(async function () {
       var previousCustomWorkspace = session.workspace_is_custom;
@@ -4057,7 +4359,11 @@
         session.workspace = requestedWorkspace;
         runSettings.workspace = requestedWorkspace;
         persistSessions();
-        if (activeSessionId === session.id) renderWorkspaceSummary(session);
+        if (activeSessionId === session.id) {
+          renderWorkspaceSummary(session);
+          fileRelativePath = "";
+          loadFileList();
+        }
         setRunStatus("已切换工作区");
         renderSessionList();
         return true;
@@ -4072,6 +4378,11 @@
     switchTask.then(function () {
       if (workspaceSwitchPromise === switchTask) workspaceSwitchPromise = Promise.resolve(true);
     });
+    return switchTask;
+  }
+  if (workspaceInput) workspaceInput.addEventListener("change", function () {
+    try { switchWorkspace(workspaceInput.value); }
+    catch (error) { renderWorkspaceSummary(getActiveSession()); setRunStatus(error.message, "error"); }
   });
   if (indexWorkspaceButton) {
     indexWorkspaceButton.addEventListener("click", async function () {
@@ -4108,10 +4419,26 @@
   };
 
   window.LkaChatContext = {
+    setWorkspace: switchWorkspace,
     get: function () {
       var session = getActiveSession();
       return { backend: backendBaseUrl, workMode: workMode, sessionId: session ? session.id : "",
         workspace: session ? session.workspace || "" : "", projectId: session ? session.project_id || "" : "", busy: !!pendingState };
+    },
+    startProjectDraft: function (project) {
+      if (pendingState) throw new Error("请等待当前任务完成后选择项目。");
+      if (!project || !project.workspace_path || !project.project_id) throw new Error("项目还没有可用的工作目录。");
+      saveCurrentDraft();
+      var previousDraft = readDraft(activeSessionId);
+      createAndSwitchNewSession(project.workspace_path);
+      var session = getActiveSession();
+      if (previousDraft) { writeDraft(session.id, previousDraft); showDraftForSession(session); }
+      session.project_id = project.project_id;
+      session.project_name = project.name || "";
+      renderActiveSessionMeta();
+      persistSessions();
+      renderWorkspaceSummary(session);
+      return true;
     },
     newProjectSession: function () {
       var session = getActiveSession();

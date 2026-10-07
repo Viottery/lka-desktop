@@ -1,7 +1,8 @@
 // Isolated Chromium acceptance. Every message, permission and send is synthetic.
 const assert=require('node:assert/strict'),http=require('node:http'),fs=require('node:fs'),path=require('node:path');
 const {chromium}=require(process.env.PLAYWRIGHT_MODULE||'playwright-core');
-const ROOT='D:/agent-bot-frontend/app/web/pet',OUT='D:/agent-bot-frontend/.runtime/messages-ui-smoke';
+const ROOT=path.resolve(process.env.FRONTEND_ROOT||path.join(__dirname,'../app/web/pet')),OUT=path.resolve(__dirname,'../.runtime/messages-ui-smoke');
+const CHROME=process.env.CHROME_PATH||'C:/Program Files/Google/Chrome/Application/chrome.exe';
 fs.mkdirSync(OUT,{recursive:true});
 const requests=[],errors=[];let sends=0,unknown=false,enabled=true,missingDossiers=false,missingContext=false,missingNames=false,failTopic=false,mediaFixtures=false;const renames=new Map();
 const receipts=new Map(),policies=new Map(),received='2026-10-05T01:00:00Z';
@@ -69,7 +70,7 @@ const server=http.createServer(async(req,res)=>{
 });
 (async()=>{let browser;try{
  await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const base='http://127.0.0.1:'+server.address().port;
- browser=await chromium.launch({headless:true,executablePath:'C:/Program Files/Google/Chrome/Application/chrome.exe',args:['--no-sandbox']});
+ browser=await chromium.launch({headless:true,executablePath:CHROME,args:['--no-sandbox']});
  const page=await browser.newPage({viewport:{width:1440,height:900}});page.on('pageerror',e=>errors.push(e.message));
  await page.route('**/*',route=>new URL(route.request().url()).origin===base?route.continue():route.abort());
  await page.goto(base+'/chat.html?mode=work');assert.equal(await page.locator('#openMessagesButton svg').count(),1);assert.equal((await page.locator('#openMessagesButton').innerText()).trim(),'');await page.waitForTimeout(100);assert.equal(requests.length,0,'closed center does not load private messages');

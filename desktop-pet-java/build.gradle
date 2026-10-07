@@ -57,3 +57,17 @@ tasks.register('verifyPetMemoryBridge', JavaExec) {
     classpath = sourceSets.test.runtimeClasspath
     mainClass = 'com.agenticrag.pet.PetMemoryBridgeCheck'
 }
+
+tasks.register('previewQuickConversation', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.agenticrag.pet.QuickConversationPreview'
+    def frontendRoot = providers.gradleProperty('frontendRoot')
+            .orElse(providers.environmentVariable('LKA_FRONTEND_ROOT'))
+    doFirst {
+        if (!frontendRoot.isPresent()) {
+            throw new GradleException('Pass -PfrontendRoot=<path to app/web/pet> or set LKA_FRONTEND_ROOT')
+        }
+        args frontendRoot.get()
+    }
+}

@@ -154,6 +154,63 @@ The Java Spine desktop pet uses the local build skeleton's `Relax`, `Interact`,
 Run `gradlew.bat verifyPetMotion --offline` in `desktop-pet-java` to check the
 roam-target rules without opening a desktop session.
 
+### Quick conversation layout
+
+The native quick window starts as a 390 × 118 logical-pixel input note. After
+sending, the reading area expands to at least 440 logical pixels when the screen
+allows it; automatic total height is capped at 730 and the monitor's usable area.
+Drag any edge or corner to resize. Native sizing keeps the user's chosen dimensions
+for subsequent replies in this pet process. Starting a fresh empty task returns
+to the compact note; the next populated view reuses the chosen dimensions.
+
+The transcript fills the available space above the native IME composer. Earlier
+messages stay in the same scrollable transcript, with no context heading or history
+toggle. A new turn starts at its question; reply updates preserve the reading
+position. Session and project icons remain available. Buttons expose hover help;
+native footer icons share centered 24 × 24 hit areas.
+
+The workbench button continues the currently selected conversation using its
+backend session ID, including a turn still running. It waits for initial workspace
+binding and shares in-flight binding with the sender to avoid duplicate sessions.
+An untouched new task opens the workbench's new-task page without creating an
+empty backend session. Once the native browser launch succeeds the quick window
+hides; its active stream is not cancelled. A failed launch keeps it open and shows
+an error so the user can retry. The native and HTML buttons use the same handoff.
+
+
+Chat text, native input and hover help prefer Noto Sans SC with regular weight;
+Markdown emphasis keeps its semantic weight. The native host loads the installed
+Windows static font through a file stream to avoid ambiguous font-family matching,
+with system-font fallback when unavailable. No font installation is required.
+
+Both quick tasks and the workbench display process text in the pending assistant
+reply: `assistant_message` text, a light tool-call line, then the next
+`assistant_message`. Only the dedicated SSE event's decoded `message` is rendered
+as Markdown. Raw decision JSON, `operation`, `reason` and other `agent_process`
+deltas are not shown. Each message appears as soon as that event arrives; there is
+no simulated typing. Users can collapse the process to a preview of the latest
+message or tool state. Tool rows update in place with running/completed/failed/
+rejected state. Up to 100 recent blocks are retained, with stable open state and
+reading position. Final answers replace the temporary process. Chat does not
+display or poll token counters.
+
+Answer streaming renders only `llm_delta` events targeted at `assistant_answer`:
+the first nonempty delta paints immediately and subsequent Markdown updates are
+coalesced over 40 ms. `final_answer` immediately calibrates the full text, then
+completed-run reconciliation reloads authoritative history. The frontend does not
+simulate token output from a completed answer. Non-streaming requests and backend
+structured-output/recovery paths can still deliver a complete answer in one event.
+
+`quick-chat.js` reports preferred content height through `setQuickPanelHeight`;
+it must not set a fixed transcript height or derive the host's preferred height
+from the viewport. `PetControlWindow` owns resizing and respects manual dimensions.
+For isolated checks, run `npm run test:chat` in the frontend root. From
+`desktop-pet-java`, run the native checks:
+
+```powershell
+.\gradlew.bat verifyPetMemoryBridge previewQuickConversation --offline -PfrontendRoot=D:\lka-desktop\app\web\pet
+```
+
 ## Windows Launcher
 
 Run:

@@ -9,7 +9,7 @@
   var statusNames = { active: "已生效", candidate: "候选", retracted: "已撤回", superseded: "已替代",
     queued: "排队中", running: "处理中", retry_wait: "等待重试", succeeded: "已完成", failed: "失败", cancelled: "已取消" };
   var requestSequence = 0, requestNonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
-  var bridgePending = {}, streamController = null, lastFocus = null, editorFocus = null;
+  var bridgePending = {}, streamController = null, lastFocus = null, editorFocus = null, saveNoticeTimer = null;
   function esc(value) { return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
   }); }
@@ -119,11 +119,6 @@
     '<label class="memory-inline"><input id="memoryEditorPersonal" type="checkbox">包含个人信息</label><p class="memory-note">保存后可在后续任务中使用；记忆不改变工具权限。</p>' +
     '<p id="memoryEditorError" class="memory-note" role="alert"></p><footer><button id="memoryEditorReload" type="button" hidden>重新载入最新版本</button><button id="memoryEditorCancel" type="button">取消</button><button id="memoryEditorSave" type="submit" class="memory-primary">保存</button></footer></form></section>';
   document.body.appendChild(editor);
-  var contextPanel = document.createElement("details");
-  contextPanel.id = "memoryContextStatus"; contextPanel.className = "memory-context"; contextPanel.hidden = true;
-  contextPanel.innerHTML = '<summary id="memoryContextSummary">会话上下文</summary><p id="memoryContextDetail"></p>';
-  var strip = document.querySelector(".context-strip"); strip.parentNode.insertBefore(contextPanel, strip.nextSibling);
-
   function scopeToolbar(extra) {
     return '<div class="memory-toolbar"><label>作用范围<select id="memoryScope"><option value="global">全局记忆</option><option value="project"' +
       (!context().workspace ? ' disabled' : '') + '>当前项目</option></select></label>' + (extra || "") + '</div><p class="memory-note">' +
@@ -144,7 +139,7 @@
   el("openMemoryQuickButton").onclick = open;
   el("memoryTokenForm").onsubmit = function (event) {
     event.preventDefault(); state.token = el("memoryToken").value.trim(); el("memoryToken").value = "";
-    state.generation++; renderTab(); refreshContext();
+    state.generation++; renderTab();
   };
   Array.prototype.forEach.call(overlay.querySelectorAll("[data-memory-tab]"), function (button) {
     button.onclick = function () { state.tab = button.dataset.memoryTab; renderTab(); };
@@ -326,8 +321,18 @@
       if (isOpen() && state.tab === "entries") {
         loadEntries(false).then(loadLearning).catch(function (error) { notice("记忆已保存，但列表刷新失败：" + error.message, true); });
       }
-      notice("记忆已保存并确认。" + (data.memory_file_status === "conflict_or_unavailable" ? "MEMORY.md 未同步，请在导出与文件中检查。" : ""));
-      if (!isOpen()) { el("memoryContextStatus").hidden = false; el("memoryContextSummary").textContent = "记忆已保存，可在记忆中心纠正或停止使用"; }
+      var savedText = "记忆已保存并确认。" + (data.memory_file_status === "conflict_or_unavailable" ? "MEMORY.md 未同步，请在导出与文件中检查。" : "");
+      notice(savedText);
+      if (!isOpen()) {
+        var savedNotice = el("memorySaveNotice");
+        if (!savedNotice) {
+          savedNotice = document.createElement("div"); savedNotice.id = "memorySaveNotice";
+          savedNotice.className = "undo-toast"; savedNotice.setAttribute("role", "status");
+          savedNotice.setAttribute("aria-live", "polite"); document.body.appendChild(savedNotice);
+        }
+        savedNotice.textContent = savedText; savedNotice.hidden = false;
+        clearTimeout(saveNoticeTimer); saveNoticeTimer = setTimeout(function () { savedNotice.hidden = true; }, 5000);
+      }
     } catch (error) {
       el("memoryEditorError").textContent = error.message;
       if (error.status === 409 && editorRecord) el("memoryEditorReload").hidden = false;
@@ -548,36 +553,15 @@
     }); };
   }
 
-  var contextLoading = false;
-  async function refreshContext() {
-    if (document.hidden || contextLoading) return;
-    var c = context(); if (!c.sessionId) return;
-    contextLoading = true;
-    try {
-      var data = await api("/sessions/" + encodeURIComponent(c.sessionId) + "/context-status");
-      if (context().sessionId !== c.sessionId) return;
-      var jobs = data.active_compaction_jobs || {}, pending = (jobs.queued || 0) + (jobs.retry_wait || 0) + (jobs.running || 0);
-      var count = data.token_estimate || 0, budget = data.token_budget || 0;
-      contextPanel.hidden = false;
-      el("memoryContextSummary").textContent = pending ? "正在后台整理上下文，可继续输入" : data.degraded ? "上下文已整理，使用了备用整理方式" : "会话上下文：" + count.toLocaleString() + " / " + budget.toLocaleString() + " tokens";
-      el("memoryContextDetail").textContent = "计数方式：" + (data.token_count_method || "估算") + "。当前窗口约 " + count + " tokens，预算 " + budget +
-        "；最近未整理消息 " + data.recent_message_count + " 条。" + (data.degraded ? "备用整理可能有信息损失，请对关键要求再次确认。" : "") +
-        "原始会话历史保留；这是上下文整理状态，不代表整次请求的 token 用量或任务完成进度。";
-    } catch (error) {
-      if (context().sessionId !== c.sessionId) return;
-      contextPanel.hidden = error.status === 404;
-      if (!contextPanel.hidden) { el("memoryContextSummary").textContent = "上下文状态暂不可用"; el("memoryContextDetail").textContent = error.message; }
-    } finally { contextLoading = false; }
-  }
   window.addEventListener("lka-session-context", function () {
     var c = context(), key = c.sessionId + "|" + c.workspace;
     if (key === state.contextKey) return;
     state.contextKey = key; state.generation++; state.selected = null; state.projectId = null; state.preview = null;
-    contextPanel.hidden = true; if (!c.workspace) state.scope = "global";
-    if (isOpen()) renderTab(); refreshContext();
+    if (!c.workspace) state.scope = "global";
+    if (isOpen()) renderTab();
   });
   document.addEventListener("visibilitychange", function () {
-    if (document.hidden) stopStream(); else { refreshContext(); if (isOpen() && state.tab === "jobs") { run(null, loadJobs); startStream(); } }
+    if (document.hidden) stopStream(); else { if (isOpen() && state.tab === "jobs") { run(null, loadJobs); startStream(); } }
   });
   document.addEventListener("keydown", function (event) {
     if (window.LkaProjects && window.LkaProjects.isOpen()) return;
@@ -593,7 +577,6 @@
   }, true);
   setInterval(function () {
     if (document.hidden) return;
-    refreshContext();
     if (isOpen() && editor.hidden) {
       if (state.tab === "jobs") { run(null, loadJobs); if (!streamController) startStream(); }
     }
@@ -601,6 +584,5 @@
   window.LkaMemory = { remember: remember, open: open, request: api,
     setToken: function (value) { state.token = String(value || "").trim(); state.generation++; },
     hasToken: function () { return !!state.token; } };
-  refreshContext();
   if (new URLSearchParams(window.location.search).get("panel") === "memory") open();
 })();

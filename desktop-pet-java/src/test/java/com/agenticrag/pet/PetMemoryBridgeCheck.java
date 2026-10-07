@@ -4,6 +4,9 @@ import com.sun.net.httpserver.HttpServer;
 import com.sun.net.httpserver.HttpHandler;
 import javafx.application.Platform;
 import javafx.scene.web.WebView;
+import javafx.scene.control.TextArea;
+import javafx.stage.Screen;
+import javafx.stage.Stage;
 import java.lang.reflect.Field;
 import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
@@ -112,6 +115,7 @@ public final class PetMemoryBridgeCheck {
             }
             check(Boolean.TRUE.equals(fx(() -> view.getEngine().executeScript("Boolean(window.petBridge && window.petBridge.requestMemory)"))), "bridge ready");
             check(Boolean.TRUE.equals(fx(() -> view.getEngine().executeScript("Boolean(window.petBridge && window.petBridge.requestQQReaderStatus)"))), "QQ status bridge ready");
+            checkQuickPanelSizingAndDraft(window);
             fx(() -> view.getEngine().executeScript("petBridge.requestQQReaderStatus('qq-status-testnonce-1')"));
             while (System.nanoTime() < deadline && !Boolean.TRUE.equals(fx(() -> view.getEngine().executeScript("Boolean(window.qqStatusResult)")))) Thread.sleep(50);
             check(String.valueOf(fx(() -> view.getEngine().executeScript("window.qqStatusResult"))).equals("qq-status-testnonce-1|200|{\"connected\":true,\"account\":\"test\"}"), "QQ status callback payload");
@@ -167,6 +171,38 @@ public final class PetMemoryBridgeCheck {
             Thread.sleep(50);
         }
         throw new AssertionError("Timed out waiting for WebView callback");
+    }
+    private static void checkQuickPanelSizingAndDraft(PetControlWindow window) throws Exception {
+        Field stageField = PetControlWindow.class.getDeclaredField("stage"); stageField.setAccessible(true);
+        Field inputField = PetControlWindow.class.getDeclaredField("nativeInput"); inputField.setAccessible(true);
+        TextArea input = (TextArea) fx(() -> inputField.get(window));
+        String draft = "保留这段原生输入草稿";
+        fx(() -> { input.setText(draft); return null; });
+        for (double contentHeight : new double[]{0, 310, 10000, 0}) {
+            fx(() -> view.getEngine().executeScript("petBridge.setQuickPanelHeight(" + contentHeight + ")"));
+            double actualHeight = (double) fx(() -> ((Stage) stageField.get(window)).getHeight());
+            check(actualHeight >= 118 && actualHeight <= 730, "quick panel height capped for content " + contentHeight);
+            if (contentHeight == 0) check(Math.abs(actualHeight - 118) < 2, "quick panel compact height");
+            if (contentHeight == 310) check(Math.abs(actualHeight - 422) < 2, "quick panel expands to requested content");
+            if (contentHeight == 10000) {
+                double expectedHeight = (double) fx(() -> {
+                    Stage current = (Stage) stageField.get(window);
+                    var screens = Screen.getScreensForRectangle(current.getX(), current.getY(), current.getWidth(), current.getHeight());
+                    Screen screen = screens.isEmpty() ? Screen.getPrimary() : screens.get(0);
+                    return Math.min(730.0, screen.getVisualBounds().getHeight() - 24);
+                });
+                check(Math.abs(actualHeight - expectedHeight) < 2, "quick panel clamps oversized content to screen");
+            }
+            Stage stage = (Stage) fx(() -> stageField.get(window));
+            boolean onScreen = Screen.getScreens().stream().anyMatch(screen -> {
+                var bounds = screen.getVisualBounds();
+                return stage.getX() >= bounds.getMinX() - 1 && stage.getY() >= bounds.getMinY() - 1
+                        && stage.getX() + stage.getWidth() <= bounds.getMaxX() + 1
+                        && stage.getY() + stage.getHeight() <= bounds.getMaxY() + 1;
+            });
+            check(onScreen, "quick panel remains within screen bounds");
+            check(draft.equals(fx(() -> input.getText())), "quick panel resize preserves native draft");
+        }
     }
     private static Object fx(java.util.concurrent.Callable<Object> action) throws Exception {
         CompletableFuture<Object> result = new CompletableFuture<>();

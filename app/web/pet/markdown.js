@@ -67,7 +67,7 @@
       var latest = element._petMarkdownSource;
       element._petMarkdownTimer = null;
       render(element, latest);
-    }, 80);
+    }, 40);
   }
 
   document.addEventListener("click", function (event) {

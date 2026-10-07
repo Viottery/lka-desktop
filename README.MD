@@ -98,6 +98,10 @@ Agent 处理期间仍可编辑下一条输入，发送按钮随运行状态变�
 右键桌宠，输入一个问题。短任务直接在快速窗口完成；需要继续分析时打开工作台，
 沿用同一个会话。**Enter 发送，Shift + Enter 换行。**
 
+工作台顶部左、右两侧的面板图标，可独立收起或展开会话列表、工作区与设置。
+收起后对话区自动扩展；大屏面板的显示状态会在本机浏览器中保存，刷新后沿用。
+窄屏按需打开抽屉，关闭抽屉不会改动大屏的显示偏好。
+
 ### 给任务一个独立目录
 
 开始新任务后，工作区默认放在 Windows 的
@@ -157,6 +161,11 @@ Invoke-RestMethod http://127.0.0.1:8765/health
 
 [打开本机工作台](http://127.0.0.1:8780/desktop-pet/chat.html?mode=work&backend=http%3A%2F%2F127.0.0.1%3A8765)
 
+**手机与平板：** 使用专门的 [移动工作台](http://127.0.0.1:8780/desktop-pet/mobile.html)。
+手机提供会话抽屉和底部导航，平板保留会话侧栏；项目、消息、记忆、文件与模型设置
+沿用桌面功能。访问同一页面时默认使用页面所在主机的后端 `8765` 端口，
+也可通过 `backend` 参数指定已有后端地址。交互及验证说明见 [移动工作台文档](docs/mobile-workbench.md)。
+
 **使用 Java 桌宠：** 安装 Java 21 后，准备环境并编译，再启动。
 首次编译需要下载 Gradle 及 Java 依赖。
 
@@ -168,6 +177,11 @@ Invoke-RestMethod http://127.0.0.1:8765/health
 
 `-NoBackend` 连接已有后端。后端在 WSL 时，先确认 Windows 能访问其监听地址；
 可通过 `-BackendHost`、`-BackendPort` 指定实际地址，通过 `-FrontendPort` 调整前端端口。
+
+启动器会将本机 `.env` 加载到 Python 服务。已有消息中心配对可使用
+`.runtime/message-control.dpapi`（Windows 当前用户 DPAPI 加密文件），或通过
+`-MessageControlCredentialPath` 指定已配对文件；迁移时保留原凭据，
+不要重新生成。启动器将解密值传给 Python，不传入 Java 或页面。
 
 <details>
 <summary><strong>Windows + WSL：由启动器启动后端</strong></summary>
@@ -280,6 +294,7 @@ npm ci
 npm run test:sessions
 npm run test:chat
 npm run test:messages
+npm run test:mobile
 ```
 
 其他 Chrome 安装路径用 `CHROME_PATH` 指定。
@@ -297,7 +312,9 @@ npm run test:messages
 | Windows 原生环境与启动 | [原生运行说明](docs/windows-native-runtime-guide.md) |
 | 桌宠入口与宿主 | [桌宠入口](docs/desktop-pet-entry.md) · [前端说明](docs/windows-pet-frontend.md) |
 | UI 与工作台设计 | [界面交付记录](docs/frontend_ui_delivery_2026-09-30.md) |
+| 手机与平板布局 | [移动工作台](docs/mobile-workbench.md) |
 | 会话、草稿与删除恢复 | [会话交互交付](docs/frontend_session_ux_delivery_2026-10-06.md) |
+| 工作区目录选择 | [目录浏览](docs/workspace-browser.md) |
 | 记忆与项目页面 | [记忆适配](docs/frontend_memory_delivery_2026-10-02.md) · [项目适配](docs/frontend_projects_delivery_2026-10-02.md) |
 | 消息浏览与原文上下文 | [消息中心交付](docs/frontend_messages_ui_delivery_2026-10-05.md) · [历史消息适配](docs/message_history_frontend.md) |
 | QQ 采集与发送接口 | [Reader 插件](docs/qq_reader_plugin_delivery_2026-10-02.md) · [消息接口](docs/qq_messaging_interfaces_2026-10-04.md) |

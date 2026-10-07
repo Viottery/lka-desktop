@@ -442,7 +442,7 @@
   byId('mcClearSearch').addEventListener('click',()=>{state.generation++;state.searching=false;byId('mcQuery').value='';byId('mcClearSearch').hidden=true;loadMessages(false);});
   byId('mcNewMessages').addEventListener('click',()=>{byId('mcTimeline').scrollTop=byId('mcTimeline').scrollHeight;byId('mcNewMessages').hidden=true;});
   byId('mcDraft').addEventListener('input',()=>{getDraft().text=byId('mcDraft').value;updateSend();});
-  byId('mcDraft').addEventListener('keydown',event=>{if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229){event.preventDefault();if(!byId('mcSend').disabled)byId('mcComposer').requestSubmit();}});
+  byId('mcDraft').addEventListener('keydown',event=>{if(document.body.classList.contains('mobile-workbench')&&window.matchMedia('(pointer: coarse)').matches&&!event.ctrlKey&&!event.metaKey)return;if(event.key==='Enter'&&!event.shiftKey&&!event.isComposing&&event.keyCode!==229){event.preventDefault();if(!byId('mcSend').disabled)byId('mcComposer').requestSubmit();}});
   byId('mcComposer').addEventListener('submit',send);
   [['mcAddImage','image'],['mcAddVideo','video'],['mcAddSticker','sticker']].forEach(([id,kind])=>byId(id).addEventListener('click',()=>chooseFile(kind)));
   byId('mcFavorites').addEventListener('click',()=>favorites().catch(e=>notice(e.message,true)));byId('mcFile').addEventListener('change',onFile);

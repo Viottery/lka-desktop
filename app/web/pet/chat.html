@@ -2,15 +2,17 @@
 <html lang="zh-CN">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
   <meta http-equiv="Cache-Control" content="no-store">
   <title>理事所 · 工作台</title>
   <link rel="icon" type="image/png" href="./assets/ursus-student-emblem.png">
-  <link rel="stylesheet" href="./chat.css?v=20261006-session-ux">
+  <link rel="stylesheet" href="./chat.css?v=20261007-mobile-transport">
   <link rel="stylesheet" href="./markdown.css?v=20260930-markdown">
   <link rel="stylesheet" href="./memory.css?v=20261002-projects">
   <link rel="stylesheet" href="./qq-reader.css?v=20261005">
   <link rel="stylesheet" href="./messages-center.css?v=20261006-people-names">
+  <link rel="stylesheet" href="./mobile.css?v=20261007-mobile">
+  <link rel="stylesheet" href="./workspace-picker.css?v=20261007-workspace-picker">
 </head>
 <body>
   <main class="chat-shell" id="chatShell">
@@ -27,14 +29,15 @@
 
     <section class="chat-main">
       <header class="chat-topbar">
-        <button id="toggleSidebarButton" type="button" class="icon-button" aria-label="打开会话列表" title="会话列表">☰</button>
+        <button id="toggleSidebarButton" type="button" class="icon-button" aria-label="打开会话列表" aria-controls="sessionSidebar" title="会话列表">☰</button>
+        <button id="quickProjectsButton" type="button" class="icon-button quick-only" aria-label="选择项目" title="选择项目"><svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h7l2 2h9v12H3Z"/></svg></button>
         <div class="chat-session-meta"><strong id="activeSessionTitle">新会话</strong><span id="activeSessionSubtitle">准备就绪</span></div>
         <div class="topbar-actions">
           <button id="newQuickSessionButton" type="button" class="quiet-button" title="新建会话">＋<span>新会话</span></button>
           <button id="continueWorkbenchButton" type="button" class="quiet-button continue-button" title="在工作台继续当前任务" disabled>继续<span>在工作台</span></button>
           <button id="openWorkbenchButton" type="button" class="quiet-button workbench-button" title="打开工作台">▣<span>工作台</span></button>
           <button id="openMessagesButton" type="button" class="icon-button message-entry" title="消息中心" aria-label="打开消息中心"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 4.5h14a1.5 1.5 0 0 1 1.5 1.5v10a1.5 1.5 0 0 1-1.5 1.5H9l-5.5 3V6A1.5 1.5 0 0 1 5 4.5Z"/><path d="M7.5 9h9m-9 4h6"/></svg></button>
-          <button id="toggleSettingsButton" type="button" class="icon-button settings-button" aria-label="工作设置" title="工作设置">⚙</button>
+          <button id="toggleSettingsButton" type="button" class="icon-button settings-button" aria-label="工作设置" aria-controls="contextRail" title="工作设置">⚙</button>
         </div>
       </header>
 
@@ -73,7 +76,7 @@
       <div class="rail-panel files-panel" id="filesPanel" role="tabpanel" hidden><div class="file-toolbar"><button id="fileUpButton" type="button" class="text-action" title="返回上一级">上一级</button><button id="refreshFilesButton" type="button" class="text-action" title="刷新文件列表">刷新</button></div><p id="fileCurrentPath" class="file-current-path">当前工作区</p><div id="fileList" class="file-list" role="list"></div><div id="filePreview" class="file-preview" aria-live="polite">选择文件后在这里预览。</div></div>
       <div class="rail-panel settings-panel" id="settingsPanel" role="tabpanel">
       <section class="run-controls" aria-label="Agent 运行设置">
-        <label class="run-control workspace-control"><span>工作目录</span><input id="workspaceInput" type="text" placeholder="C:/Users/…/Workspaces/…" autocomplete="off"><small>新会话自动创建。输入已有目录可切换。</small></label>
+        <label class="run-control workspace-control"><span>工作目录</span><div class="workspace-input-row"><input id="workspaceInput" type="text" placeholder="C:/Users/…/Workspaces/…" autocomplete="off"><button id="browseWorkspaceButton" type="button" title="浏览电脑上的文件夹">浏览</button></div><small>新会话自动创建。输入已有目录可切换。</small></label>
         <button id="indexWorkspaceButton" type="button" class="side-action">索引当前目录</button>
         <div class="control-divider"></div>
         <label class="run-control"><span>默认模型</span><select id="llmModelInput"><option value="">跟随后端默认模型</option></select></label>
@@ -129,16 +132,19 @@
   <div class="column-resizer sidebar-resizer" id="sidebarResizeHandle" role="separator" aria-label="调整会话列表宽度" aria-orientation="vertical" tabindex="0"></div>
   <div class="column-resizer rail-resizer" id="railResizeHandle" role="separator" aria-label="调整工作区面板宽度" aria-orientation="vertical" tabindex="0"></div>
   <script src="./vendor/markdown-it-15.0.2.umd.min.js"></script>
-  <script src="./markdown.js?v=20260930-markdown"></script>
-  <script src="./chat.js?v=20261006-session-ux"></script>
-  <script src="./memory.js?v=20261002-projects"></script>
-  <script src="./projects.js?v=20261006-session-ux"></script>
+  <script src="./markdown.js?v=20261007-live-stream"></script>
+  <script src="./mobile.js?v=20261007-mobile-transport"></script>
+  <script src="./chat.js?v=20261007-mobile-transport"></script>
+  <script src="./memory.js?v=20261007-no-context-counter"></script>
+  <script src="./projects.js?v=20261007-assistant-message"></script>
+  <script src="./quick-chat.js?v=20261007-workspace-picker"></script>
   <script src="./qq-reader.js?v=20261005"></script>
   <script src="./message-ui-api.js?v=20261005"></script>
   <script src="./message-content.js?v=20261006-people-names"></script>
   <script src="./message-names.js?v=20261006-people-names"></script>
   <script src="./message-history.js?v=20261006-people-names"></script>
   <script src="./message-reading.js?v=20261006-people-names"></script>
-  <script src="./messages-center.js?v=20261006-people-names"></script>
+  <script src="./messages-center.js?v=20261007-mobile"></script>
+  <script src="./workspace-picker.js?v=20261007-workspace-picker"></script>
 </body>
 </html>

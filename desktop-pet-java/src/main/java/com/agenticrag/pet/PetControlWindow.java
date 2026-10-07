@@ -5,8 +5,13 @@ import com.google.gson.JsonParser;
 import javafx.application.Platform;
 import javafx.concurrent.Worker;
 import javafx.geometry.Rectangle2D;
+import javafx.geometry.Pos;
 import javafx.scene.Scene;
+import javafx.scene.Node;
+import javafx.geometry.Bounds;
+import javafx.geometry.Point2D;
 import javafx.scene.control.Button;
+import javafx.scene.control.ButtonBase;
 import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.CustomMenuItem;
@@ -15,15 +20,25 @@ import javafx.scene.control.MenuButton;
 import javafx.scene.control.MenuItem;
 import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.Tooltip;
+import javafx.scene.control.skin.TextAreaSkin;
+import javafx.scene.shape.SVGPath;
 import javafx.scene.input.InputMethodEvent;
+import javafx.scene.Cursor;
+import javafx.scene.input.MouseButton;
+import javafx.scene.input.MouseEvent;
 import javafx.scene.layout.BorderPane;
 import javafx.scene.layout.HBox;
 import javafx.scene.layout.Priority;
+import javafx.scene.layout.Region;
 import javafx.scene.layout.StackPane;
 import javafx.scene.layout.VBox;
 import javafx.scene.input.KeyCode;
 import javafx.scene.input.KeyEvent;
 import javafx.scene.paint.Color;
+import javafx.scene.text.Font;
+import javafx.scene.text.FontPosture;
+import javafx.scene.text.FontWeight;
 import javafx.scene.web.WebView;
 import javafx.stage.Screen;
 import javafx.stage.Stage;
@@ -43,7 +58,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
@@ -51,9 +68,41 @@ import java.util.stream.Stream;
 import java.util.function.BiFunction;
 
 final class PetControlWindow {
-    private static final int WIDTH = 430;
-    private static final int HEIGHT = 680;
+    private enum ResizeEdge {
+        NONE(false, false, false, false, Cursor.DEFAULT),
+        NORTH(true, false, false, false, Cursor.N_RESIZE),
+        SOUTH(false, true, false, false, Cursor.S_RESIZE),
+        WEST(false, false, true, false, Cursor.W_RESIZE),
+        EAST(false, false, false, true, Cursor.E_RESIZE),
+        NORTH_WEST(true, false, true, false, Cursor.NW_RESIZE),
+        NORTH_EAST(true, false, false, true, Cursor.NE_RESIZE),
+        SOUTH_WEST(false, true, true, false, Cursor.SW_RESIZE),
+        SOUTH_EAST(false, true, false, true, Cursor.SE_RESIZE);
+
+        final boolean north;
+        final boolean south;
+        final boolean west;
+        final boolean east;
+        final Cursor cursor;
+
+        ResizeEdge(boolean north, boolean south, boolean west, boolean east, Cursor cursor) {
+            this.north = north;
+            this.south = south;
+            this.west = west;
+            this.east = east;
+            this.cursor = cursor;
+        }
+    }
+
+    private static final int WIDTH = 390;
+    private static final int INITIAL_HEIGHT = 118;
+    private static final double QUICK_CHROME_HEIGHT = 112;
+    private static final double MAX_QUICK_HEIGHT = 730;
+    private static final double RESIZE_HANDLE_SIZE = 10;
+    private static final double MIN_QUICK_WIDTH = 340;
+    private static final double MIN_QUICK_HEIGHT = 118;
     private static final AtomicBoolean FX_STARTED = new AtomicBoolean(false);
+    private static final Map<String, Font> QUICK_FONTS = new HashMap<>();
 
     private final PetControlActions actions;
     private final String chatUrl;
@@ -68,6 +117,17 @@ final class PetControlWindow {
     private PetChatBridge chatBridge;
     private TextArea nativeInput;
     private Button nativeSendButton;
+    private BorderPane quickCard;
+    private ResizeEdge activeResizeEdge = ResizeEdge.NONE;
+    private double resizeStartScreenX;
+    private double resizeStartScreenY;
+    private double resizeStartX;
+    private double resizeStartY;
+    private double resizeStartWidth;
+    private double resizeStartHeight;
+    private double manualWidth = WIDTH;
+    private double manualHeight = INITIAL_HEIGHT;
+    private boolean manualSizePreferred;
     private boolean nativeImeComposing;
     private MenuButton settingsMenuButton;
     private ComboBox<PetModelOption> modelCombo;
@@ -185,59 +245,58 @@ final class PetControlWindow {
 
         stage = new Stage(StageStyle.TRANSPARENT);
         stage.setAlwaysOnTop(true);
-        stage.setTitle("理事所 · 快速任务");
+        stage.setTitle("快速会话");
         stage.setWidth(WIDTH);
-        stage.setHeight(HEIGHT);
-        stage.setMinWidth(380);
-        stage.setMinHeight(560);
+        stage.setHeight(INITIAL_HEIGHT);
+        stage.setMinWidth(340);
+        stage.setMinHeight(118);
         stage.setOnShown(event -> visible.set(true));
         stage.setOnHidden(event -> visible.set(false));
+        stage.focusedProperty().addListener((observable, wasFocused, focused) -> {
+            if (focused) Platform.runLater(this::restartComposerCaret);
+        });
 
-        Scene scene = new Scene(buildContent(), WIDTH, HEIGHT);
+        Scene scene = new Scene(buildContent(), WIDTH, INITIAL_HEIGHT);
         scene.setFill(Color.TRANSPARENT);
+        scene.addEventFilter(MouseEvent.MOUSE_MOVED, this::updateResizeCursor);
+        scene.addEventFilter(MouseEvent.MOUSE_PRESSED, this::beginResize);
+        scene.addEventFilter(MouseEvent.MOUSE_DRAGGED, this::resizeStage);
+        scene.addEventFilter(MouseEvent.MOUSE_RELEASED, this::endResize);
         scene.getStylesheets().add(Objects.requireNonNull(
                 getClass().getResource("/pet-control.css")).toExternalForm());
         stage.setScene(scene);
     }
 
-    private BorderPane buildContent() {
-        BorderPane root = new BorderPane();
-        root.setStyle("""
-                -fx-background-color: #f5f8f8;
-                -fx-background-radius: 17;
-                -fx-border-color: #cbdfe0;
-                -fx-border-radius: 17;
-                -fx-border-width: 1;
-                -fx-padding: 10;
-                """);
+    private StackPane buildContent() {
+        quickCard = new BorderPane();
+        quickCard.getStyleClass().add("pet-quick-card");
+        quickCard.setCenter(buildWebView());
+        quickCard.setBottom(buildTools());
 
-        root.setTop(buildHeader());
-        root.setCenter(buildWebView());
-        root.setBottom(buildTools());
-        return root;
-    }
+        Region spine = new Region();
+        spine.getStyleClass().add("pet-quick-spine");
+        spine.setPrefSize(3, 30);
+        spine.setMinSize(3, 30);
+        spine.setMaxSize(3, 30);
+        spine.setMouseTransparent(true);
+        StackPane.setAlignment(spine, Pos.TOP_LEFT);
+        spine.setTranslateX(12);
+        spine.setTranslateY(18);
 
-    private HBox buildHeader() {
-        VBox titleBlock = new VBox(1);
-        titleBlock.setPickOnBounds(true);
-        titleBlock.setOnMousePressed(this::startDrag);
-        titleBlock.setOnMouseDragged(this::dragPanel);
-
-        Label title = new Label("理事所 · 快速任务");
-        title.setStyle("-fx-text-fill: #19313a; -fx-font-family: 'Microsoft YaHei UI'; -fx-font-size: 15; -fx-font-weight: bold;");
-        titleBlock.getChildren().add(title);
-
-        HBox buttons = new HBox(6, smallButton("工作台", this::openWorkbench), smallButton("刷新", this::reloadChat), smallButton("收起", () -> stage.hide()));
-        HBox header = new HBox(8, titleBlock, buttons);
-        header.setStyle("-fx-padding: 0 2 8 2;");
-        header.setOnMousePressed(this::startDrag);
-        header.setOnMouseDragged(this::dragPanel);
-        HBox.setHgrow(titleBlock, Priority.ALWAYS);
-        return header;
+        SVGPath resizeGrip = iconGraphic("M0 8L8 0 M4 8L8 4");
+        resizeGrip.setOpacity(0.45);
+        resizeGrip.setMouseTransparent(true);
+        StackPane.setAlignment(resizeGrip, Pos.BOTTOM_RIGHT);
+        resizeGrip.setTranslateX(-7);
+        resizeGrip.setTranslateY(-7);
+        StackPane frame = new StackPane(quickCard, spine, resizeGrip);
+        frame.setStyle("-fx-background-color: transparent;");
+        return frame;
     }
 
     private StackPane buildWebView() {
         webView = new WebView();
+        webView.setMinHeight(0);
         webView.setContextMenuEnabled(false);
         webView.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
             if (event.getCode() == KeyCode.ENTER && !event.isShiftDown()
@@ -271,20 +330,32 @@ final class PetControlWindow {
         loadChatPage();
 
         StackPane holder = new StackPane(webView);
-        holder.setStyle("""
-                -fx-border-color: #cbdfe0;
-                -fx-border-width: 1;
-                -fx-background-color: rgba(255,255,255,0.03);
-                """);
+        holder.setMinHeight(0);
         return holder;
     }
 
     private VBox buildTools() {
         nativeInput = new TextArea();
-        nativeInput.setPromptText("告诉真理你想完成什么…");
+        nativeInput.setPromptText("写下问题，或交给我一件事…");
+        nativeInput.setFont(quickFont("regular", 13));
         nativeInput.setWrapText(true);
         nativeInput.setPrefRowCount(2);
         nativeInput.getStyleClass().add("pet-native-input");
+        nativeInput.getStyleClass().add("pet-quick-native-input");
+        nativeInput.focusedProperty().addListener((observable, wasFocused, focused) -> {
+            if (quickCard == null) return;
+            if (focused) {
+                quickCard.getStyleClass().add("pet-quick-card-focused");
+                Platform.runLater(this::restartComposerCaret);
+            } else quickCard.getStyleClass().remove("pet-quick-card-focused");
+        });
+        nativeInput.skinProperty().addListener((observable, previous, current) -> {
+            if (current != null) Platform.runLater(this::restartComposerCaret);
+        });
+        nativeInput.addEventHandler(MouseEvent.MOUSE_RELEASED, event -> {
+            if (event.getButton() == MouseButton.PRIMARY)
+                Platform.runLater(this::restartComposerCaret);
+        });
         nativeInput.textProperty().addListener((observable, oldText, newText) -> {
             if (webView == null || !isChatPageLocation(webView.getEngine().getLocation())) return;
             try {
@@ -304,19 +375,132 @@ final class PetControlWindow {
                 submitNativeInput();
             }
         });
-        nativeSendButton = new Button("发送 ↗");
-        nativeSendButton.getStyleClass().add("pet-native-send");
+        nativeSendButton = new Button();
+        SVGPath sendIcon = iconGraphic("M3 11L21 3L13 21L10 13Z M10 13L21 3");
+        sendIcon.setStroke(Color.WHITE);
+        sendIcon.setStrokeWidth(1.5);
+        nativeSendButton.setGraphic(sendIcon);
+        nativeSendButton.getStyleClass().addAll("pet-native-send", "pet-quick-native-send");
+        nativeSendButton.setTooltip(quickTooltip("发送任务 · Enter 发送，Shift + Enter 换行"));
+        nativeSendButton.setAccessibleText("发送");
         nativeSendButton.setDisable(true);
         nativeSendButton.setOnAction(event -> submitNativeInput());
         HBox composer = new HBox(8, nativeInput, nativeSendButton);
         composer.getStyleClass().add("pet-native-composer");
+        composer.getStyleClass().add("pet-quick-composer");
         HBox.setHgrow(nativeInput, Priority.ALWAYS);
 
+        Button sessionsButton = iconButton("M4 6h16 M4 12h16 M4 18h16", "选择会话", () -> clickPageButton("toggleSidebarButton"));
+        Button projectsButton = iconButton("M3 6.5h7l2 2h9v10H3z M3 6.5v-2h7l2 2", "选择项目", () -> clickPageButton("quickProjectsButton"));
+        HBox leftActions = new HBox(2, sessionsButton, projectsButton);
+        leftActions.setAlignment(Pos.CENTER_LEFT);
+
+        Button newSessionButton = iconButton("M12 5v14 M5 12h14", "新建会话", () -> clickPageButton("newQuickSessionButton"));
+        Button workbenchButton = iconButton("M4 5h11v14H4z M10 14 20 4 M14 4h6v6", "打开工作台", this::openWorkbench);
         settingsMenuButton = buildSettingsMenu();
-        HBox row = new HBox(settingsMenuButton);
-        HBox.setHgrow(settingsMenuButton, Priority.ALWAYS);
-        row.setStyle("-fx-padding: 8 0 0 0;");
-        return new VBox(7, composer, row);
+        settingsMenuButton.setText("");
+        settingsMenuButton.setGraphic(iconGraphic("M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.28 7.28 0 0 0-1.63-.94l-.36-2.54a.49.49 0 0 0-.49-.42h-3.84a.49.49 0 0 0-.49.42l-.36 2.54c-.59.23-1.14.55-1.63.94l-2.39-.96a.5.5 0 0 0-.61.22L2.63 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.05.3-.08.62-.08.94s.03.64.08.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.12.2.37.29.61.22l2.39-.96c.49.39 1.04.71 1.63.94l.36 2.54c.04.24.24.42.49.42h3.84c.25 0 .45-.18.49-.42l.36-2.54c.59-.23 1.14-.55 1.63-.94l2.39.96c.24.07.49-.02.61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"));
+        settingsMenuButton.getStyleClass().add("pet-compact-settings");
+        styleFooterButton(settingsMenuButton, "桌宠设置");
+        Button closeButton = iconButton("M6 6l12 12 M18 6 6 18", "关闭快速会话", () -> stage.hide());
+        HBox rightActions = new HBox(2, newSessionButton, workbenchButton, settingsMenuButton, closeButton);
+        rightActions.setAlignment(Pos.CENTER_RIGHT);
+
+        Region footerSpacer = new Region();
+        HBox.setHgrow(footerSpacer, Priority.ALWAYS);
+        HBox footer = new HBox(2, leftActions, footerSpacer, rightActions);
+        footer.setAlignment(Pos.CENTER_LEFT);
+        footer.getStyleClass().add("pet-quick-footer");
+        footer.setMinHeight(24);
+        footer.setPrefHeight(24);
+        footer.setMaxHeight(24);
+        footer.setOnMousePressed(this::startDrag);
+        footer.setOnMouseDragged(this::dragPanel);
+        return new VBox(5, composer, footer);
+    }
+
+    private Button iconButton(String path, String tooltip, Runnable action) {
+        Button button = new Button();
+        button.setGraphic(iconGraphic(path));
+        button.setTooltip(quickTooltip(tooltip));
+        button.setAccessibleText(tooltip);
+        styleFooterButton(button, tooltip);
+        button.setOnAction(event -> action.run());
+        return button;
+    }
+
+    private SVGPath iconGraphic(String path) {
+        SVGPath icon = new SVGPath();
+        icon.setContent(path);
+        icon.setFill(Color.TRANSPARENT);
+        icon.setStroke(Color.web("#789491"));
+        icon.setStrokeWidth(1.6);
+        icon.setStrokeLineCap(javafx.scene.shape.StrokeLineCap.ROUND);
+        icon.setStrokeLineJoin(javafx.scene.shape.StrokeLineJoin.ROUND);
+        icon.setScaleX(0.78);
+        icon.setScaleY(0.78);
+        return icon;
+    }
+
+    private Tooltip quickTooltip(String text) {
+        Tooltip tooltip = new Tooltip(text);
+        tooltip.getStyleClass().add("pet-quick-tooltip");
+        tooltip.setFont(quickFont("regular", 11));
+        tooltip.setShowDelay(javafx.util.Duration.millis(250));
+        tooltip.setHideDelay(javafx.util.Duration.millis(100));
+        return tooltip;
+    }
+
+    private static Font quickFont(String weight, double size) {
+        String key = weight + "-" + size;
+        synchronized (QUICK_FONTS) {
+            Font cached = QUICK_FONTS.get(key);
+            if (cached != null) return cached;
+            String windowsRoot = System.getenv().getOrDefault("WINDIR", "C:\\Windows");
+            String fileName = "medium".equals(weight)
+                    ? "Noto Sans SC Medium (TrueType).otf" : "Noto Sans SC (TrueType).otf";
+            Path fontPath = Path.of(windowsRoot, "Fonts", fileName);
+            Font loaded = null;
+            if (Files.isRegularFile(fontPath)) {
+                try (var fontStream = Files.newInputStream(fontPath)) {
+                    loaded = Font.loadFont(fontStream, size);
+                } catch (IOException | RuntimeException ignored) {
+                    // Keep the app usable if the optional system font cannot be loaded.
+                }
+            }
+            if (loaded == null || ("regular".equals(weight)
+                    && !"Regular".equalsIgnoreCase(loaded.getStyle()))) {
+                FontWeight fontWeight = "medium".equals(weight) ? FontWeight.MEDIUM : FontWeight.NORMAL;
+                loaded = Font.font("Noto Sans SC", fontWeight, FontPosture.REGULAR, size);
+                if ("regular".equals(weight) && !"Regular".equalsIgnoreCase(loaded.getStyle())) {
+                    loaded = Font.font("Microsoft YaHei UI", FontWeight.NORMAL, FontPosture.REGULAR, size);
+                }
+            }
+            QUICK_FONTS.put(key, loaded);
+            return loaded;
+        }
+    }
+
+    private void styleFooterButton(ButtonBase button, String accessibleLabel) {
+        button.setTooltip(quickTooltip(accessibleLabel));
+        button.setAccessibleText(accessibleLabel);
+        button.setMinSize(24, 24);
+        button.setPrefSize(24, 24);
+        button.setMaxSize(24, 24);
+        button.setAlignment(Pos.CENTER);
+        button.setContentDisplay(javafx.scene.control.ContentDisplay.GRAPHIC_ONLY);
+        button.getStyleClass().add("pet-quick-footer-button");
+    }
+
+    private void clickPageButton(String id) {
+        if (webView == null || !isChatPageLocation(webView.getEngine().getLocation())) return;
+        try {
+            webView.requestFocus();
+            webView.getEngine().executeScript("(function(){var b=document.getElementById(" + jsonString(id)
+                    + ");if(b)b.click();})()");
+        } catch (RuntimeException error) {
+            System.err.println("[pet-chat] page control click failed: " + error.getMessage());
+        }
     }
 
     private void submitNativeInput() {
@@ -350,18 +534,50 @@ final class PetControlWindow {
     }
 
     private void focusNativeComposer() {
-        Platform.runLater(() -> {
-            if (stage != null && stage.isShowing() && nativeInput != null) nativeInput.requestFocus();
-        });
+        Platform.runLater(this::focusChatInput);
+    }
+
+    private void restartComposerCaret() {
+        if (stage == null || !stage.isShowing() || !stage.isFocused()
+                || nativeInput == null || !nativeInput.isFocused()
+                || nativeInput.isDisabled() || !nativeInput.isEditable()) return;
+        if (nativeInput.getSkin() instanceof TextAreaSkin skin) {
+            // Restart after mouse/focus handlers so an empty field begins with a
+            // visible native caret. Keep selection and Windows IME untouched.
+            skin.setCaretAnimating(false);
+            skin.setCaretAnimating(true);
+        }
     }
 
     private MenuButton buildSettingsMenu() {
-        MenuButton menuButton = new MenuButton("桌宠设置 · 形态与行为");
+        MenuButton menuButton = new MenuButton("桌宠设置 · 形态与行为") {
+            @Override
+            protected void layoutChildren() {
+                super.layoutChildren();
+                if (getContentDisplay() != javafx.scene.control.ContentDisplay.GRAPHIC_ONLY) return;
+                // An invisible CSS arrow still contributes bounds and mouse hits.
+                Node arrow = lookup(".arrow-button");
+                if (arrow != null) { arrow.setManaged(false); arrow.setVisible(false); }
+                Node graphic = getGraphic();
+                if (graphic == null || graphic.getParent() == null) return;
+                graphic.getParent().layout();
+                // MenuButton's arrow/label skin offsets scaled SVG graphics.
+                // Align the rendered bounds to the actual 24px click target.
+                Bounds bounds = graphic.localToScene(graphic.getBoundsInLocal());
+                Point2D center = sceneToLocal((bounds.getMinX() + bounds.getMaxX()) / 2,
+                        (bounds.getMinY() + bounds.getMaxY()) / 2);
+                double dx = getWidth() / 2 - center.getX();
+                double dy = getHeight() / 2 - center.getY();
+                if (Math.abs(dx) > 0.01) graphic.setTranslateX(graphic.getTranslateX() + dx);
+                if (Math.abs(dy) > 0.01) graphic.setTranslateY(graphic.getTranslateY() + dy);
+            }
+        };
         menuButton.getStyleClass().add("pet-settings-button");
         styleMenuButton(menuButton);
 
         Label libraryLabel = new Label("当前形态");
-        libraryLabel.setStyle("-fx-text-fill: #19313a; -fx-font-size: 11; -fx-font-weight: bold;");
+        libraryLabel.setFont(quickFont("medium", 11));
+        libraryLabel.setStyle("-fx-text-fill: #19313a; -fx-font-family: 'Noto Sans SC'; -fx-font-size: 11; -fx-font-weight: 500; -fx-font-style: normal;");
 
         modelCombo = new ComboBox<>();
         modelCombo.getStyleClass().add("pet-model-combo");
@@ -441,24 +657,6 @@ final class PetControlWindow {
         button.setFocusTraversable(false);
     }
 
-    private Button smallButton(String text, Runnable action) {
-        Button button = new Button(text);
-        button.setPrefWidth(74);
-        button.setFocusTraversable(false);
-        button.setStyle("""
-                -fx-background-color: #e9f4f3;
-                -fx-border-color: #bdd5d5;
-                -fx-border-width: 1;
-                -fx-border-radius: 7;
-                -fx-background-radius: 7;
-                -fx-text-fill: #195e64;
-                -fx-font-size: 11;
-                -fx-padding: 6 5 6 5;
-                """);
-        button.setOnAction(event -> action.run());
-        return button;
-    }
-
     private void refreshSettingsState() {
         List<PetModelOption> latestModels = actions.listModels();
         if (latestModels != null && !latestModels.isEmpty()) {
@@ -514,7 +712,13 @@ final class PetControlWindow {
     }
 
     private void openWorkbench() {
-        openWorkbenchSession("", "");
+        if (webView == null) return;
+        try {
+            webView.getEngine().executeScript(
+                    "window.__petChatOpenWorkbench && window.__petChatOpenWorkbench()");
+        } catch (RuntimeException error) {
+            System.err.println("[pet-chat] workbench handoff failed: " + error.getMessage());
+        }
     }
 
     private void openWorkbenchSession(String sessionId, String runId) {
@@ -528,8 +732,11 @@ final class PetControlWindow {
                 page += "&run_id=" + URLEncoder.encode(runId, StandardCharsets.UTF_8);
             }
             Desktop.getDesktop().browse(URI.create(page));
+            // Hiding keeps the current stream alive while the workbench reconnects.
+            if (stage != null) stage.hide();
         } catch (Exception error) {
             System.err.println("[pet-chat] cannot open workbench: " + error.getMessage());
+            throw new IllegalStateException("浏览器未能打开工作台，请重试", error);
         }
     }
 
@@ -546,8 +753,10 @@ final class PetControlWindow {
             return;
         }
         stage.toFront();
+        stage.requestFocus();
         if (nativeInput != null) {
             nativeInput.requestFocus();
+            Platform.runLater(this::restartComposerCaret);
         } else {
             webView.requestFocus();
         }
@@ -580,6 +789,7 @@ final class PetControlWindow {
                 );
                 chatBridge.setMemoryRequestHandler(this::handleMemoryRequest);
                 chatBridge.setQQReaderStatusRequestHandler(this::handleQQReaderStatusRequest);
+                chatBridge.setQuickPanelHeightHandler(this::setQuickContentHeight);
             }
             JSObject window = (JSObject) webView.getEngine().executeScript("window");
             window.setMember("petBridge", chatBridge);
@@ -590,6 +800,147 @@ final class PetControlWindow {
         } catch (RuntimeException error) {
             System.err.println("[pet-chat] bridge install failed: " + error.getMessage());
         }
+    }
+
+    private void updateResizeCursor(MouseEvent event) {
+        if (stage == null || !stage.isShowing() || activeResizeEdge != ResizeEdge.NONE) return;
+        stage.getScene().setCursor(resizeEdgeAt(event.getSceneX(), event.getSceneY()).cursor);
+    }
+
+    private void beginResize(MouseEvent event) {
+        if (event.getButton() != MouseButton.PRIMARY || stage == null || !stage.isShowing()) return;
+        ResizeEdge edge = resizeEdgeAt(event.getSceneX(), event.getSceneY());
+        if (edge == ResizeEdge.NONE) return;
+        activeResizeEdge = edge;
+        resizeStartScreenX = event.getScreenX();
+        resizeStartScreenY = event.getScreenY();
+        resizeStartX = stage.getX();
+        resizeStartY = stage.getY();
+        resizeStartWidth = stage.getWidth();
+        resizeStartHeight = stage.getHeight();
+        event.consume();
+    }
+
+    private void resizeStage(MouseEvent event) {
+        if (activeResizeEdge == ResizeEdge.NONE || stage == null) return;
+        List<Screen> screens = Screen.getScreensForRectangle(
+                resizeStartX + resizeStartWidth / 2, resizeStartY + resizeStartHeight / 2, 1, 1);
+        Screen screen = screens.isEmpty() ? Screen.getPrimary() : screens.get(0);
+        Rectangle2D bounds = screen.getVisualBounds();
+        double dx = event.getScreenX() - resizeStartScreenX;
+        double dy = event.getScreenY() - resizeStartScreenY;
+        double margin = 12;
+        double minWidth = Math.min(MIN_QUICK_WIDTH, Math.max(1, bounds.getWidth() - margin * 2));
+        double minHeight = Math.min(stage.getMinHeight(), Math.max(1, bounds.getHeight() - margin * 2));
+        double maxWidth = activeResizeEdge.west
+                ? resizeStartX + resizeStartWidth - bounds.getMinX() - margin
+                : bounds.getMaxX() - margin - resizeStartX;
+        double maxHeight = activeResizeEdge.north
+                ? resizeStartY + resizeStartHeight - bounds.getMinY() - margin
+                : bounds.getMaxY() - margin - resizeStartY;
+
+        double requestedWidth = resizeStartWidth + (activeResizeEdge.east ? dx : activeResizeEdge.west ? -dx : 0);
+        double requestedHeight = resizeStartHeight + (activeResizeEdge.south ? dy : activeResizeEdge.north ? -dy : 0);
+        double width = clamp(requestedWidth, minWidth, Math.max(minWidth, maxWidth));
+        double height = clamp(requestedHeight, minHeight, Math.max(minHeight, maxHeight));
+        double x = activeResizeEdge.west ? resizeStartX + resizeStartWidth - width : resizeStartX;
+        double y = activeResizeEdge.north ? resizeStartY + resizeStartHeight - height : resizeStartY;
+
+        stage.setWidth(width);
+        stage.setHeight(height);
+        stage.setX(x);
+        stage.setY(y);
+        if (Math.abs(width - resizeStartWidth) > 0.5 || Math.abs(height - resizeStartHeight) > 0.5) {
+            manualSizePreferred = true;
+            manualWidth = width;
+            manualHeight = height;
+            initialPositionInitialized = true;
+            relativeX = x - lastPetX;
+            relativeY = y - lastPetY;
+        }
+        event.consume();
+    }
+
+    private void endResize(MouseEvent event) {
+        if (activeResizeEdge == ResizeEdge.NONE) return;
+        activeResizeEdge = ResizeEdge.NONE;
+        if (stage != null && stage.getScene() != null) stage.getScene().setCursor(Cursor.DEFAULT);
+        event.consume();
+    }
+
+    private ResizeEdge resizeEdgeAt(double x, double y) {
+        if (stage == null || stage.getScene() == null) return ResizeEdge.NONE;
+        boolean west = x <= RESIZE_HANDLE_SIZE;
+        boolean east = x >= stage.getScene().getWidth() - RESIZE_HANDLE_SIZE;
+        boolean north = y <= RESIZE_HANDLE_SIZE;
+        boolean south = y >= stage.getScene().getHeight() - RESIZE_HANDLE_SIZE;
+        if (north && west) return ResizeEdge.NORTH_WEST;
+        if (north && east) return ResizeEdge.NORTH_EAST;
+        if (south && west) return ResizeEdge.SOUTH_WEST;
+        if (south && east) return ResizeEdge.SOUTH_EAST;
+        if (west) return ResizeEdge.WEST;
+        if (east) return ResizeEdge.EAST;
+        if (north) return ResizeEdge.NORTH;
+        if (south) return ResizeEdge.SOUTH;
+        return ResizeEdge.NONE;
+    }
+
+    private static double clamp(double value, double minimum, double maximum) {
+        return Math.max(minimum, Math.min(value, maximum));
+    }
+
+    private void setQuickContentHeight(double requestedContentHeight) {
+        if (!Double.isFinite(requestedContentHeight)) return;
+        Platform.runLater(() -> {
+            if (stage == null || stage.getScene() == null || activeResizeEdge != ResizeEdge.NONE) return;
+            boolean empty = requestedContentHeight <= 0;
+            double previousHeight = stage.getHeight();
+            double anchoredBottom = stage.getY() + previousHeight;
+            List<Screen> screens = Screen.getScreensForRectangle(
+                    stage.getX() + stage.getWidth() / 2, stage.getY() + stage.getHeight() / 2, 1, 1);
+            Screen screen = screens.isEmpty() ? Screen.getPrimary() : screens.get(0);
+            double availableHeight = Math.max(1, screen.getVisualBounds().getHeight() - 24);
+            double availableWidth = Math.max(1, screen.getVisualBounds().getWidth() - 24);
+            stage.setMinWidth(Math.min(MIN_QUICK_WIDTH, availableWidth));
+            stage.setMinHeight(Math.min(empty ? MIN_QUICK_HEIGHT : 280, availableHeight));
+            double desiredWidth;
+            double desiredHeight;
+            if (empty) {
+                desiredWidth = WIDTH;
+                desiredHeight = INITIAL_HEIGHT;
+            } else if (manualSizePreferred) {
+                desiredWidth = manualWidth;
+                desiredHeight = manualHeight;
+            } else {
+                double contentHeight = Math.max(0, Math.min(MAX_QUICK_HEIGHT - QUICK_CHROME_HEIGHT, requestedContentHeight));
+                desiredWidth = WIDTH;
+                desiredHeight = Math.max(INITIAL_HEIGHT, QUICK_CHROME_HEIGHT + contentHeight);
+            }
+            desiredWidth = Math.min(desiredWidth, availableWidth);
+            stage.setWidth(desiredWidth);
+            double minimumHeight = Math.min(stage.getMinHeight(), availableHeight);
+            stage.setHeight(clamp(Math.min(desiredHeight,
+                    empty || manualSizePreferred ? availableHeight : Math.min(MAX_QUICK_HEIGHT, availableHeight)),
+                    minimumHeight, availableHeight));
+            if (Math.abs(previousHeight - stage.getHeight()) > 0.5) {
+                stage.setY(anchoredBottom - stage.getHeight());
+            }
+            keepStageOnScreen(screen);
+        });
+    }
+
+    private void keepStageOnScreen(Screen screen) {
+        if (stage == null || screen == null) return;
+        Rectangle2D bounds = screen.getVisualBounds();
+        double margin = 12;
+        double x = Math.max(bounds.getMinX() + margin,
+                Math.min(stage.getX(), bounds.getMaxX() - stage.getWidth() - margin));
+        double y = Math.max(bounds.getMinY() + margin,
+                Math.min(stage.getY(), bounds.getMaxY() - stage.getHeight() - margin));
+        stage.setX(x);
+        stage.setY(y);
+        relativeX = x - lastPetX;
+        relativeY = y - lastPetY;
     }
 
     private void syncToPetNow(int petX, int petY) {
@@ -637,14 +988,14 @@ final class PetControlWindow {
 
         double targetX = petX + 24.0;
         double targetY = petY + 24.0;
-        if (targetX + WIDTH > bounds.getMaxX() - margin) {
-            targetX = petX - WIDTH + 84.0;
+        if (targetX + stage.getWidth() > bounds.getMaxX() - margin) {
+            targetX = petX - stage.getWidth() + 84.0;
         }
         if (targetX < bounds.getMinX() + margin) {
             targetX = bounds.getMinX() + margin;
         }
-        if (targetY + HEIGHT > bounds.getMaxY() - margin) {
-            targetY = bounds.getMaxY() - HEIGHT - margin;
+        if (targetY + stage.getHeight() > bounds.getMaxY() - margin) {
+            targetY = bounds.getMaxY() - stage.getHeight() - margin;
         }
         if (targetY < bounds.getMinY() + margin) {
             targetY = bounds.getMinY() + margin;
@@ -720,6 +1071,8 @@ final class PetControlWindow {
                 ? "Unknown load error"
                 : error.getClass().getSimpleName() + ": " + String.valueOf(error.getMessage());
         System.err.println("[pet-chat] chat page load failed: " + compact(reason, 260));
+        setNativeComposerBusy(true);
+        setQuickContentHeight(260);
         String retryUrl = cacheBustedUrl(chatUrl);
         String fallbackHtml = buildChatUnavailableHtml(compact(reason, 180), retryUrl);
         webView.getEngine().loadContent(fallbackHtml, "text/html");

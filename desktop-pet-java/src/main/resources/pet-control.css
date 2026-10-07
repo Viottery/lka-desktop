@@ -4,7 +4,7 @@
     -fx-border-radius: 9;
     -fx-background-radius: 9;
     -fx-text-fill: #195e64;
-    -fx-font-family: "Microsoft YaHei UI";
+    -fx-font-family: "Noto Sans SC";
     -fx-font-size: 12px;
     -fx-font-weight: bold;
     -fx-padding: 8 11;
@@ -15,6 +15,17 @@
 }
 .pet-settings-button .arrow-button { -fx-padding: 0 1 0 10; }
 .pet-settings-button .arrow { -fx-background-color: #195e64; }
+.pet-compact-settings .arrow-button {
+    -fx-padding: 0;
+    -fx-min-width: 0;
+    -fx-pref-width: 0;
+    -fx-max-width: 0;
+    -fx-background-color: transparent;
+}
+.pet-compact-settings .arrow {
+    -fx-shape: "";
+    -fx-background-color: transparent;
+}
 
 .context-menu {
     -fx-background-color: #ffffff;
@@ -32,8 +43,10 @@
 .context-menu .menu-item:focused { -fx-background-color: #e6f3f1; }
 .context-menu .menu-item .label {
     -fx-text-fill: #19313a;
-    -fx-font-family: "Microsoft YaHei UI";
+    -fx-font-family: "Noto Sans SC";
     -fx-font-size: 12px;
+    -fx-font-weight: normal;
+    -fx-font-style: normal;
 }
 .context-menu .menu-item:focused .label { -fx-text-fill: #195e64; }
 .context-menu .danger-menu-item .label { -fx-text-fill: #a8453e; }
@@ -67,7 +80,7 @@
 
 .pet-native-composer { -fx-alignment: top-center; -fx-padding: 7 2 0 2; }
 .pet-native-input {
-    -fx-font-family: "Microsoft YaHei UI";
+    -fx-font-family: "Noto Sans SC";
     -fx-font-size: 13px;
     -fx-text-fill: #203940;
     -fx-prompt-text-fill: #718d91;
@@ -83,7 +96,7 @@
 .pet-native-input:focused { -fx-border-color: #237b80; }
 .pet-native-input .content { -fx-background-color: #f6faf9; -fx-background-radius: 11; }
 .pet-native-send {
-    -fx-font-family: "Microsoft YaHei UI";
+    -fx-font-family: "Noto Sans SC";
     -fx-font-size: 12px;
     -fx-font-weight: bold;
     -fx-text-fill: white;
@@ -95,3 +108,120 @@
 }
 .pet-native-send:hover { -fx-background-color: #1b6268; }
 .pet-native-send:disabled { -fx-background-color: #9ab2b2; -fx-opacity: 0.7; }
+
+.pet-quick-card {
+    -fx-background-color: #faf8f2;
+    -fx-background-radius: 18;
+    -fx-border-color: #e1e1d6;
+    -fx-border-width: 1;
+    -fx-border-radius: 18;
+    -fx-padding: 10 12;
+}
+.pet-quick-card-focused {
+    -fx-border-color: #b8cec2;
+}
+.pet-quick-spine {
+    -fx-background-color: #6d9b85;
+    -fx-background-radius: 2;
+}
+.pet-quick-composer { -fx-alignment: center; -fx-padding: 0 2; }
+.pet-quick-footer {
+    -fx-border-color: #e5e7dc transparent transparent transparent;
+    -fx-border-width: 1 0 0 0;
+    -fx-border-insets: 0 24 0 24;
+}
+.pet-quick-footer-button {
+    -fx-padding: 0;
+    -fx-background-color: transparent;
+    -fx-background-radius: 7;
+    -fx-border-color: transparent;
+    -fx-border-radius: 7;
+    -fx-cursor: hand;
+}
+.pet-quick-footer-button:hover,
+.pet-quick-footer-button:showing {
+    -fx-background-color: #edf5f2;
+}
+.pet-quick-footer-button:focused {
+    -fx-background-color: #edf5f2;
+}
+.pet-quick-footer { -fx-alignment: center-left; }
+.pet-quick-native-input {
+    -fx-pref-height: 60;
+    -fx-min-height: 60;
+    -fx-max-height: 60;
+    -fx-font-family: "Noto Sans SC";
+    -fx-font-size: 13px;
+    -fx-font-weight: normal;
+    -fx-font-style: normal;
+    -fx-text-fill: #344c42;
+    -fx-prompt-text-fill: #98a197;
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-background-radius: 0;
+    -fx-border-color: transparent;
+    -fx-border-insets: 0;
+    -fx-border-radius: 0;
+    -fx-padding: 0;
+}
+.pet-quick-native-input:focused {
+    -fx-border-color: transparent;
+}
+.pet-quick-native-input .scroll-pane,
+.pet-quick-native-input .viewport {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-background-radius: 0;
+    -fx-border-color: transparent;
+    -fx-padding: 0;
+}
+.pet-quick-native-input .content {
+    -fx-background-color: transparent;
+    -fx-background-insets: 0;
+    -fx-background-radius: 0;
+    -fx-border-color: transparent;
+    -fx-padding: 7 0 7 9;
+}
+.pet-quick-native-send {
+    -fx-font-size: 16px;
+    -fx-pref-width: 32;
+    -fx-min-width: 32;
+    -fx-max-width: 32;
+    -fx-pref-height: 32;
+    -fx-min-height: 32;
+    -fx-max-height: 32;
+    -fx-background-color: #356d5e;
+    -fx-background-radius: 16;
+    -fx-border-color: #d9e5da;
+    -fx-border-width: 1;
+    -fx-border-radius: 16;
+    -fx-padding: 0;
+    -fx-effect: dropshadow(gaussian, rgba(53, 109, 94, 0.12), 4, 0, 0, 1);
+}
+.pet-quick-native-send:hover {
+    -fx-background-color: #356d5e;
+}
+.pet-quick-native-send:disabled {
+    -fx-background-color: #9bac9f;
+}
+
+.pet-quick-tooltip {
+    -fx-background-color: #fffffb;
+    -fx-background-radius: 7;
+    -fx-border-color: #d5ded0;
+    -fx-border-radius: 7;
+    -fx-text-fill: #536c5a;
+    -fx-font-family: "Noto Sans SC";
+    -fx-font-size: 11px;
+    -fx-font-weight: normal;
+    -fx-font-style: normal;
+    -fx-padding: 6 9;
+    -fx-effect: dropshadow(gaussian, rgba(52, 76, 66, 0.12), 9, 0, 0, 2);
+}
+
+.pet-compact-settings { -fx-graphic-text-gap: 0; }
+.pet-compact-settings > .label {
+    -fx-padding: 0;
+    -fx-alignment: center;
+    -fx-graphic-text-gap: 0;
+}

@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#f8fbfa">
+  <title>理事所 · 移动工作台</title>
+  <link rel="icon" type="image/png" href="./assets/ursus-student-emblem.png">
+  <style>body{margin:0;padding:32px;background:#f8fbfa;color:#203c42;font:16px/1.7 system-ui,sans-serif}a{color:#247d78}</style>
+</head>
+<body>
+  <p>正在打开移动工作台…</p>
+  <a id="mobileEntry" href="./chat.html?mode=work&amp;layout=mobile">进入工作台</a>
+  <script>
+    (function () {
+      var target = new URL('./chat.html', window.location.href);
+      target.search = window.location.search;
+      target.searchParams.set('mode', 'work');
+      target.searchParams.set('layout', 'mobile');
+      target.hash = window.location.hash;
+      document.getElementById('mobileEntry').href = target.href;
+      window.location.replace(target.href);
+    }());
+  </script>
+</body>
+</html>

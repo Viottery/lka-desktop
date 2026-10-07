@@ -11,7 +11,8 @@ param(
     [switch]$NoBackend,
     [switch]$NoPet,
     [switch]$NoOpen,
-    [switch]$OpenBrowser
+    [switch]$OpenBrowser,
+    [string]$MessageControlCredentialPath = ""
 )
 
 $ErrorActionPreference = "Stop"
@@ -109,6 +110,39 @@ function Get-ProjectPython {
     return "python"
 }
 
+function Start-WithoutMessageControlToken {
+    param([scriptblock]$StartAction)
+    $savedToken = [Environment]::GetEnvironmentVariable('LKA_MESSAGES_CONTROL_TOKEN', 'Process')
+    try {
+        [Environment]::SetEnvironmentVariable('LKA_MESSAGES_CONTROL_TOKEN', $null, 'Process')
+        & $StartAction
+    } finally {
+        [Environment]::SetEnvironmentVariable('LKA_MESSAGES_CONTROL_TOKEN', $savedToken, 'Process')
+    }
+}
+
+# Pair only the local Python adapter; credentials never become Java arguments.
+$messageControlToken = [Environment]::GetEnvironmentVariable('LKA_MESSAGES_CONTROL_TOKEN', 'Process')
+if ([string]::IsNullOrWhiteSpace($messageControlToken)) {
+    $explicitCredential = -not [string]::IsNullOrWhiteSpace($MessageControlCredentialPath)
+    if (-not $explicitCredential) {
+        $MessageControlCredentialPath = Join-Path $runtimeDir 'message-control.dpapi'
+    }
+    if (Test-Path -LiteralPath $MessageControlCredentialPath -PathType Leaf) {
+        Add-Type -AssemblyName System.Security
+        $plain = [System.Security.Cryptography.ProtectedData]::Unprotect(
+            [IO.File]::ReadAllBytes($MessageControlCredentialPath), $null,
+            [System.Security.Cryptography.DataProtectionScope]::CurrentUser)
+        $messageControlToken = [Text.Encoding]::UTF8.GetString($plain)
+        $plain = $null
+        if ([string]::IsNullOrWhiteSpace($messageControlToken)) {
+            throw 'The paired message control credential is invalid.'
+        }
+    } elseif ($explicitCredential) {
+        throw 'The specified message control credential file is missing.'
+    }
+}
+
 Stop-PidFileProcess $petServicePidFile
 Stop-PidFileProcess $petLauncherPidFile
 Stop-ProjectJavaPet
@@ -138,26 +172,42 @@ if (-not $NoBackend) {
     )
 
     Write-Host "Starting WSL backend: $backendBaseUrl"
-    $backendProcess = Start-Process `
-        -FilePath "wsl.exe" `
-        -ArgumentList $wslArgs `
-        -WindowStyle Hidden `
-        -RedirectStandardOutput $backendOut `
-        -RedirectStandardError $backendErr `
-        -PassThru
+    $backendProcess = Start-WithoutMessageControlToken {
+        Start-Process `
+            -FilePath "wsl.exe" `
+            -ArgumentList $wslArgs `
+            -WindowStyle Hidden `
+            -RedirectStandardOutput $backendOut `
+            -RedirectStandardError $backendErr `
+            -PassThru
+    }
     Set-Content -Path $backendPidFile -Value $backendProcess.Id -Encoding ASCII
 }
 
 Write-Host "Starting Windows pet service: $petBaseUrl"
 $petPython = Get-ProjectPython
-$petServiceProcess = Start-Process `
-    -FilePath $petPython `
-    -ArgumentList @("-m", "uvicorn", "app.main:app", "--host", $FrontendHost, "--port", "$FrontendPort") `
-    -WorkingDirectory $projectRoot `
-    -WindowStyle Hidden `
-    -RedirectStandardOutput $petServiceOut `
-    -RedirectStandardError $petServiceErr `
-    -PassThru
+$petServiceArgs = @("-m", "uvicorn", "app.main:app", "--host", $FrontendHost, "--port", "$FrontendPort")
+$frontendEnvPath = Join-Path $projectRoot '.env'
+if (Test-Path -LiteralPath $frontendEnvPath -PathType Leaf) {
+    $petServiceArgs += @("--env-file", ('"' + $frontendEnvPath + '"'))
+}
+$previousControlToken = [Environment]::GetEnvironmentVariable('LKA_MESSAGES_CONTROL_TOKEN', 'Process')
+try {
+    if (-not [string]::IsNullOrWhiteSpace($messageControlToken)) {
+        [Environment]::SetEnvironmentVariable('LKA_MESSAGES_CONTROL_TOKEN', $messageControlToken, 'Process')
+    }
+    $petServiceProcess = Start-Process `
+        -FilePath $petPython `
+        -ArgumentList $petServiceArgs `
+        -WorkingDirectory $projectRoot `
+        -WindowStyle Hidden `
+        -RedirectStandardOutput $petServiceOut `
+        -RedirectStandardError $petServiceErr `
+        -PassThru
+} finally {
+    [Environment]::SetEnvironmentVariable('LKA_MESSAGES_CONTROL_TOKEN', $previousControlToken, 'Process')
+    $messageControlToken = $null
+}
 Set-Content -Path $petServicePidFile -Value $petServiceProcess.Id -Encoding ASCII
 
 if (-not (Wait-HttpOk -Url "$backendBaseUrl/health" -TimeoutSeconds 45)) {
@@ -179,12 +229,14 @@ if (-not $NoPet) {
     }
 
     Write-Host "Starting Java Spine pet profile: $PetProfileId"
-    $petLaunchProcess = Start-Process `
-        -FilePath "powershell.exe" `
-        -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $petLauncher, "-NoServer", "-Spine", "-ProfileId", $PetProfileId, "-BaseUrl", $petBaseUrl, "-BackendUrl", $backendBaseUrl, "-Width", "$PetWidth", "-Height", "$PetHeight") `
-        -WorkingDirectory $projectRoot `
-        -WindowStyle Hidden `
-        -PassThru
+    $petLaunchProcess = Start-WithoutMessageControlToken {
+        Start-Process `
+            -FilePath "powershell.exe" `
+            -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-File", $petLauncher, "-NoServer", "-Spine", "-ProfileId", $PetProfileId, "-BaseUrl", $petBaseUrl, "-BackendUrl", $backendBaseUrl, "-Width", "$PetWidth", "-Height", "$PetHeight") `
+            -WorkingDirectory $projectRoot `
+            -WindowStyle Hidden `
+            -PassThru
+    }
     Set-Content -Path $petLauncherPidFile -Value $petLaunchProcess.Id -Encoding ASCII
 }
 
