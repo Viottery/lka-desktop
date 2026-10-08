@@ -6,13 +6,14 @@
   <meta http-equiv="Cache-Control" content="no-store">
   <title>理事所 · 工作台</title>
   <link rel="icon" type="image/png" href="./assets/ursus-student-emblem.png">
-  <link rel="stylesheet" href="./chat.css?v=20261007-mobile-transport">
+  <link rel="stylesheet" href="./chat.css?v=20261008-quick-image-stable">
   <link rel="stylesheet" href="./markdown.css?v=20260930-markdown">
   <link rel="stylesheet" href="./memory.css?v=20261002-projects">
   <link rel="stylesheet" href="./qq-reader.css?v=20261005">
   <link rel="stylesheet" href="./messages-center.css?v=20261006-people-names">
   <link rel="stylesheet" href="./mobile.css?v=20261007-mobile">
   <link rel="stylesheet" href="./workspace-picker.css?v=20261007-workspace-picker">
+  <link rel="stylesheet" href="./workspace-files.css?v=20261008-file-transfer">
 </head>
 <body>
   <main class="chat-shell" id="chatShell">
@@ -62,7 +63,15 @@
 
       <section class="messages" id="messages" aria-label="对话内容" aria-live="polite"></section>
 
+      <section id="composerAttachments" class="composer-attachments" aria-label="待发送的附件" hidden></section>
+      <p id="attachmentNotice" class="attachment-notice" role="status" aria-live="polite" hidden></p>
       <form class="composer" id="chatForm">
+        <div class="composer-upload">
+          <button id="uploadAttachmentButton" type="button" aria-label="上传图片或文件" title="上传图片或文件" aria-haspopup="true" aria-expanded="false" aria-controls="attachmentMenu"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
+          <div id="attachmentMenu" class="attachment-menu" hidden><button id="chooseImageButton" type="button">选择图片<span>发送给真理</span></button><button id="chooseFileButton" type="button">选择文件<span>与图片、文字一起发送</span></button></div>
+          <input id="imageFileInput" type="file" accept="image/png,image/jpeg,image/webp" multiple hidden>
+          <input id="cachedFileInput" type="file" multiple hidden>
+        </div>
         <label class="sr-only" for="questionInput">输入任务</label>
         <textarea id="questionInput" name="question" rows="2" placeholder="告诉真理你想完成什么…" autocomplete="off"></textarea>
         <button id="sendButton" type="submit" title="发送任务">发送 <span aria-hidden="true">↗</span></button>
@@ -73,7 +82,17 @@
     <aside class="context-rail" id="contextRail" aria-label="工作区与设置">
       <header class="context-rail-header"><div><strong>工作区</strong><span>文件与运行设置</span></div><button id="closeSettingsButton" type="button" class="icon-button" aria-label="关闭右侧面板">×</button></header>
       <div class="rail-tabs" role="tablist" aria-label="工作区面板"><button id="filesTabButton" type="button" role="tab" aria-controls="filesPanel" aria-selected="false">文件</button><button id="settingsTabButton" type="button" role="tab" aria-controls="settingsPanel" aria-selected="true">设置</button></div>
-      <div class="rail-panel files-panel" id="filesPanel" role="tabpanel" hidden><div class="file-toolbar"><button id="fileUpButton" type="button" class="text-action" title="返回上一级">上一级</button><button id="refreshFilesButton" type="button" class="text-action" title="刷新文件列表">刷新</button></div><p id="fileCurrentPath" class="file-current-path">当前工作区</p><div id="fileList" class="file-list" role="list"></div><div id="filePreview" class="file-preview" aria-live="polite">选择文件后在这里预览。</div></div>
+      <div class="rail-panel files-panel" id="filesPanel" role="tabpanel" hidden>
+        <div class="workspace-file-heading"><strong>电脑文件</strong><button id="fileChooseWorkspaceButton" type="button" class="text-action" title="浏览电脑文件夹并切换工作区">切换目录</button></div>
+        <p id="fileWorkspaceLabel" class="file-workspace-label" title="当前会话在电脑上的工作目录"></p>
+        <div class="file-toolbar"><button id="fileUpButton" type="button" class="text-action" title="返回上一级">上一级</button><button id="fileUploadButton" type="button" class="file-upload-button" title="把文件保存到当前电脑目录">上传到这里</button><button id="refreshFilesButton" type="button" class="text-action" title="刷新文件列表">刷新</button></div>
+        <input id="workspaceUploadInput" type="file" multiple hidden>
+        <p class="file-transfer-hint">保存到当前目录 · 单个文件最多 64 MiB</p>
+        <p id="fileCurrentPath" class="file-current-path">当前工作区</p>
+        <div id="workspaceTransferStatus" class="workspace-transfer-status" role="status" aria-live="polite"></div>
+        <section id="workspaceTransferPanel" class="workspace-transfer-panel" aria-label="文件传输" hidden><div class="workspace-transfer-heading"><strong>文件传输</strong><button id="clearWorkspaceTransfersButton" type="button" class="text-action">清除已完成</button></div><div id="workspaceTransferList"></div></section>
+        <div id="fileList" class="file-list" role="list"></div><div id="filePreview" class="file-preview" aria-live="polite">选择文件后在这里预览。</div>
+      </div>
       <div class="rail-panel settings-panel" id="settingsPanel" role="tabpanel">
       <section class="run-controls" aria-label="Agent 运行设置">
         <label class="run-control workspace-control"><span>工作目录</span><div class="workspace-input-row"><input id="workspaceInput" type="text" placeholder="C:/Users/…/Workspaces/…" autocomplete="off"><button id="browseWorkspaceButton" type="button" title="浏览电脑上的文件夹">浏览</button></div><small>新会话自动创建。输入已有目录可切换。</small></label>
@@ -133,18 +152,20 @@
   <div class="column-resizer rail-resizer" id="railResizeHandle" role="separator" aria-label="调整工作区面板宽度" aria-orientation="vertical" tabindex="0"></div>
   <script src="./vendor/markdown-it-15.0.2.umd.min.js"></script>
   <script src="./markdown.js?v=20261007-live-stream"></script>
-  <script src="./mobile.js?v=20261007-mobile-transport"></script>
-  <script src="./chat.js?v=20261007-mobile-transport"></script>
+  <script src="./mobile.js?v=20261008-truth-greeting"></script>
+  <script src="./image-composer.js?v=20261008-native-http1-upload"></script>
+  <script src="./chat.js?v=20261008-file-transfer"></script>
   <script src="./memory.js?v=20261007-no-context-counter"></script>
   <script src="./projects.js?v=20261007-assistant-message"></script>
-  <script src="./quick-chat.js?v=20261007-workspace-picker"></script>
+  <script src="./quick-chat.js?v=20261008-quick-image-stable"></script>
   <script src="./qq-reader.js?v=20261005"></script>
   <script src="./message-ui-api.js?v=20261005"></script>
   <script src="./message-content.js?v=20261006-people-names"></script>
   <script src="./message-names.js?v=20261006-people-names"></script>
   <script src="./message-history.js?v=20261006-people-names"></script>
-  <script src="./message-reading.js?v=20261006-people-names"></script>
-  <script src="./messages-center.js?v=20261007-mobile"></script>
-  <script src="./workspace-picker.js?v=20261007-workspace-picker"></script>
+  <script src="./message-reading.js?v=20261008-message-refresh"></script>
+  <script src="./messages-center.js?v=20261008-message-refresh"></script>
+  <script src="./workspace-picker.js?v=20261008-remote-folders"></script>
+  <script src="./workspace-files.js?v=20261008-file-transfer"></script>
 </body>
 </html>

@@ -28,6 +28,10 @@ _ROUTES = (
     ("POST", r"agent/runs/" + _ID + r"/continue", set()),
     ("POST", r"agent/runs/" + _ID + r"/children/" + _ID + r"/(?:cancel|retry)", set()),
     ("GET", r"sessions", {"limit", "offset", "q", "project_id"}), ("POST", r"sessions", set()),
+    ("GET", r"knowledge/file-types", set()),
+    ("POST", r"sessions/" + _ID + r"/attachments", set()),
+    ("GET", r"sessions/" + _ID + r"/attachments/att_[0-9a-f]{32}", set()),
+    ("GET", r"sessions/" + _ID + r"/attachments/att_[0-9a-f]{32}/raw", set()),
     ("GET", r"sessions/deleted", {"limit", "offset", "q"}),
     ("GET", r"sessions/" + _ID, set()), ("PATCH", r"sessions/" + _ID, set()),
     ("DELETE", r"sessions/" + _ID, {"only_if_empty", "expected_updated_at"}),
@@ -62,6 +66,11 @@ _ROUTES = (
 _MAX_BODY = 1024 * 1024
 _MAX_RESPONSE = 8 * 1024 * 1024
 _MAX_FILE_RESPONSE = 128 * 1024 * 1024
+_MAX_IMAGE_UPLOAD = 10 * 1024 * 1024
+_MAX_DOCUMENT_UPLOAD = 64 * 1024 * 1024
+_MAX_IMAGE_RESPONSE = 10 * 1024 * 1024
+_MAX_DOCUMENT_RESPONSE = 64 * 1024 * 1024
+_IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".heic", ".heif", ".bmp", ".tif", ".tiff"}
 _STREAMS = {"agent/turn/stream"}
 
 
@@ -136,25 +145,52 @@ def _upstream() -> str:
     return raw.rstrip("/")
 
 
+async def _bounded_error_body(upstream: httpx.Response, limit: int = 8192) -> bytes:
+    chunks: list[bytes] = []
+    size = 0
+    async for chunk in upstream.aiter_bytes(chunk_size=limit):
+        if size + len(chunk) > limit:
+            return b""
+        chunks.append(chunk)
+        size += len(chunk)
+    return b"".join(chunks)
+
+
 @router.api_route("/workbench/{path:path}", methods=["GET", "POST", "PUT", "PATCH", "DELETE"])
 async def workbench_proxy(path: str, request: Request):
     require_workbench_page(request)
     if not _route(request.method, path, set(request.query_params.keys())):
         raise HTTPException(404, "Unsupported workbench request")
+    is_attachment_upload = request.method == "POST" and bool(
+        re.fullmatch(r"sessions/" + _ID + r"/attachments", path)
+    )
+    filename_header = request.headers.get("x-filename", "")
+    decoded_filename = filename_header.rsplit("/", 1)[-1].lower()
+    is_image_upload = is_attachment_upload and (
+        request.headers.get("content-type", "").split(";", 1)[0].strip().lower().startswith("image/")
+        or any(decoded_filename.endswith(ext) for ext in _IMAGE_EXTENSIONS)
+    )
+    body_limit = (_MAX_IMAGE_UPLOAD if is_image_upload else _MAX_DOCUMENT_UPLOAD) if is_attachment_upload else _MAX_BODY
     body = bytearray()
     async for chunk in request.stream():
         body.extend(chunk)
-        if len(body) > _MAX_BODY:
-            raise HTTPException(413, "Request too large")
+        if len(body) > body_limit:
+            message = ("Image exceeds 10 MiB" if is_image_upload else
+                       "Document exceeds 64 MiB" if is_attachment_upload else "Request too large")
+            raise HTTPException(413, message)
+    if is_attachment_upload and not filename_header:
+        raise HTTPException(422, "Attachment filename is required")
     base = _upstream()
     headers = {"Accept": request.headers.get("accept", "application/json")}
     content_type = request.headers.get("content-type")
     if content_type:
         headers["Content-Type"] = content_type
+    if is_attachment_upload:
+        headers["X-Filename"] = filename_header
     url = base + "/" + quote(path, safe="/")
     try:
         streaming_request = path in _STREAMS or path.endswith("/stream") or path == "background/events"
-        timeout = httpx.Timeout(connect=10, read=None if streaming_request else 30, write=30, pool=10)
+        timeout = httpx.Timeout(connect=10, read=None if streaming_request else 180 if is_attachment_upload and not is_image_upload else 30, write=30, pool=10)
         client = httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False)
         headers["Accept-Encoding"] = "identity"
         upstream_request = client.build_request(request.method, url,
@@ -168,10 +204,44 @@ async def workbench_proxy(path: str, request: Request):
         raise
     media_type = upstream.headers.get("content-type", "application/octet-stream")
     if upstream.status_code >= 400:
-        status = upstream.status_code if upstream.status_code in {400, 401, 403, 404, 409, 413, 422, 429} else 502
-        await upstream.aclose()
-        await client.aclose()
-        return Response(json.dumps({"detail": "workbench_request_failed"}), status_code=status,
+        status = upstream.status_code if upstream.status_code in {400, 401, 403, 404, 409, 413, 415, 422, 429} else 502
+        detail = "workbench_request_failed"
+        try:
+            if ("/attachments" in path and status in {413, 415, 422}) or path in {"agent/turn", "agent/turn/stream"}:
+                try:
+                    bounded_body = await _bounded_error_body(upstream)
+                    upstream_error = json.loads(bounded_body.decode("utf-8")) if bounded_body else {}
+                except (ValueError, UnicodeError, httpx.HTTPError):
+                    upstream_error = {}
+                raw_detail = upstream_error.get("detail") if isinstance(upstream_error, dict) else None
+                if "/attachments" in path and status in {413, 415, 422}:
+                    known_errors = {
+                        "Attachment exceeds 10 MiB.": "Image exceeds the 10 MiB upload limit.",
+                        "Attachment exceeds 64 MiB.": "Document exceeds the 64 MiB upload limit.",
+                        "Unsupported attachment file type.": "This document file type is not supported.",
+                        "Document media type does not match its filename.": "The document content type does not match its file type.",
+                        "Binary source does not match declared text type.": "The selected document does not match its file type.",
+                        "Invalid, encrypted or unreadable document, or no extractable text.": "The document is unreadable or contains no extractable text.",
+                        "Invalid, encrypted or unreadable document, or no extractable text. PDF text-layer extraction only; scanned PDFs require separate OCR.": "The PDF is unreadable or has no extractable text. Scanned PDFs require OCR.",
+                        "Document extraction metadata exceeds its limit.": "The document contains too much extraction metadata.",
+                        "Image exceeds four million pixels.": "Image exceeds the four million pixel limit.",
+                        "Animated or multi-frame images are not supported.": "Animated or multi-frame images are not supported.",
+                        "Only PNG, JPEG and WebP images are supported.": "Choose a PNG, JPEG, or WebP image.",
+                        "Image content does not match its media type.": "The selected image does not match its file type.",
+                        "Invalid or corrupt image.": "The selected image is invalid or corrupt.",
+                        "Invalid attachment filename.": "The image filename is invalid.",
+                        "Attachment filename is too long.": "The image filename is too long.",
+                    }
+                    if isinstance(raw_detail, str) and raw_detail in known_errors:
+                        detail = known_errors[raw_detail]
+                elif raw_detail == "Selected model has not enabled image input (supports_vision).":
+                    detail = "The selected model does not have image input enabled."
+        finally:
+            try:
+                await upstream.aclose()
+            finally:
+                await client.aclose()
+        return Response(json.dumps({"detail": detail}), status_code=status,
                         media_type="application/json", headers={"Cache-Control": "no-store"})
     if (path in _STREAMS or path.endswith("/stream") or path == "background/events"
             or path.endswith("/file/raw") or media_type.lower().startswith("text/event-stream")):
@@ -194,15 +264,26 @@ async def workbench_proxy(path: str, request: Request):
                                  headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
     try:
         chunks, size = [], 0
-        limit = _MAX_FILE_RESPONSE if path.endswith("/file/raw") else _MAX_RESPONSE
+        is_attachment_raw = path.endswith("/raw") and "/attachments/" in path
+        disposition = upstream.headers.get("content-disposition")
+        is_document_raw = is_attachment_raw and (
+            bool(disposition) or not media_type.lower().startswith("image/")
+        )
+        limit = (_MAX_DOCUMENT_RESPONSE if is_document_raw else _MAX_IMAGE_RESPONSE) if is_attachment_raw else _MAX_FILE_RESPONSE if path.endswith("/file/raw") else _MAX_RESPONSE
         async for chunk in upstream.aiter_bytes():
             size += len(chunk)
             if size > limit:
                 raise HTTPException(502, "Workbench response too large")
             chunks.append(chunk)
         status = upstream.status_code
+        response_headers = {"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"}
+        if is_attachment_raw:
+            if disposition:
+                response_headers["Content-Disposition"] = disposition
+            elif is_document_raw:
+                response_headers["Content-Disposition"] = "attachment"
         return Response(b"".join(chunks), status_code=status, media_type=media_type,
-                        headers={"Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+                        headers=response_headers)
     except httpx.HTTPError:
         raise HTTPException(502, "Workbench backend unavailable") from None
     finally:

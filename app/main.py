@@ -8,9 +8,11 @@ from fastapi.staticfiles import StaticFiles
 
 from app.agent.services.local_rag_socket_service import get_local_rag_socket_service
 from app.api.routes.chat import router as chat_router
+from app.api.routes.composer_files import router as composer_files_router
 from app.api.routes.health import router as health_router
 from app.api.routes.pet import router as pet_router
 from app.api.routes.workbench_proxy import router as workbench_router
+from app.api.routes.workspace_files import router as workspace_files_router
 from app.api.routes.plugins import router as plugins_router
 from app.api.routes.shell import router as shell_router
 from app.core.config import get_settings
@@ -45,6 +47,8 @@ app.include_router(chat_router)
 app.include_router(shell_router)
 app.include_router(pet_router)
 app.include_router(workbench_router)
+app.include_router(workspace_files_router)
+app.include_router(composer_files_router)
 app.include_router(plugins_router)
 app.mount("/desktop-pet", StaticFiles(directory=PET_WEB_DIR, html=True), name="desktop-pet")
 

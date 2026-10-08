@@ -47,7 +47,7 @@
 | 人物档案 | `/messages/reading/dossiers`、`/{key}/{sender}`、`/sources` | offset 分页；模型记录不当作已采纳事实 |
 | 阅读后台 | 既有 reading/focus/proposals/background 接口、`/agent/models` | 保留逐项确认与 revision 防冲突 |
 | 后端附件 | `/messages/attachments`、`/{id}/content` | 同源二进制代理；白名单 MIME、单 Range、大小限制 |
-| 自动 QQ 群名 | `/plugins/qq-ui/groups/{group_id}?account_id=...` | 独立于发送开关；只返回绑定账号已加入的指定群名，备注优先；5 分钟缓存 |
+| 自动 QQ 群名 | `/plugins/qq-ui/groups/{group_id}?account_id=...` | 独立于发送开关；只返回绑定账号已加入的指定群名，备注优先；1 分钟缓存，过期名称后台更新 |
 | QQ 状态/权限 | `/plugins/qq-ui/status`、`/capabilities`、`/conversations/{kind}/{id}` | QQMessaging 和全局发送默认关闭；账号核对、会话授权沿用现有实现 |
 | QQ 消息/回执 | `/plugins/qq-ui/messages`、`/messages/send`、`/sends/{key}` | 不自动重试发送；持久幂等键沿用现有服务 |
 | QQ 媒体 | `/plugins/qq-ui/media/{kind}`、`/media/{id}`、`/stickers` | 原始文件字节上传；视频/收藏表情单独发送 |
@@ -145,7 +145,7 @@
 - [x] 自动读取当前登录账号的 QQ 群名，不要求用户手动填写；手动备注继续保留。
 - [x] 发送关闭时仍支持群资料读取；服务端按账号核对，仅返回请求的已加入群，异常不跨账号使用缓存。
 - [x] 限定群资料适配仅可调用 get_login_info/get_group_list/get_group_info；凭据保留在 Windows 服务中，页面不接触 Token 或密码。
-- [x] 群目录缓存 5 分钟，失败后 30 秒退避；暂时故障的旧缓存显式标记 stale，账号变更清除缓存。
+- [x] 群目录缓存 1 分钟，过期名称先显示并在后台更新，失败后 30 秒退避；暂时故障的旧缓存显式标记 stale，账号变更清除缓存。
 - [x] 图片、视频、表情包、QQ 系统表情、语音、文件、转发/卡片等提供图标与类型说明；已缓存图片/视频可在本页面查看，收起视频会暂停播放。
 - [x] 等待缓存、过期、失败、未保存内容均显示说明；无法识别的旧非文本消息明确提示在 QQ 查看，不留空白。
 - [x] QQ Reader 新消息在本机 payload 保存至多 100 个安全 ui_content_parts；只保留类型、顺序、表情数字编号或安全文件名，不包含私有 URL、路径、Token 或原始事件，也不加入后端同步协议。

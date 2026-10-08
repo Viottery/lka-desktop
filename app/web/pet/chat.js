@@ -136,6 +136,7 @@
   var defaultsReady = Promise.resolve();
   var workspaceRequests = {};
   var workspaceBindings = Object.create(null);
+  var fileWorkspacePreparations = [];
   var workbenchOpening = false;
   var workspaceSwitchPromise = Promise.resolve(true);
   var bridgeWorkspaceRetryScheduled = false;
@@ -302,7 +303,14 @@
     // A desktop bookmark's localhost target points to the phone itself remotely.
     try {
       var target = new URL(configured, window.location.origin);
-      if (!pageIsLocal && /^(?:localhost|127\.0\.0\.1|\[?::1\]?)$/i.test(target.hostname)) {
+      var targetIsLocal = /^(?:localhost|127\.0\.0\.1|\[?::1\]?)$/i.test(target.hostname);
+      if (!pageIsLocal && targetIsLocal
+          || pageIsLocal && targetIsLocal && target.port === "8765"
+            && !target.pathname.replace(/\/$/, "")
+            && window.location.pathname.indexOf("/desktop-pet/") === 0) {
+        // Use the existing fixed gateway for the default desktop backend too.
+        // JavaFX's HTTP/1.1 loader omits some CORS preflight headers; same-origin
+        // history, settings and attachments keep the native window consistent.
         configured = window.location.origin + "/workbench";
       }
     } catch (ignored) {}
@@ -489,6 +497,8 @@
       verificationWarnings: normalizeVerificationWarnings(rawMessage.verificationWarnings || rawMessage.verification_warnings),
       traceId: safeText(rawMessage.traceId || rawMessage.trace_id).trim(),
       logPath: safeText(rawMessage.logPath || rawMessage.log_path).trim(),
+      attachments: window.LkaImageComposer.normalize(rawMessage.attachments),
+      clientId: safeText(rawMessage.clientId),
       selectedPackage: safeText(rawMessage.selectedPackage || rawMessage.selected_package).trim()
     };
   }
@@ -639,6 +649,7 @@
   function showDraftForSession(session) {
     var draft = session ? readDraft(session.id) : "";
     input.value = draft;
+    window.LkaImageComposer.refresh();
     if (window.petBridge && typeof window.petBridge.setComposerDraft === "function") {
       window.petBridge.setComposerDraft(draft);
     }
@@ -784,6 +795,7 @@
     }
     session.title_is_custom = false;
     session.title = deriveAutoSessionTitle(session);
+    if (/^\[(Image|File) input\]$/.test(session.title)) session.title = session.title === "[File input]" ? "文件任务" : "图片任务";
   }
 
   function getSessionMessageCount(session) {
@@ -813,7 +825,7 @@
   function isReusableEmptySession(session) {
     return !!session && !session.summary_only && !session.title_is_custom
       && !session.workspace_is_custom && isAutomaticSessionWorkspace(session)
-      && !readDraft(session.id) && !session.multiAgentRunId && !session.timelineState
+      && !readDraft(session.id) && !window.LkaImageComposer.hasDraft(session.id) && !session.multiAgentRunId && !session.timelineState
       && !(session.timelineEvents && session.timelineEvents.length)
       && !(session.messages || []).some(function (message) { return !!message.pendingApproval; })
       && getSessionMessageCount(session) === 0
@@ -926,6 +938,7 @@
           verificationWarnings: details.verificationWarnings || [],
           traceId: details.traceId || "",
           logPath: details.logPath || "",
+          attachments: window.LkaImageComposer.fromIds(entry.payload && entry.payload.attachment_ids),
           selectedPackage: details.selectedPackage || ""
         };
       })
@@ -1383,6 +1396,7 @@
     if (safeText(text).trim()) {
       bubble.appendChild(body);
     }
+    if (role === "user") window.LkaImageComposer.renderHistory(bubble, details && details.attachments, sessionId);
     if (role === "assistant") {
       appendAgentRunDetails(bubble, details || {});
     }
@@ -1608,6 +1622,7 @@
     var session = getActiveSession();
     var generation = ++fileRequestGeneration;
     selectedFilePath = "";
+    window.dispatchEvent(new CustomEvent("lka-workspace-files", { detail: { sessionId: session ? session.id : "", workspace: session ? session.workspace || "" : "", path: fileRelativePath } }));
     if (filePreview) filePreview.textContent = "选择文件后在这里预览。";
     if (fileCurrentPath) fileCurrentPath.textContent = fileRelativePath || "当前工作区";
     if (fileUpButton) fileUpButton.disabled = !fileRelativePath;
@@ -1648,7 +1663,14 @@
           if (entry.type === "directory") { fileRelativePath = entry.path; loadFileList(); }
           else if (entry.type === "file") previewFile(entry);
         });
-        fileList.appendChild(button);
+        var row = document.createElement("div");
+        row.className = "file-row";
+        row.setAttribute("role", "listitem");
+        row.appendChild(button);
+        if (entry.type === "file" && window.LkaWorkspaceFiles) {
+          row.appendChild(window.LkaWorkspaceFiles.downloadButton(entry, { sessionId: session.id, workspace: session.workspace, path: fileRelativePath }));
+        }
+        fileList.appendChild(row);
       });
       if (payload.truncated) {
         var note = document.createElement("p");
@@ -2091,12 +2113,13 @@
         retryButton.className = "retry-task-button";
         retryButton.textContent = "重新编辑这条任务";
         retryButton.addEventListener("click", function () {
-          if (readDraft(session.id).trim()) {
+          if (readDraft(session.id).trim() || window.LkaImageComposer.hasAttachments(session.id)) {
             setRunStatus("当前会话已有草稿，请先处理草稿后再重新编辑失败任务", "error");
             focusComposer();
             return;
           }
-          writeDraft(session.id, priorUser.text);
+          window.LkaImageComposer.queueRefs(session.id, priorUser.attachments);
+          writeDraft(session.id, /^\[(Image|File) input\]$/.test(priorUser.text) ? "" : priorUser.text);
           showDraftForSession(session);
           setRunStatus("原任务已放回输入框，确认内容后发送");
           focusComposer();
@@ -2308,6 +2331,10 @@
       catch (error) { setRunStatus("删除前载入失败：" + safeText(error.message || error), "error"); return; }
     }
     if (!session || deletingSessionIds[sessionId]) return;
+    if (fileWorkspacePreparations.some(function (item) { return item.id === sessionId; })) {
+      setRunStatus("文件目录正在准备，请稍后再删除会话。", "error");
+      return;
+    }
     if (pendingState && pendingState.conversationId === sessionId) {
       setRunStatus("当前会话仍在处理，完成后再删除", "error");
       return;
@@ -2455,6 +2482,8 @@
       verificationWarnings: normalizeVerificationWarnings(options && options.verificationWarnings),
       traceId: safeText(options && options.traceId).trim(),
       logPath: safeText(options && options.logPath).trim(),
+      attachments: window.LkaImageComposer.normalize(options && options.attachments),
+      clientId: safeText(options && options.clientId),
       selectedPackage: safeText(options && options.selectedPackage).trim()
     });
     if (session.messages.length > 180) {
@@ -2521,7 +2550,8 @@
       normalized.push({
         role: role,
         text: content,
-        isError: false
+        isError: false,
+        attachments: window.LkaImageComposer.fromIds(entry.payload && entry.payload.attachment_ids)
       });
     });
     return normalized.slice(-180);
@@ -2644,6 +2674,7 @@
       body: JSON.stringify({
         session_id: payload.session_id || payload.conversation_id,
         user_input: payload.question || payload.user_input || "",
+        attachment_ids: payload.attachment_ids || [],
         llm: llm,
         safety_review_mode: payload.safety_review_mode || undefined
       })
@@ -2663,7 +2694,7 @@
     if (runSettings.llmModel) llm.model = runSettings.llmModel;
     var response = await fetch(backendBaseUrl + "/agent/turn/stream", {
       method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
-      body: JSON.stringify({ session_id: payload.session_id, user_input: payload.question,
+      body: JSON.stringify({ session_id: payload.session_id, user_input: payload.question, attachment_ids: payload.attachment_ids || [],
         llm: llm, safety_review_mode: payload.safety_review_mode || undefined }),
       signal: signal
     });
@@ -3601,6 +3632,7 @@
       conversation_id: payload.conversation_id || payload.session_id,
       session_id: payload.session_id || payload.conversation_id,
       mode: payload.mode || "wait",
+      attachment_ids: payload.attachment_ids || [],
       llm_client: runSettings.llmClient || "",
       llm_model: runSettings.llmModel || "",
       safety_review_mode: payload.safety_review_mode || ""
@@ -3614,6 +3646,7 @@
     window.petBridge.stream(JSON.stringify({
       question: payload.question || payload.user_input || "",
       conversation_id: payload.conversation_id || payload.session_id,
+      attachment_ids: payload.attachment_ids || [],
       llm_client: runSettings.llmClient || "",
       llm_model: runSettings.llmModel || "",
       safety_review_mode: payload.safety_review_mode || ""
@@ -3627,6 +3660,7 @@
 
   function replaceSessionId(session, newId) {
     var oldId = session.id;
+    window.LkaImageComposer.rekey(oldId, newId);
     var oldDraft = readDraft(oldId);
     var liveSession = getSessionById(oldId);
     session.id = newId;
@@ -3649,23 +3683,25 @@
     persistSessions();
   }
 
-  async function bindSessionWorkspace(session, requestedWorkspace) {
+  async function bindSessionWorkspace(session, requestedWorkspace, assertCurrent) {
     var workspace = requestedWorkspace === undefined ? session.workspace : requestedWorkspace;
     var key = session.id + "\n" + (workspace || "");
     if (workspaceBindings[key]) return workspaceBindings[key];
-    var binding = bindSessionWorkspaceNow(session, requestedWorkspace);
+    var binding = bindSessionWorkspaceNow(session, requestedWorkspace, assertCurrent);
     workspaceBindings[key] = binding;
     try { return await binding; }
     finally { if (workspaceBindings[key] === binding) delete workspaceBindings[key]; }
   }
 
-  async function bindSessionWorkspaceNow(session, requestedWorkspace) {
+  async function bindSessionWorkspaceNow(session, requestedWorkspace, assertCurrent) {
+    if (assertCurrent) assertCurrent();
     var workspace = requestedWorkspace === undefined ? session.workspace : requestedWorkspace;
     if (!workspace) return session.id;
     if (session.backendWorkspace === workspace) return session.id;
     if (window.petBridge && typeof window.petBridge.setSessionWorkspace === "function") {
       var bridgeResult = JSON.parse(window.petBridge.setSessionWorkspace(session.id, workspace) || "{}");
       if (bridgeResult.error && bridgeResult.error.indexOf("HTTP 404") >= 0 && typeof window.petBridge.createSession === "function") {
+        if (assertCurrent) assertCurrent(true);
         var createdByBridge = JSON.parse(window.petBridge.createSession(session.title || "新会话") || "{}");
         var bridgeSessionId = createdBackendSessionId(createdByBridge);
         if (createdByBridge.error || !bridgeSessionId) throw new Error(createdByBridge.error || "后端创建会话响应缺少 session.session_id");
@@ -3690,7 +3726,9 @@
       method: "PUT", headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ path: workspace, platform: workspace.charAt(0) === "/" ? "linux" : "windows" })
     });
+    if (assertCurrent) assertCurrent();
     if (response.status === 404) {
+      if (assertCurrent) assertCurrent(true);
       var createResponse = await fetch(backendBaseUrl + "/sessions", {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ title: session.title || "新会话", metadata: {
@@ -3721,7 +3759,7 @@
 
   async function sendQuestion(question) {
     var cleaned = safeText(question).trim();
-    if (!cleaned) {
+    if (!cleaned && !window.LkaImageComposer.hasAttachments(activeSessionId)) {
       focusComposer();
       return;
     }
@@ -3734,6 +3772,10 @@
       }
     }
 
+    var fileOnly = window.LkaImageComposer.hasDocuments(session.id);
+    var selectedImages = window.LkaImageComposer.capture(session.id);
+    var imageMessageId = "input-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+    var requestStarted = false;
     activeAgentTurnGeneration += 1;
     var turnGeneration = activeAgentTurnGeneration;
     abortActiveAgentEventStream();
@@ -3746,7 +3788,7 @@
     session.timelineState = "running";
     recordRunEvent(session, "run_started", {});
 
-    addMessageToSession(session, "user", cleaned, false);
+    addMessageToSession(session, "user", cleaned || (fileOnly ? "[File input]" : "[Image input]"), false, { attachments: selectedImages, clientId: imageMessageId });
     applySessionTitle(session);
     touchSession(session);
     pinSessionToTop(session.id);
@@ -3786,6 +3828,12 @@
       session = getSessionById(boundSessionId) || session;
       payload.session_id = boundSessionId;
       payload.conversation_id = boundSessionId;
+      payload.attachment_ids = await window.LkaImageComposer.prepare(selectedImages, boundSessionId);
+      var imageMessage = session.messages.find(function (item) { return item.clientId === imageMessageId; });
+      if (imageMessage) imageMessage.attachments = window.LkaImageComposer.normalize(selectedImages);
+      persistSessions();
+      if (session.id === activeSessionId && selectedImages.length) { renderActiveMessages(); liveBody = ensureLiveRunOutput(session).querySelector(".message-content"); }
+      requestStarted = true;
       payload.safety_review_mode = runSettings.safetyMode === "backend" ? "" : runSettings.safetyMode;
       if (!runSettings.stream && sendAgentTurnViaDesktopBridge(payload)) {
         console.log("[pet-chat] sent through desktop bridge:", backendBaseUrl, payload);
@@ -3839,7 +3887,7 @@
             await reconnectSavedRun(session, streamState);
             return;
           }
-          if (safeText(streamError.message).indexOf("HTTP 422") >= 0 || safeText(streamError.message).indexOf("stream unavailable") >= 0) {
+          if ((!payload.attachment_ids.length && safeText(streamError.message).indexOf("HTTP 422") >= 0) || safeText(streamError.message).indexOf("stream unavailable") >= 0) {
             if (sendAgentTurnViaDesktopBridge(payload)) {
               setRunStatus("WebView 流式请求不兼容，已切换桌面桥接兼容模式…");
               return;
@@ -3860,6 +3908,7 @@
       }
     } catch (error) {
       if (turnGeneration !== activeAgentTurnGeneration || (error && error.name === "AbortError")) return;
+      if (!requestStarted) window.LkaImageComposer.restore(selectedImages, session.id);
       var failureText = "Backend request failed: " + (error && error.message ? error.message : String(error));
       recordRunEvent(session, "run_failed", { message: failureText });
       setRunStatus("发送失败：" + (error && error.message ? error.message : String(error)), "error");
@@ -3911,6 +3960,7 @@
     lastSubmitAt = now;
 
     var question = input.value;
+    if (!question.trim() && !window.LkaImageComposer.hasAttachments(activeSessionId)) { window.LkaImageComposer.explainEmpty(); return; }
     input.value = "";
     writeDraft(activeSessionId, "");
     sendQuestion(question);
@@ -4031,7 +4081,8 @@
   });
   window.__petChatSubmitCurrentInput = submitCurrentInput;
   window.__petChatSubmitText = function (text) {
-    if (pendingState || backendOffline || sendButton.disabled || !safeText(text).trim()) return false;
+    if (pendingState || backendOffline || sendButton.disabled) return false;
+    if (!safeText(text).trim() && !window.LkaImageComposer.hasAttachments(activeSessionId)) { window.LkaImageComposer.explainEmpty(); return false; }
     writeDraft(activeSessionId, "");
     sendQuestion(text);
     return true;
@@ -4420,6 +4471,44 @@
 
   window.LkaChatContext = {
     setWorkspace: switchWorkspace,
+    prepareWorkspace: async function (sessionId) {
+      var session = getSessionById(sessionId);
+      function assertCurrent(creating) {
+        if (!session || !getSessionById(session.id) || deletedSessionIds[session.id] || deletingSessionIds[session.id] || activeSessionId !== session.id) {
+          throw new Error("会话已关闭或切换，请在目标会话重新选择文件。");
+        }
+        if (creating && session.id.indexOf("conv_") !== 0) throw new Error("会话已失效，请刷新后重新选择。");
+      }
+      assertCurrent();
+      fileWorkspacePreparations.push(session);
+      try {
+        if (!await workspaceSwitchPromise) throw new Error("请先完成工作区切换。");
+        assertCurrent();
+        await ensureSessionWorkspace(session);
+        assertCurrent();
+        var boundId = await bindSessionWorkspace(session, undefined, assertCurrent);
+        assertCurrent();
+        return boundId;
+      } finally {
+        var index = fileWorkspacePreparations.indexOf(session);
+        if (index >= 0) fileWorkspacePreparations.splice(index, 1);
+      }
+    },
+    getFileContext: function () {
+      var session = getActiveSession();
+      return { sessionId: session ? session.id : "", workspace: session ? session.workspace || "" : "", path: fileRelativePath };
+    },
+    refreshWorkspaceFiles: function (view) {
+      var session = getActiveSession();
+      if (session && session.id === view.sessionId && session.workspace === view.workspace && fileRelativePath === view.path) return loadFileList();
+    },
+    prepareAttachments: async function (sessionId) {
+      var session = getSessionById(sessionId);
+      if (!session || deletedSessionIds[sessionId]) throw new Error("会话已关闭，请重新选择图片。");
+      if (!await workspaceSwitchPromise) throw new Error("请先完成工作区切换。");
+      await ensureSessionWorkspace(session);
+      return bindSessionWorkspace(session);
+    },
     get: function () {
       var session = getActiveSession();
       return { backend: backendBaseUrl, workMode: workMode, sessionId: session ? session.id : "",

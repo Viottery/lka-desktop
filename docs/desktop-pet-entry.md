@@ -203,7 +203,15 @@ structured-output/recovery paths can still deliver a complete answer in one even
 
 `quick-chat.js` reports preferred content height through `setQuickPanelHeight`;
 it must not set a fixed transcript height or derive the host's preferred height
-from the viewport. `PetControlWindow` owns resizing and respects manual dimensions.
+from the viewport. `PetControlWindow` owns resizing and respects manual dimensions. The quick
+transcript reserves its scrollbar gutter at all heights so scrollbar visibility
+cannot change text wrapping and feed back into preferred native height. Preferred
+heights are rounded to logical pixels, and delayed image loads trigger measurement.
+The isolated native resize regression loads the real markup, CSS and quick sizing
+script; it checks image/formula replies, delayed images, long replies, manual sizes
+and compact reset without accessing the real backend or system clipboard. Run
+`previewQuickConversation --offline -PfrontendRoot=<app/web/pet> -PresizeOnly=true`
+through the Gradle wrapper for this check.
 For isolated checks, run `npm run test:chat` in the frontend root. From
 `desktop-pet-java`, run the native checks:
 

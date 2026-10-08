@@ -17,7 +17,7 @@
   detail.setAttribute('aria-label', '结果详情与人工审阅');
   root.append(el('h3', '消息阅读'), tabs, filters, list, detail, status);
   let tab = 'overview', cursor = null, generation = 0, detailGeneration = 0, service = null, profile = null, configuration = null;
-  let selected = null, proposal = null, draft = null, approval = null, busy = false, timer = null;
+  let selected = null, proposal = null, draft = null, approval = null, busy = false, timer = null, refreshing = 0, loadedPages = 1;
   const pending = new Map(); let serial = 0;
   const oldReceive = window.__lkaMemoryBridgeReceive;
   window.__lkaMemoryBridgeReceive = function (id, code, body) {
@@ -101,7 +101,7 @@
     rows.forEach(c => {
       const section = el('div', undefined, 'reading-coverage');
       const name=conversationName(c.conversation_key);
-      section.append(el('strong', c.display_name || name || '当前会话'));
+      const heading=el('strong',c.display_name||name||'当前会话');heading.dataset.readingConversationName=c.conversation_key||'';section.append(heading);
       section.append(el('p', '待处理 ' + (c.pending_messages ?? '未知') + ' 条；平台历史完整性：' + (c.complete_for_platform === true ? '完整' : '不保证完整')));
       const range=el('details');range.append(el('summary','查看处理范围与缺口'));section.append(range);
       range.append(el('p', '采集：' + (c.capture_mode || '未知') + '；缺口：' + (c.capture_gaps || '未知') + '；完整平台覆盖：' + (c.complete_for_platform === true ? '是' : '否')));
@@ -148,10 +148,18 @@
     row.append(el('strong', item.title || item.text || item.proposed_fields?.title || '未命名结果'));
     if (item.summary || item.description) row.append(el('p', item.summary || item.description));
     if (kind === 'insights') row.append(el('small', '重要性：' + (item.importance || '未知') + '；依据：' + (item.detector || '未知') + '；确定性：' + (item.certainty || '待核实') + '；阅读：' + (item.attention?.state || '未阅')));
-    if (kind === 'topics') row.append(el('small', '参与：' + (item.heat?.participant_count ?? item.participant_count ?? item.participants?.length ?? '未知') + '；变化：' + (item.change || item.discussion_change || '未标注')));
+    if (kind === 'topics') {
+      const total = item.heat?.total_participant_count ?? item.total_participant_count;
+      const count = total ?? item.heat?.participant_count ?? item.participant_count ?? item.participants?.length ?? '未知';
+      const recent = item.heat?.recent_participant_count;
+      row.append(el('small', (total != null ? '累计参与：' : '参与：') + count + (recent != null ? '；近24小时：' + recent : '') + '；变化：' + (item.change || item.discussion_change || '未标注')));
+    }
     row.append(button('打开详情与原文', () => openItem(item, kind))); list.append(row);
   }
-  async function refresh(more) {
+  async function refresh(more,quiet) {
+    if(quiet&&(refreshing||loadedPages>1))return;
+    refreshing++;
+    const scroll=list.scrollTop, expanded=quiet?Array.from(list.querySelectorAll('.reading-coverage details[open]')).map(n=>n.parentElement.querySelector('[data-reading-conversation-name]')?.dataset.readingConversationName):[];
     const request = ++generation, activeTab = tab;
     Array.from(tabs.children).forEach(b => b.setAttribute('aria-selected', b.dataset.tab === tab ? 'true' : 'false'));
     try {
@@ -188,10 +196,12 @@
         } else values.forEach(item => appendItem(item, kind));
         if (!values.length && !more) list.append(el('p', '当前条件下没有阅读结果。可检查会话许可、覆盖和预算。'));
       }
+      loadedPages = more ? loadedPages + 1 : 1;
       cursor = data.next_cursor || null;
       if (cursor) { const next = button('加载下一页', async () => { next.remove(); await refresh(true); }); list.append(next); }
-      notify('阅读列表已更新。打开详情不会标记已阅。');
+      if(quiet){list.scrollTop=scroll;list.querySelectorAll('.reading-coverage details').forEach(n=>{n.open=expanded.includes(n.parentElement.querySelector('[data-reading-conversation-name]')?.dataset.readingConversationName);});}else notify(more ? '已加载多页，自动刷新暂停；点击顶部刷新获取最新结果。' : '阅读列表已更新。打开详情不会标记已阅。');
     } catch (error) { if (request === generation) notify(error.message, true); }
+    finally {refreshing--;}
   }
   function participantPath(conversation, sender) {
     return '/messages/reading/participants/' + encodeURIComponent(conversation) + '/' + encodeURIComponent(sender);
@@ -462,14 +472,19 @@
   management.addEventListener('toggle', () => { if (management.open) loadManagement().catch(error => notify(error.message,true)); });
   function schedule(event) {
     clearInterval(timer); timer = null;
-    if (!document.hidden && (window.LkaMessages ? window.LkaMessages.view()==='reading'&&!window.LkaMessages.hasDetail?.() : host.open)) {if(!event?.detail?.back)refresh();timer=setInterval(()=>{if(!busy)refresh();},15000);}
+    if (!document.hidden && (window.LkaMessages ? window.LkaMessages.view()==='reading'&&!window.LkaMessages.hasDetail?.() : host.open)) {if(!event?.detail?.back)refresh();timer=setInterval(()=>{if(!busy&&!document.hidden)refresh(false,true);},5000);}
   }
   host.addEventListener('toggle', schedule); window.addEventListener('lka-message-center-view', schedule); document.addEventListener('visibilitychange', schedule);
   let centerSelectedKey = '';
   window.LkaMessageReading = {refresh, setConversations(values, selectedKey) {
-    const old = group.value, changed = selectedKey !== centerSelectedKey; centerSelectedKey = selectedKey; group.replaceChildren(); const all = el('option', '所有已记录会话'); all.value=''; group.append(all);
-    values.forEach(item => { const option=el('option', (item.display_name || item.conversation_id) + '（' + item.conversation_id + '）'); option.value=item.conversation_key; group.append(option); });
+    const old = group.value, changed = selectedKey !== centerSelectedKey; centerSelectedKey = selectedKey;
+    const signature=JSON.stringify(values.map(item=>[item.conversation_key,item.display_name,item.conversation_id]));
+    if(group.dataset.optionsSignature!==signature){
+      group.dataset.optionsSignature=signature;group.replaceChildren(); const all=el('option','所有已记录会话');all.value='';group.append(all);
+      values.forEach(item=>{const option=el('option',(item.display_name||item.conversation_id)+'（'+item.conversation_id+'）');option.value=item.conversation_key;group.append(option);});
+    }
     group.value = changed ? selectedKey || '' : old || '';
+    list.querySelectorAll('[data-reading-conversation-name]').forEach(n=>{const key=n.dataset.readingConversationName;if(values.some(v=>v.conversation_key===key))n.textContent=conversationName(key);});
     if(changed){cursor=null; generation++; if(window.LkaMessages?.view()==='reading'&&!window.LkaMessages.hasDetail?.()) refresh();}
   }};
   window.addEventListener('pagehide', () => { clearInterval(timer); pending.forEach(item => { clearTimeout(item.timeout); item.reject(new Error('页面已关闭。')); }); pending.clear(); draft = approval = proposal = null; });

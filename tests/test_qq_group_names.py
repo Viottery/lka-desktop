@@ -1,5 +1,6 @@
 """Group names are read-only, scoped to the locally paired QQ account."""
 import unittest
+import asyncio
 import json
 import os
 from pathlib import Path
@@ -43,6 +44,10 @@ class GroupNamesTests(unittest.IsolatedAsyncioTestCase):
         client = FakeActions(groups)
         return QQGroupNames(QQActionConfig(token="x" * 32, expected_self_id="123456"),
                             client=client), client
+
+    def make_timed_directory(self, client):
+        return QQGroupNames(QQActionConfig(token="x" * 32, expected_self_id="123456"),
+                            client=client, cache_seconds=0.01), client
 
     async def test_reads_one_joined_group_and_caches_directory(self):
         directory, client = self.make_directory([
@@ -110,6 +115,134 @@ class GroupNamesTests(unittest.IsolatedAsyncioTestCase):
             await directory.name_for("98765", "123456")
         self.assertEqual(caught.exception.code, "account_mismatch")
         self.assertIsNone(directory._snapshot)
+
+    async def test_expired_known_name_returns_without_waiting_for_one_coalesced_refresh(self):
+        class SlowActions(FakeActions):
+            def __init__(self, groups):
+                super().__init__(groups)
+                self.refresh_started = asyncio.Event()
+                self.release_refresh = asyncio.Event()
+                self.list_calls = 0
+
+            async def call(self, action, params):
+                if action == "get_group_list":
+                    self.list_calls += 1
+                    if self.list_calls > 1:
+                        self.refresh_started.set()
+                        await self.release_refresh.wait()
+                return await super().call(action, params)
+
+        client = SlowActions([{"group_id": "98765", "group_name": "Old name"}])
+        directory, _ = self.make_timed_directory(client)
+        await directory.name_for("98765", "123456")
+        await asyncio.sleep(0.02)
+        client.groups = [{"group_id": "98765", "group_name": "New name"}]
+
+        first = await asyncio.wait_for(directory.name_for("98765", "123456"), 0.2)
+        await asyncio.wait_for(client.refresh_started.wait(), 0.2)
+        second = await asyncio.wait_for(directory.name_for("98765", "123456"), 0.2)
+        self.assertEqual((first["group_name"], second["group_name"]), ("Old name", "Old name"))
+        self.assertTrue(first["stale"] and second["stale"])
+        self.assertEqual(client.list_calls, 2)
+
+        client.release_refresh.set()
+        task = directory._refresh_task
+        if task is not None:
+            await asyncio.wait_for(asyncio.shield(task), 0.2)
+        updated = await directory.name_for("98765", "123456")
+        self.assertEqual(updated["group_name"], "New name")
+        self.assertFalse(updated["stale"])
+
+    async def test_account_mismatch_during_refresh_cannot_republish_old_directory(self):
+        class SlowActions(FakeActions):
+            def __init__(self, groups):
+                super().__init__(groups)
+                self.refresh_started = asyncio.Event()
+                self.release_refresh = asyncio.Event()
+                self.list_calls = 0
+
+            async def call(self, action, params):
+                if action == "get_group_list":
+                    self.list_calls += 1
+                    if self.list_calls > 1:
+                        self.refresh_started.set()
+                        await self.release_refresh.wait()
+                return await super().call(action, params)
+
+        client = SlowActions([{"group_id": "98765", "group_name": "Old account name"}])
+        directory, _ = self.make_timed_directory(client)
+        await directory.name_for("98765", "123456")
+        await asyncio.sleep(0.02)
+        client.groups = [{"group_id": "98765", "group_name": "Other account name"}]
+        stale = await directory.name_for("98765", "123456")
+        self.assertEqual(stale["group_name"], "Old account name")
+        await asyncio.wait_for(client.refresh_started.wait(), 0.2)
+        client.verify_error = QQActionError("account_mismatch")
+        client.release_refresh.set()
+        task = directory._refresh_task
+        if task is not None:
+            await asyncio.wait_for(asyncio.shield(task), 0.2)
+        self.assertIsNone(directory._snapshot)
+        with self.assertRaises(GroupDirectoryError) as caught:
+            await directory.name_for("98765", "123456")
+        self.assertEqual(caught.exception.code, "account_mismatch")
+
+    async def test_background_refresh_failure_keeps_30_second_backoff_and_stale_name(self):
+        directory, client = self.make_timed_directory(
+            FakeActions([{"group_id": "98765", "group_name": "Known name"}]))
+        await directory.name_for("98765", "123456")
+        await asyncio.sleep(0.02)
+        client.verify_error = QQActionError("network_error")
+        stale = await directory.name_for("98765", "123456")
+        self.assertTrue(stale["stale"])
+        task = directory._refresh_task
+        if task is not None:
+            await asyncio.wait_for(asyncio.shield(task), 0.2)
+        self.assertGreater(directory._retry_after, 0)
+        previous_checks = client.verified
+        again = await directory.name_for("98765", "123456")
+        self.assertTrue(again["stale"])
+        self.assertEqual(client.verified, previous_checks)
+
+    async def test_account_verification_is_coalesced_outside_directory_lock(self):
+        class SlowVerifyActions(FakeActions):
+            def __init__(self, groups):
+                super().__init__(groups)
+                self.verify_started = asyncio.Event()
+                self.release_verify = asyncio.Event()
+                self.pause_verify = False
+
+            async def verify_account(self):
+                self.verified += 1
+                if self.pause_verify:
+                    self.verify_started.set()
+                    await self.release_verify.wait()
+                if self.verify_error:
+                    raise self.verify_error
+                return True
+
+        client = SlowVerifyActions([{"group_id": "98765", "group_name": "Known name"}])
+        directory = QQGroupNames(QQActionConfig(token="x" * 32,
+                                                 expected_self_id="123456"), client=client)
+        await directory.name_for("98765", "123456")
+        directory._verified_at = 0
+        client.pause_verify = True
+
+        first = asyncio.create_task(directory.name_for("98765", "123456"))
+        await asyncio.wait_for(client.verify_started.wait(), 0.2)
+        # Verification I/O must not hold the directory lock, and another
+        # request must join the same in-flight check rather than start one.
+        await asyncio.wait_for(directory._lock.acquire(), 0.2)
+        directory._lock.release()
+        second = asyncio.create_task(directory.name_for("98765", "123456"))
+        await asyncio.sleep(0)
+        self.assertFalse(first.done())
+        self.assertFalse(second.done())
+        self.assertEqual(client.verified, 3)
+
+        client.release_verify.set()
+        results = await asyncio.wait_for(asyncio.gather(first, second), 0.2)
+        self.assertEqual([item["group_name"] for item in results], ["Known name", "Known name"])
 
     async def test_ui_lookup_works_with_messaging_and_sending_disabled_and_caps_timeout(self):
         directory, _ = self.make_directory([{"group_id": "98765", "group_name": "Project group"}])

@@ -205,10 +205,10 @@ class _Snapshot:
 
 
 class QQGroupNames:
-    """Caches the small group-id/name directory in process memory for five minutes."""
+    """Caches the small group-id/name directory and refreshes it in the background."""
 
     def __init__(self, config: QQActionConfig | None = None, *, client=None,
-                 expected_self_id: str | int | None = None, cache_seconds: float = 300,
+                 expected_self_id: str | int | None = None, cache_seconds: float = 60,
                  account_check_seconds: float = 3, failure_backoff_seconds: float = 30):
         self.config = config
         self.expected_self_id = _qq_id(expected_self_id if expected_self_id is not None
@@ -224,6 +224,10 @@ class QQGroupNames:
         self._retry_after = 0.0
         self._failure: tuple[str, int] | None = None
         self._lock = asyncio.Lock()
+        self._epoch = 0
+        self._refresh_task: asyncio.Task | None = None
+        self._verification_task: asyncio.Task | None = None
+        self._verification_task_started_at = 0.0
 
     @staticmethod
     def _error(exc: QQActionError) -> GroupDirectoryError:
@@ -234,8 +238,113 @@ class QQGroupNames:
         self._failure = (error.code, error.status)
         self._retry_after = time.monotonic() + self.failure_backoff_seconds
         if error.code == "account_mismatch":
+            self._epoch += 1
             self._snapshot = None
             self._verified_at = 0.0
+            self._refresh_task = None
+            self._verification_task = None
+
+    def _start_verification_locked(self) -> asyncio.Task:
+        task = self._verification_task
+        if task is None or task.done():
+            task = asyncio.create_task(self._verify_account(self._epoch))
+            self._verification_task = task
+            self._verification_task_started_at = time.monotonic()
+        return task
+
+    async def _verify_account(self, epoch: int) -> GroupDirectoryError | None:
+        current_task = asyncio.current_task()
+        error = None
+        try:
+            await self.client.verify_account()
+        except QQActionError as exc:
+            error = self._error(exc)
+        except GroupDirectoryError as exc:
+            error = exc
+        except Exception:
+            error = GroupDirectoryError("temporarily_unavailable", 503)
+        async with self._lock:
+            if self._epoch == epoch:
+                if error is not None:
+                    self._record_failure(error)
+                else:
+                    self._verified_at = time.monotonic()
+            elif error is None:
+                # A concurrent account mismatch invalidated this check while
+                # it was in flight; its success cannot authorize this lookup.
+                error = GroupDirectoryError("account_mismatch", 409)
+            if self._verification_task is current_task:
+                self._verification_task = None
+                self._verification_task_started_at = 0.0
+        return error
+
+    async def _ensure_verified(self, *, force: bool = False,
+                               not_before: float | None = None) -> GroupDirectoryError | None:
+        while True:
+            async with self._lock:
+                task = self._verification_task
+                wait_then_recheck = (task is not None and not task.done()
+                                     and not_before is not None
+                                     and self._verification_task_started_at < not_before)
+                if task is None or task.done():
+                    if (not force and time.monotonic() - self._verified_at
+                            < self.account_check_seconds):
+                        return None
+                    task = self._start_verification_locked()
+                elif not wait_then_recheck:
+                    task = self._start_verification_locked()
+            # All callers await one check, but the directory lock remains free
+            # so cached lookups and refresh completion can make progress.
+            error = await asyncio.shield(task)
+            if error is not None:
+                return error
+            if not wait_then_recheck:
+                return None
+
+    def _start_refresh_locked(self) -> asyncio.Task:
+        task = self._refresh_task
+        if task is None or task.done():
+            task = asyncio.create_task(self._refresh_directory(self._epoch))
+            self._refresh_task = task
+        return task
+
+    async def _refresh_directory(self, epoch: int) -> None:
+        current_task = asyncio.current_task()
+        try:
+            groups = _group_rows(await self.client.call("get_group_list", {}))
+            fetched_at = time.monotonic()
+            # Bind the fetched directory to the same account before and after
+            # the action. The caller verified before scheduling; force a
+            # coalesced post-fetch check before publishing the new snapshot.
+            error = await self._ensure_verified(force=True, not_before=fetched_at)
+            if error is not None:
+                raise error
+        except QQActionError as exc:
+            error = self._error(exc)
+            async with self._lock:
+                if self._epoch == epoch:
+                    self._record_failure(error)
+        except GroupDirectoryError as exc:
+            async with self._lock:
+                if self._epoch == epoch:
+                    self._record_failure(exc)
+        except Exception:
+            # Provider/client failures are surfaced as a bounded service error;
+            # avoid leaving an unobserved background-task exception.
+            async with self._lock:
+                if self._epoch == epoch:
+                    self._record_failure(GroupDirectoryError("temporarily_unavailable", 503))
+        else:
+            async with self._lock:
+                if self._epoch == epoch:
+                    self._snapshot = _Snapshot(time.monotonic(), groups)
+                    self._verified_at = time.monotonic()
+                    self._failure = None
+                    self._retry_after = 0.0
+        finally:
+            async with self._lock:
+                if self._refresh_task is current_task:
+                    self._refresh_task = None
 
     def _stale_or_raise(self, group_id: str, error: GroupDirectoryError) -> dict[str, Any]:
         snapshot = self._snapshot
@@ -255,63 +364,73 @@ class QQGroupNames:
         if normalized_account is None or expected_account is None or normalized_account != expected_account:
             raise GroupDirectoryError("account_mismatch", 409)
 
-        async with self._lock:
-            now = time.monotonic()
-            snapshot = self._snapshot
-            cached = snapshot is not None and now - snapshot.loaded_at < self.cache_seconds
-            if now < self._retry_after:
-                code, status = self._failure or ("temporarily_unavailable", 503)
-                return self._stale_or_raise(normalized_id, GroupDirectoryError(code, status))
-            if now - self._verified_at >= self.account_check_seconds:
-                try:
-                    await self.client.verify_account()
-                except QQActionError as exc:
-                    error = self._error(exc)
-                    self._record_failure(error)
-                    return self._stale_or_raise(normalized_id, error)
-                except GroupDirectoryError as exc:
-                    self._record_failure(exc)
-                    return self._stale_or_raise(normalized_id, exc)
-                self._verified_at = time.monotonic()
-            if not cached:
-                try:
-                    groups = _group_rows(await self.client.call("get_group_list", {}))
-                    # Bind a newly fetched directory to the same account both
-                    # before and after the action in case QQ changed accounts.
-                    await self.client.verify_account()
-                except QQActionError as exc:
-                    error = self._error(exc)
-                    self._record_failure(error)
-                    return self._stale_or_raise(normalized_id, error)
-                except GroupDirectoryError as exc:
-                    self._record_failure(exc)
-                    return self._stale_or_raise(normalized_id, exc)
-                self._verified_at = time.monotonic()
-                self._snapshot = snapshot = _Snapshot(time.monotonic(), groups)
-            self._failure = None
-            self._retry_after = 0.0
+        loaded_by_this_request = False
+        while True:
+            refresh: asyncio.Task | None = None
+            verify: asyncio.Task | None = None
+            async with self._lock:
+                now = time.monotonic()
+                snapshot = self._snapshot
+                cached = snapshot is not None and now - snapshot.loaded_at < self.cache_seconds
+                if now < self._retry_after:
+                    code, status = self._failure or ("temporarily_unavailable", 503)
+                    return self._stale_or_raise(normalized_id, GroupDirectoryError(code, status))
+                if now - self._verified_at >= self.account_check_seconds:
+                    verify = self._start_verification_locked()
 
-            assert snapshot is not None
-            if normalized_id not in snapshot.names:
-                raise GroupDirectoryError("group_not_found", 404)
-            name = snapshot.names[normalized_id]
-            if not name:
-                # Some providers omit group_name in list rows. Ask for this one
-                # already-joined group explicitly; never query arbitrary IDs.
-                try:
-                    info = await self.client.call("get_group_info", {"group_id": normalized_id})
-                    if not isinstance(info, dict) or _qq_id(info.get("group_id")) != normalized_id:
-                        raise GroupDirectoryError("protocol_error", 502)
-                    value = info.get("group_name")
-                    if isinstance(value, str):
-                        name = "".join(c for c in value.strip() if ord(c) >= 32 and ord(c) != 127)[:128]
-                        snapshot.names[normalized_id] = name
-                except QQActionError as exc:
-                    error = self._error(exc)
-                    self._record_failure(error)
-                    return self._stale_or_raise(normalized_id, error)
-                except GroupDirectoryError as exc:
-                    self._record_failure(exc)
-                    return self._stale_or_raise(normalized_id, exc)
-            return {"account_id": expected_account, "group_id": normalized_id,
-                    "group_name": name, "cached": cached, "stale": False}
+                if verify is None:
+                    snapshot = self._snapshot
+                    cached = snapshot is not None and time.monotonic() - snapshot.loaded_at < self.cache_seconds
+                else:
+                    snapshot = None
+                    cached = False
+                if verify is None and snapshot is not None and normalized_id in snapshot.names:
+                    name = snapshot.names[normalized_id]
+                    if not cached:
+                        # Keep known labels responsive while one account-bound
+                        # refresh runs. The response explicitly marks the old
+                        # label stale; a cold/unknown lookup waits below.
+                        self._start_refresh_locked()
+                        stale_age = time.monotonic() - snapshot.loaded_at
+                        if name and stale_age <= max(self.cache_seconds, 1800):
+                            return {"account_id": expected_account, "group_id": normalized_id,
+                                    "group_name": name, "cached": True, "stale": True}
+                    elif name:
+                        return {"account_id": expected_account, "group_id": normalized_id,
+                                "group_name": name, "cached": not loaded_by_this_request,
+                                "stale": False}
+                    if cached:
+                        return await self._group_info_locked(normalized_id, snapshot)
+                    refresh = self._refresh_task
+                elif verify is None and snapshot is not None and cached:
+                    raise GroupDirectoryError("group_not_found", 404)
+                elif verify is None:
+                    refresh = self._start_refresh_locked()
+
+            # Shield shared tasks so cancelling one request does not cancel
+            # work needed by other concurrent lookups.
+            if verify is not None:
+                await asyncio.shield(verify)
+            elif refresh is not None:
+                await asyncio.shield(refresh)
+                loaded_by_this_request = True
+
+    async def _group_info_locked(self, group_id: str, snapshot: _Snapshot) -> dict[str, Any]:
+        try:
+            info = await self.client.call("get_group_info", {"group_id": group_id})
+            if not isinstance(info, dict) or _qq_id(info.get("group_id")) != group_id:
+                raise GroupDirectoryError("protocol_error", 502)
+            value = info.get("group_name")
+            name = ""
+            if isinstance(value, str):
+                name = "".join(c for c in value.strip() if ord(c) >= 32 and ord(c) != 127)[:128]
+                snapshot.names[group_id] = name
+        except QQActionError as exc:
+            error = self._error(exc)
+            self._record_failure(error)
+            return self._stale_or_raise(group_id, error)
+        except GroupDirectoryError as exc:
+            self._record_failure(exc)
+            return self._stale_or_raise(group_id, exc)
+        return {"account_id": self.expected_self_id, "group_id": group_id,
+                "group_name": name, "cached": True, "stale": False}

@@ -889,7 +889,8 @@ body.quick-mode .topbar-actions { gap: 3px; }
 body.quick-mode .chat-topbar button { display: inline-flex; align-items: center; justify-content: center; min-width: 25px; width: 25px; min-height: 25px; height: 25px; padding: 0; border: 0; border-radius: 7px; background: transparent; color: #8b9e91; font-size: 17px; }
 body.quick-mode .chat-topbar button:hover, body.quick-mode .chat-topbar button:focus-visible { background: #ebeee4; color: #356d5e; }
 body.quick-mode.native-composer .chat-topbar { display: none; }
-body.quick-mode .messages { order: 0; display: block; flex: 1 1 0; min-height: 0; max-height: none; padding: 6px 9px 10px; overflow-y: auto; overflow-x: hidden; scroll-behavior: auto; scrollbar-width: auto; scrollbar-color: auto; }
+/* Reserve the same gutter at every height: WebKit wrapping must not feed back into native sizing. */
+body.quick-mode .messages { order: 0; display: block; flex: 1 1 0; min-height: 0; max-height: none; padding: 6px 9px 10px; overflow-y: scroll; overflow-x: hidden; scroll-behavior: auto; scrollbar-width: auto; scrollbar-color: auto; }
 body.quick-mode .messages:empty { display: none; }
 body.quick-mode .messages::after { content: ""; display: block; height: var(--quick-tail-space, 0px); }
 body.quick-mode .messages::-webkit-scrollbar,
@@ -1066,3 +1067,51 @@ body.work-mode:not(.mobile-workbench) #toggleSettingsButton[aria-expanded="true"
   body.work-mode:not(.mobile-workbench) .session-sidebar,
   body.work-mode:not(.mobile-workbench) .sidebar-backdrop { top: var(--workbench-header-height, 62px); }
 }
+
+/* Shared image composer: the preview lives outside the native-hidden form. */
+.composer { grid-template-columns: 34px minmax(0, 1fr) auto; }
+.composer-upload { position: relative; align-self: center; }
+#uploadAttachmentButton { display: grid; place-items: center; width: 34px; height: 38px; padding: 0; border: 1px solid #d9e4dd; border-radius: 11px; color: #456f5d; background: #f5f8f2; }
+#uploadAttachmentButton:hover { background: #e9f1e8; border-color: #a9c3ad; }
+.attachment-menu { position: absolute; bottom: calc(100% + 10px); left: 0; z-index: 160; min-width: 192px; padding: 5px; border: 1px solid #d6e2d5; border-radius: 14px; background: #fffefa; box-shadow: 0 8px 28px #2945381c; }
+.attachment-menu[hidden], .composer-attachments[hidden], .attachment-notice[hidden] { display: none !important; }
+.attachment-menu button { display: flex; flex-direction: column; align-items: start; gap: 3px; width: 100%; padding: 11px 12px; border: 0; border-radius: 9px; background: transparent; color: #344f42; text-align: left; font-size: 13px; }
+.attachment-menu button:hover { background: #eff4ec; }
+.attachment-menu button span { color: #7b887b; font-size: 11px; }
+.composer-attachments { flex: 0 0 auto; display: flex; gap: 9px; overflow-x: auto; max-height: 126px; padding: 10px max(30px, calc((100% - 780px) / 2)) 3px; }
+.attachment-card { position: relative; flex: 0 0 104px; min-width: 0; padding: 5px; border: 1px solid #dbe5d7; border-radius: 12px; background: #f6f8f0; }
+.attachment-card img { display: block; width: 92px; height: 56px; object-fit: cover; border-radius: 7px; background: #e9eee5; }
+.attachment-card strong { display: block; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; font-size: 10px; font-weight: 500; color: #516552; padding-top: 4px; }
+.attachment-card small { display: block; color: #758576; font-size: 10px; line-height: 1.5; }
+.attachment-remove { position: absolute; right: 3px; top: 3px; display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid #dce6d7; border-radius: 50%; background: #fffefaeF; color: #566e5b; font-size: 16px; }
+.attachment-remove:hover { background: #fff; color: #8c483a; }
+.attachment-file { flex-basis: 174px; padding: 9px; }
+.attachment-file strong { padding-right: 21px; font-size: 11px; }
+.attachment-file small { margin-top: 5px; }
+.attachment-notice { flex: 0 0 auto; margin: 0; padding: 4px max(30px, calc((100% - 780px) / 2)); color: #647e6b; font-size: 11px; line-height: 1.5; }
+.attachment-notice.error { color: #a45643; }
+.message-images { display: flex; flex-wrap: wrap; gap: 8px; margin: 8px 0 2px; }
+.message-image { position: relative; display: block; border: 1px solid #dce5d8; border-radius: 12px; padding: 4px; max-width: min(220px, 100%); background: #f5f7ef; color: #66826c; text-decoration: none; }
+.message-image img { display: block; width: auto; max-width: 100%; height: 132px; object-fit: contain; border-radius: 8px; }
+.message-image span { display: block; font-size: 10px; padding: 4px 3px; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.message-image.image-unavailable { padding: 10px; }
+.message-image.image-unavailable img { display: none; }
+body.quick-mode .composer { grid-template-columns: 30px minmax(0, 1fr) auto; }
+body.quick-mode .composer-attachments { order: 2; padding: 4px 8px; max-height: 116px; gap: 6px; }
+body.quick-mode .attachment-notice { order: 2; padding: 3px 8px; font-size: 10px; }
+body.quick-mode .message-image img { height: 110px; }
+body.quick-mode #uploadAttachmentButton { width: 28px; height: 30px; border-radius: 50%; }
+body.mobile-workbench .composer { grid-template-columns: 40px minmax(0, 1fr) auto; }
+body.mobile-workbench #uploadAttachmentButton { width: 40px; height: 44px; border-radius: 14px; }
+body.mobile-workbench .composer-attachments { padding: 8px 14px 2px; max-height: 120px; }
+body.mobile-workbench .attachment-notice { padding: 4px 16px; font-size: 11px; }
+body.mobile-workbench .attachment-remove { width: 30px; height: 30px; }
+@media (max-height: 460px) { body.mobile-workbench .composer-attachments { max-height: 80px; } body.mobile-workbench .attachment-card img { height: 30px; } }
+
+/* Document attachments share the compact image strip without rendering file HTML. */
+.attachment-file-type { display: inline-block; padding: 4px 7px; margin: 1px 0 4px; border: 1px solid #d6e2d2; border-radius: 6px; color: #4f775c; background: #edf3e6; font-size: 10px; font-weight: 600; letter-spacing: .03em; }
+.message-document { min-width: 150px; max-width: min(260px, 100%); padding: 10px 12px; }
+.message-document small { display: block; font-size: 10px; color: #788875; }
+.message-document span { font-size: 12px; color: #405a45; padding: 5px 0 0; }
+.message-document:hover { background: #edf3e6; border-color: #a8c2a6; }
+.attachment-extraction-hint { margin-top: 4px; color: #9d7a42 !important; }

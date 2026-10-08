@@ -58,6 +58,7 @@ const server = http.createServer(async (req, res) => {
       return fs.createReadStream(file).pipe(res);
     }
   }
+  if (url.pathname === '/knowledge/file-types') return json(res, 200, { file_types: [{ extensions: ['.txt', '.text', '.md', '.pdf', '.docx', '.pptx', '.xlsx', '.xls', '.html', '.htm', '.epub', '.csv', '.json', '.xml', '.msg'], index_supported: true }] });
   if (url.pathname === '/agent/models') return json(res, 200, { clients: [] });
   if (url.pathname === '/agent/ui-defaults') return json(res, 200, { configured: false, defaults: {} });
   if (url.pathname === '/openapi.json') return json(res, 200, { paths: { '/sessions/{session_id}': { delete: { parameters: [

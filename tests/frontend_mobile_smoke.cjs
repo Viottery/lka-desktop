@@ -23,6 +23,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml' })[path.extname(file)] || 'application/octet-stream' });
     return fs.createReadStream(file).pipe(res);
   }
+  if (p === '/knowledge/file-types') return json(res, { file_types: [{ extensions: ['.txt', '.text', '.md', '.pdf', '.docx', '.pptx', '.xlsx', '.xls', '.html', '.htm', '.epub', '.csv', '.json', '.xml', '.msg'], index_supported: true }] });
   if (p === '/agent/models') return json(res, { default_client: 'synthetic', clients: [{ name: 'synthetic', default_model: 'model-a', models: ['model-a', 'model-b'] }] });
   if (p === '/agent/safety-reviews' && req.method === 'GET') return json(res, { reviews: [] });
   if (p === '/agent/ui-defaults') return json(res, { configured: false, defaults: {} });
@@ -235,6 +236,20 @@ async function composer(page) {
     assert.equal((await remotePage.locator('#runStatus').innerText()).includes('创建失败'), false);
     assert(remoteCalls.some(url => url.pathname === '/workbench/sessions'));
     await remoteContext.close();
+    // The local native/default-backend page also uses one origin. No real 8765
+    // service is contacted; all history comes from this disposable fixture.
+    const localContext = await browser.newContext({ viewport: { width: 410, height: 760 } });
+    const localPage = await localContext.newPage();
+    localPage.on('pageerror', error => errors.push(error.message));
+    await localPage.route('**/*', route => {
+      const url = new URL(route.request().url());
+      assert.equal(url.origin, origin, 'default local desktop calls stay at the frontend origin');
+      return route.continue();
+    });
+    await localPage.goto(origin + '/desktop-pet/chat.html?backend=http%3A%2F%2F127.0.0.1%3A8765&session_id=mobile-existing');
+    await localPage.locator('#messages').getByText('合成历史回复', { exact: true }).waitFor();
+    assert.equal(await localPage.evaluate(() => window.LkaChatContext.get().backend), origin + '/workbench', 'local quick window history and settings share the attachment gateway');
+    await localContext.close();
     assert.deepEqual(external, [], 'all traffic stays at synthetic origin');
     assert.equal(requests.some(r => /\/messages\/send$/.test(r.path)), false, 'no message sends');
     assert(requests.every(r => !r.credentials), 'no credentials');

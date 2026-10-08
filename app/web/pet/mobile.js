@@ -75,7 +75,7 @@
     document.getElementById('sendButton').innerHTML = icon('send');
     document.getElementById('sendButton').setAttribute('aria-label', '发送任务');
     input.rows = 1;
-    input.placeholder = '写下问题，或交给真理一件事…';
+    input.placeholder = 'Привет, Doctor.';
     input.addEventListener('input', scheduleViewport);
     var hint = document.querySelector('.composer-hint');
     hint.textContent = window.matchMedia('(pointer: coarse)').matches ? 'Enter 换行 · 点击发送' : 'Enter 发送 · Shift + Enter 换行';

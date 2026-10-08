@@ -21,7 +21,7 @@
     <footer class="mc-status" id="mcStatus" role="status" aria-live="polite">消息正文来自会话记录，请结合原文判断。</footer></section>`;
   document.body.append(center);
   const state = {open:false, tab:'messages', conversations:[], selected:null, metadata:new Map(), offset:null,
-    generation:0, listGeneration:0, peopleGeneration:0, infoGeneration:0, messages:new Map(), outbound:new Map(), outboundCursor:0, outboundLoading:false,
+    generation:0, listGeneration:0, openGeneration:0, peopleGeneration:0, infoGeneration:0, messages:new Map(), outbound:new Map(), outboundCursor:0, outboundLoading:false,
     attachments:new Map(), before:null, searchOffset:null, searching:false,
     qq:null, caps:null, localPolicy:null, drafts:new Map(), attempts:new Map(), busy:false, uploading:false, timer:null, lastFocus:null};
   const getDraft = () => { const key = state.selected?.conversation_key || ''; if (!state.drafts.has(key)) state.drafts.set(key,{text:'',files:[]}); return state.drafts.get(key); };
@@ -32,9 +32,11 @@
   function backendPath(suffix) { return '/messages/conversations/' + encodeURIComponent(state.selected.conversation_key) + suffix; }
   function same(key, generation) { return state.open && state.selected?.conversation_key === key && state.generation === generation; }
   function renderConversations() {
-    const value = byId('mcConversationSearch').value.trim().toLocaleLowerCase(), list = byId('mcConversationList'); list.replaceChildren();
+    const value = byId('mcConversationSearch').value.trim().toLocaleLowerCase(), list = byId('mcConversationList');
+    const scroll = list.scrollTop, focus = list.contains(document.activeElement) ? document.activeElement.closest('[data-conversation-key]')?.dataset.conversationKey : null;
+    list.replaceChildren();
     state.conversations.filter(item => [title(item),item.conversation_id,item.account_id].some(v => String(v || '').toLocaleLowerCase().includes(value))).forEach(item => {
-      const row = button('', () => select(item), 'mc-conversation'); row.setAttribute('aria-current', String(state.selected?.conversation_key === item.conversation_key)); row.setAttribute('role','listitem');row.title=title(item)+(state.metadata.get(item.conversation_key)?.qq_name_stale?'（缓存名称，等待 QQ 更新）':'')+'\n'+item.account_id+' / '+item.conversation_id;
+      const row = button('', () => select(item), 'mc-conversation'); row.dataset.conversationKey=item.conversation_key; row.setAttribute('aria-current', String(state.selected?.conversation_key === item.conversation_key)); row.setAttribute('role','listitem');row.title=title(item)+(state.metadata.get(item.conversation_key)?.qq_name_stale?'（缓存名称，等待 QQ 更新）':'')+'\n'+item.account_id+' / '+item.conversation_id;
       row.append(node('strong',title(item)),node('span',(item.conversation_type === 'group' ? '群聊' : '私聊') + ' · ' + (item.message_count ?? item.total_count ?? 0) + ' 条记录'));
       row.append(node('small',(item.conversation_type==='group'?'群号 ':'QQ ')+item.conversation_id));
       if (item.pending_count) row.append(node('small',item.pending_count + ' 条待处理'));
@@ -45,39 +47,86 @@
     byId('mcMoreConversations').hidden = state.offset == null;
     if(state.offset!=null)list.append(button('更多会话',()=>loadConversations(true),'mc-conversation mc-mobile-more'));
     syncReadingSelector();
+    list.scrollTop = scroll;
+    if(focus)Array.from(list.children).find(row=>row.dataset.conversationKey===focus)?.focus({preventScroll:true});
   }
-  async function loadConversations(more) {
-    const generation = ++state.listGeneration;
-    const data = await api.backend('/messages/conversations?limit=50&offset=' + (more ? state.offset || 0 : 0));
+  async function loadConversations(more, options) {
+    options=options||{};
+    const generation = ++state.listGeneration, size = !more && options.preserve ? Math.min(200,Math.max(50,state.conversations.length)) : 50;
+    const data = await api.backend('/messages/conversations?limit='+size+'&offset=' + (more ? state.offset || 0 : 0));
     if (!state.open || generation !== state.listGeneration) return;
     const values = data.conversations || [];values.forEach(item=>{const cached=state.metadata.get(item.conversation_key);if(cached?.label_source==='policy')state.metadata.set(item.conversation_key,{...cached,display_name:item.display_name,manual_display_name:item.display_name,user_alias:null});});
     state.conversations = more ? state.conversations.concat(values.filter(v => !state.conversations.some(x => x.conversation_key === v.conversation_key))) : values;
     state.offset = data.next_offset ?? null; renderConversations();
-    if (!state.selected && state.conversations.length) await select(state.conversations[0]);
-    // Bounded hydration improves labels without delaying the usable list.
-    for (let start=0;start<values.length;start+=5) {
-      await Promise.all(values.slice(start,start+5).map(async item => {
-        await Promise.allSettled([hydrateGroupName(item,generation),(async()=>{
-          try { const value = await api.backend('/messages/conversations/' + encodeURIComponent(item.conversation_key) + '/metadata'); if (state.open && generation === state.listGeneration) state.metadata.set(item.conversation_key,{...state.metadata.get(item.conversation_key),...value}); } catch (error) { if(error.status===404&&typeof item.display_name==='string'&&item.display_name.trim()&&item.display_name.trim()!==String(item.conversation_id))state.metadata.set(item.conversation_key,{...state.metadata.get(item.conversation_key),manual_display_name:item.display_name.trim(),label_source:'policy'}); }
-        })()]);
-      }));
-      if (generation !== state.listGeneration || !state.open) return;
-      renderConversations();
-      if(state.selected)byId('mcConversationTitle').textContent=title(state.selected);
+    if(state.selected){
+      const current=state.conversations.find(item=>item.conversation_key===state.selected.conversation_key);
+      if(current)state.selected={...state.selected,...current};
+      byId('mcConversationTitle').textContent=title(state.selected);
     }
+    enqueueHydration(values,options.forceNames===true);
+    if (!state.selected && state.conversations.length) select(state.conversations[0]).catch(e=>notice(e.message,true));
   }
   let qqNamesUnavailableUntil=0;
-  async function hydrateGroupName(item,generation){
-    if(item.platform!=='qq'||item.conversation_type!=='group'||Date.now()<qqNamesUnavailableUntil)return;
+  const hydrationQueues={metadata:[],group:[]}, hydrationRunning={metadata:0,group:0}, hydrationJobs=new Set();
+  function currentHydration(item,epoch){return state.open&&state.openGeneration===epoch&&state.conversations.some(value=>value.conversation_key===item.conversation_key);}
+  function namesUpdated(item){
+    renderConversations();
+    if(state.selected?.conversation_key===item.conversation_key)byId('mcConversationTitle').textContent=title(state.selected);
+  }
+  function enqueueHydration(values,force){
+    const ordered=values.slice().sort((a,b)=>Number(b.conversation_key===state.selected?.conversation_key)-Number(a.conversation_key===state.selected?.conversation_key));
+    for(const item of ordered){
+      const cached=state.metadata.get(item.conversation_key)||{};
+      for(const kind of ['metadata','group']){
+        if(kind==='group'&&(item.platform!=='qq'||item.conversation_type!=='group'))continue;
+        const checked=kind==='metadata'?cached.metadata_checked_at:cached.qq_name_checked_at;
+        const ttl=kind==='metadata'?30000:cached.qq_name_stale?2000:30000;
+        if(!force&&checked&&Date.now()-checked<ttl)continue;
+        const key=state.openGeneration+':'+kind+':'+item.conversation_key;
+        if(hydrationJobs.has(key))continue;
+        hydrationJobs.add(key);hydrationQueues[kind].push({item,epoch:state.openGeneration,key,force});
+      }
+    }
+    drainHydration('metadata',3);drainHydration('group',2);
+  }
+  function clearHydration(){
+    for(const queue of Object.values(hydrationQueues)){for(const job of queue)hydrationJobs.delete(job.key);queue.length=0;}
+  }
+  function drainHydration(kind,limit){
+    if(!state.open||document.hidden)return;
+    while(hydrationRunning[kind]<limit&&hydrationQueues[kind].length){
+      const job=hydrationQueues[kind].shift();
+      if(!currentHydration(job.item,job.epoch)){hydrationJobs.delete(job.key);continue;}
+      hydrationRunning[kind]++;
+      (kind==='metadata'?hydrateMetadata(job.item,job.epoch):hydrateGroupName(job.item,job.epoch)).catch(()=>{}).finally(()=>{
+        hydrationRunning[kind]--;hydrationJobs.delete(job.key);drainHydration(kind,limit);
+      });
+    }
+  }
+  async function hydrateMetadata(item,epoch){
+    try{
+      const value=await api.backend('/messages/conversations/'+encodeURIComponent(item.conversation_key)+'/metadata');
+      if(!currentHydration(item,epoch))return;
+      const old=state.metadata.get(item.conversation_key)||{};
+      if(Number.isFinite(old.revision)&&Number.isFinite(value.revision)&&value.revision<old.revision)return;
+      state.metadata.set(item.conversation_key,{...old,...value,metadata_checked_at:Date.now()});namesUpdated(item);
+    }catch(error){
+      if(!currentHydration(item,epoch))return;
+      if(error.status===404){
+        const old=state.metadata.get(item.conversation_key)||{}, label=String(item.display_name||'').trim();
+        state.metadata.set(item.conversation_key,{...old,...(label&&label!==String(item.conversation_id)?{manual_display_name:label,label_source:'policy'}:{}),metadata_checked_at:Date.now()});namesUpdated(item);
+      }
+    }
+  }
+  async function hydrateGroupName(item,epoch){
+    if(Date.now()<qqNamesUnavailableUntil)return;
     if(state.qq?.account_id&&String(state.qq.account_id)!==String(item.account_id))return;
-    const old=state.metadata.get(item.conversation_key)||{};
-    if(old.qq_name_checked_at&&Date.now()-old.qq_name_checked_at<300000)return;
     try{
       const data=await api.qq('/groups/'+encodeURIComponent(item.conversation_id)+'?account_id='+encodeURIComponent(item.account_id));
-      if(!state.open||generation!==state.listGeneration)return;
+      if(!currentHydration(item,epoch))return;
       if(String(data.account_id)!==String(item.account_id)||String(data.group_id)!==String(item.conversation_id)||typeof data.group_name!=='string'||!data.group_name.trim())return;
-      state.metadata.set(item.conversation_key,{...state.metadata.get(item.conversation_key),qq_group_name:data.group_name.trim(),qq_name_stale:data.stale===true,qq_name_checked_at:Date.now()});
-    }catch(error){if([0,401,502,503].includes(error.status))qqNamesUnavailableUntil=Date.now()+30000;/* Local names remain available while QQ reconnects. */}
+      state.metadata.set(item.conversation_key,{...state.metadata.get(item.conversation_key),qq_group_name:data.group_name.trim(),qq_name_stale:data.stale===true,qq_name_checked_at:Date.now()});namesUpdated(item);
+    }catch(error){if([0,401,409,502,503].includes(error.status))qqNamesUnavailableUntil=Date.now()+30000;}
   }
   function syncReadingSelector() {
     if (window.LkaMessageReading) window.LkaMessageReading.setConversations(state.conversations.map(item => ({...item,display_name:title(item)})),state.selected?.conversation_key || '');
@@ -425,17 +474,30 @@
   async function open(){
     const context=window.LkaChatContext?.get();
     if(context&&!context.workMode){const url=new URL('./chat.html',window.location.href);url.search='?mode=work&panel=messages&backend='+encodeURIComponent(context.backend)+(context.sessionId?'&session_id='+encodeURIComponent(context.sessionId):'');if(window.petBridge?.openExternalUrl)window.petBridge.openExternalUrl(url.href);else window.open(url.href,'_blank','noopener');return;}
-    if(state.open)return;const previousSelection=state.selected?.conversation_key;state.lastFocus=document.activeElement;state.open=true;center.hidden=false;byId('mcClose').focus();
+    if(state.open)return;const previousSelection=state.selected?.conversation_key;state.lastFocus=document.activeElement;state.open=true;state.openGeneration++;center.hidden=false;byId('mcClose').focus();
+    window.dispatchEvent(new CustomEvent('lka-message-center-view',{detail:{open:true,tab:state.tab}}));
+    startPolling();
     const settled=await Promise.allSettled([loadStatus(),loadConversations(false)]);if(previousSelection&&state.selected?.conversation_key===previousSelection)await Promise.allSettled([loadMessages(false),loadAttachments()]);if(!state.open)return;settled.forEach(r=>{if(r.status==='rejected')notice(r.reason.message,true);});
-    window.dispatchEvent(new CustomEvent('lka-message-center-view',{detail:{open:true,tab:state.tab}}));clearInterval(state.timer);state.timer=setInterval(()=>{if(!state.open||document.hidden)return;loadStatus().catch(()=>{});if(!detailStack.length&&state.tab==='messages'&&!state.searching&&state.selected)loadMessages(false,true);},15000);
+
   }
-  function close(){if(!clearDetails())return;if(!sheet.hidden)closeSheet();if(state.selected)getDraft().text=byId('mcDraft').value;state.open=false;state.generation++;state.listGeneration++;state.peopleGeneration++;state.infoGeneration++;clearInterval(state.timer);center.hidden=true;window.dispatchEvent(new CustomEvent('lka-message-center-view',{detail:{open:false,tab:state.tab}}));if(state.lastFocus?.isConnected)state.lastFocus.focus();}
+  let polling=false;
+  async function poll(){
+    if(polling||!state.open||document.hidden)return;
+    polling=true;
+    try{
+      await Promise.allSettled([loadStatus(),loadConversations(false,{preserve:true}),
+        !detailStack.length&&state.tab==='messages'&&!state.searching&&state.selected?loadMessages(false,true):Promise.resolve()]);
+    }finally{polling=false;}
+  }
+  function startPolling(){clearInterval(state.timer);state.timer=setInterval(poll,5000);}
+  document.addEventListener('visibilitychange',()=>{if(state.open&&!document.hidden)poll();});
+  function close(){if(!clearDetails())return;if(!sheet.hidden)closeSheet();if(state.selected)getDraft().text=byId('mcDraft').value;state.open=false;state.openGeneration++;clearHydration();state.generation++;state.listGeneration++;state.peopleGeneration++;state.infoGeneration++;clearInterval(state.timer);center.hidden=true;window.dispatchEvent(new CustomEvent('lka-message-center-view',{detail:{open:false,tab:state.tab}}));if(state.lastFocus?.isConnected)state.lastFocus.focus();}
   byId('mcClose').addEventListener('click',close);['openMessagesButton','openMessageCenterButton'].forEach(id=>byId(id)?.addEventListener('click',open));
   center.querySelectorAll('[data-mc-tab]').forEach(b=>b.addEventListener('click',()=>setTab(b.dataset.mcTab)));
   center.querySelector('.mc-tabs').addEventListener('keydown',event=>{if(!['ArrowLeft','ArrowRight','Home','End'].includes(event.key))return;event.preventDefault();const buttons=Array.from(center.querySelectorAll('[data-mc-tab]')),index=buttons.indexOf(document.activeElement);const next=event.key==='Home'?0:event.key==='End'?buttons.length-1:(index+(event.key==='ArrowRight'?1:buttons.length-1))%buttons.length;buttons[next].focus();setTab(buttons[next].dataset.mcTab);});
   byId('mcConversationSearch').addEventListener('input',renderConversations);byId('mcResolve').addEventListener('click',()=>resolveConversation().catch(e=>notice(e.message,true)));
   byId('mcMoreConversations').addEventListener('click',()=>loadConversations(true).catch(e=>notice(e.message,true)));
-  byId('mcRefresh').addEventListener('click',()=>{loadStatus().catch(e=>notice(e.message,true));loadConversations(false).catch(e=>notice(e.message,true));if(state.selected)loadMessages(false,true);});
+  byId('mcRefresh').addEventListener('click',()=>{loadStatus().catch(e=>notice(e.message,true));loadConversations(false,{preserve:true,forceNames:true}).catch(e=>notice(e.message,true));if(!detailStack.length&&state.tab==='reading')window.LkaMessageReading?.refresh();else if(!detailStack.length&&state.tab==='messages'&&state.selected&&!state.searching)loadMessages(false,true);});
   byId('mcRename').addEventListener('click',()=>showRename().catch(e=>notice(e.message,true)));
   byId('mcDetails').addEventListener('click',()=>showInfo().catch(e=>notice(e.message,true)));
   byId('mcSearchForm').addEventListener('submit',event=>{event.preventDefault();if(!byId('mcQuery').value.trim()){notice('请输入原文关键词。',true);return;}state.generation++;state.searching=true;byId('mcClearSearch').hidden=false;loadMessages(false);});
@@ -451,6 +513,6 @@
   if(reading){byId('mcReading').append(reading);const management=reading.querySelector(':scope > details');if(management){management.classList.add('mc-reading-settings');byId('mcSettings').append(management);}}
   if(history){byId('mcSettings').append(history);history.open=false;}
   window.LkaMessages={conversationLabel:title,open,close,isOpen:()=>state.open,view:()=>state.open?state.tab:null,request:api.backend,openDetail,backDetail,openContext:showContext,openConversation,notify:notice,updateDetail:(content,patch)=>{const frame=detailStack.find(v=>v.content===content);if(frame){Object.assign(frame,patch);if(frame===detailStack.at(-1)){byId('mcDetailTitle').textContent=frame.title;byId('mcDetailTitle').title=frame.title;}}},hasDetail:()=>!!detailStack.length};
-  window.addEventListener('pagehide',()=>{clearInterval(state.timer);});
+  window.addEventListener('pagehide',()=>{state.open=false;state.openGeneration++;clearInterval(state.timer);clearHydration();});
   if(new URLSearchParams(window.location.search).get('panel')==='messages')open();
 }());

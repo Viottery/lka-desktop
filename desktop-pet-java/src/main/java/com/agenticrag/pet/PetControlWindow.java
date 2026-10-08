@@ -22,6 +22,9 @@ import javafx.scene.control.SeparatorMenuItem;
 import javafx.scene.control.TextArea;
 import javafx.scene.control.Tooltip;
 import javafx.scene.control.skin.TextAreaSkin;
+import javafx.scene.input.Clipboard;
+import javafx.stage.FileChooser;
+import javafx.scene.image.Image;
 import javafx.scene.shape.SVGPath;
 import javafx.scene.input.InputMethodEvent;
 import javafx.scene.Cursor;
@@ -46,7 +49,11 @@ import javafx.stage.StageStyle;
 import netscape.javascript.JSObject;
 
 import java.io.IOException;
+import java.io.ByteArrayOutputStream;
+import java.io.InputStream;
 import java.awt.Desktop;
+import javax.imageio.ImageIO;
+import javafx.embed.swing.SwingFXUtils;
 import java.net.URI;
 import java.net.URLDecoder;
 import java.net.URLEncoder;
@@ -62,6 +69,9 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
+import java.util.Base64;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -101,6 +111,15 @@ final class PetControlWindow {
     private static final double RESIZE_HANDLE_SIZE = 10;
     private static final double MIN_QUICK_WIDTH = 340;
     private static final double MIN_QUICK_HEIGHT = 118;
+    private static final long MAX_NATIVE_IMAGE_BYTES = 20L * 1024 * 1024;
+    private static final long MAX_NATIVE_DOCUMENT_BYTES = 64L * 1024 * 1024;
+    private static final int MAX_NATIVE_ATTACHMENTS_PER_PASTE = 4;
+    private static final ExecutorService IMAGE_WORKER = Executors.newSingleThreadExecutor(task -> {
+        Thread thread = new Thread(task, "pet-native-image");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private record NativeImageTarget(WebView view, String sessionId) {}
     private static final AtomicBoolean FX_STARTED = new AtomicBoolean(false);
     private static final Map<String, Font> QUICK_FONTS = new HashMap<>();
 
@@ -117,6 +136,7 @@ final class PetControlWindow {
     private PetChatBridge chatBridge;
     private TextArea nativeInput;
     private Button nativeSendButton;
+    private Label nativeImageStatus;
     private BorderPane quickCard;
     private ResizeEdge activeResizeEdge = ResizeEdge.NONE;
     private double resizeStartScreenX;
@@ -231,6 +251,11 @@ final class PetControlWindow {
         if (!FX_STARTED.compareAndSet(false, true)) {
             return;
         }
+        // Uvicorn serves HTTP/1.1. JavaFX's HTTP2Loader sends h2c upgrade
+        // requests whose body framing is misread as a second request: uploads
+        // arrive empty and their binary bytes trigger HTTP 400. Select the
+        // HTTP/1.1 URLConnection loader before WebKit initializes NetworkContext.
+        System.setProperty("com.sun.webkit.useHTTP2Loader", "false");
         try {
             Platform.startup(() -> Platform.setImplicitExit(false));
         } catch (IllegalStateException alreadyStarted) {
@@ -299,6 +324,11 @@ final class PetControlWindow {
         webView.setMinHeight(0);
         webView.setContextMenuEnabled(false);
         webView.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
+            if (event.getCode() == KeyCode.V && (event.isControlDown() || event.isMetaDown())
+                    && !nativeImeComposing && pasteClipboardImages()) {
+                event.consume();
+                return;
+            }
             if (event.getCode() == KeyCode.ENTER && !event.isShiftDown()
                     && !event.isControlDown() && !event.isAltDown() && !event.isMetaDown()
                     && isChatPageLocation(webView.getEngine().getLocation())) {
@@ -368,6 +398,12 @@ final class PetControlWindow {
         nativeInput.addEventFilter(InputMethodEvent.INPUT_METHOD_TEXT_CHANGED,
                 event -> nativeImeComposing = !event.getComposed().isEmpty());
         nativeInput.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
+            if (event.getCode() == KeyCode.V && (event.isControlDown() || event.isMetaDown())
+                    && !nativeImeComposing && pasteClipboardImages()) {
+                event.consume();
+            }
+        });
+        nativeInput.addEventFilter(KeyEvent.KEY_PRESSED, event -> {
             if (event.getCode() == KeyCode.ENTER && !event.isShiftDown()
                     && !event.isControlDown() && !event.isAltDown() && !event.isMetaDown()
                     && !nativeImeComposing) {
@@ -385,7 +421,18 @@ final class PetControlWindow {
         nativeSendButton.setAccessibleText("发送");
         nativeSendButton.setDisable(true);
         nativeSendButton.setOnAction(event -> submitNativeInput());
-        HBox composer = new HBox(8, nativeInput, nativeSendButton);
+        Button nativeImageButton = iconButton(
+                "M4 4h16v16H4z M4 15l4-4 4 4 3-3 5 5 M15 8h.01",
+                "上传图片或文件 · 图片支持 PNG、JPEG、WebP；文件支持 TXT、MD、PDF、Office、HTML、EPUB、CSV、JSON、XML、MSG",
+                this::chooseNativeImages);
+        nativeImageButton.getStyleClass().add("pet-native-image-button");
+        nativeImageStatus = new Label();
+        nativeImageStatus.getStyleClass().add("pet-native-image-status");
+        nativeImageStatus.setMaxWidth(Double.MAX_VALUE);
+        nativeImageStatus.setManaged(false);
+        nativeImageStatus.setVisible(false);
+        HBox composerRow = new HBox(6, nativeInput, nativeImageButton, nativeSendButton);
+        VBox composer = new VBox(2, composerRow, nativeImageStatus);
         composer.getStyleClass().add("pet-native-composer");
         composer.getStyleClass().add("pet-quick-composer");
         HBox.setHgrow(nativeInput, Priority.ALWAYS);
@@ -507,7 +554,7 @@ final class PetControlWindow {
         if (nativeInput == null || nativeSendButton == null || nativeSendButton.isDisabled()
                 || webView == null) return;
         String text = nativeInput.getText();
-        if (text == null || text.isBlank()) return;
+        if (text == null) text = "";
         try {
             Object accepted = webView.getEngine().executeScript(
                     "window.__petChatSubmitText && window.__petChatSubmitText(" + jsonString(text) + ")");
@@ -516,6 +563,213 @@ final class PetControlWindow {
             System.err.println("[pet-chat] native input submit failed: " + error.getMessage());
         }
         nativeInput.requestFocus();
+    }
+
+    private void chooseNativeImages() {
+        if (stage == null || webView == null || !isChatPageLocation(webView.getEngine().getLocation())) return;
+        FileChooser chooser = new FileChooser();
+        chooser.setTitle("上传图片或文件");
+        chooser.getExtensionFilters().add(new FileChooser.ExtensionFilter(
+                "图片与文档", "*.png", "*.jpg", "*.jpeg", "*.webp", "*.txt", "*.text", "*.md",
+                "*.pdf", "*.docx", "*.pptx", "*.xlsx", "*.xls", "*.html", "*.htm", "*.epub",
+                "*.csv", "*.json", "*.xml", "*.msg"));
+        List<java.io.File> selected = chooser.showOpenMultipleDialog(stage);
+        if (selected == null || selected.isEmpty()) return;
+        if (selected.size() > MAX_NATIVE_ATTACHMENTS_PER_PASTE) {
+            showNativeImageError("一次最多添加 4 个附件");
+            return;
+        }
+        NativeImageTarget target = captureNativeImageTarget();
+        if (target == null) return;
+        for (java.io.File file : selected) {
+            if (mediaTypeFor(file.toPath()) == null) {
+                showNativeImageError("已跳过不支持的文件");
+            } else {
+                queueNativeImage(file.toPath(), target);
+            }
+        }
+    }
+
+    private boolean pasteClipboardImages() {
+        Clipboard clipboard = Clipboard.getSystemClipboard();
+        if (clipboard.hasFiles()) {
+            List<Path> files = new ArrayList<>();
+            boolean unsupported = false;
+            for (java.io.File file : clipboard.getFiles()) {
+                Path path = file.toPath();
+                if (mediaTypeFor(path) == null) {
+                    unsupported = true;
+                } else if (files.size() <= MAX_NATIVE_ATTACHMENTS_PER_PASTE) {
+                    files.add(path);
+                }
+            }
+            if (unsupported) showNativeImageError("已跳过不支持的文件");
+            if (files.isEmpty()) return unsupported;
+            if (files.size() > MAX_NATIVE_ATTACHMENTS_PER_PASTE) {
+                showNativeImageError("一次最多添加 4 个附件");
+                return true;
+            }
+            NativeImageTarget target = captureNativeImageTarget();
+            if (target == null) return true;
+            files.forEach(path -> queueNativeImage(path, target));
+            return true;
+        }
+        if (clipboard.hasImage()) {
+            NativeImageTarget target = captureNativeImageTarget();
+            if (target == null) return true;
+            Image image = clipboard.getImage();
+            if (image == null || image.isError()) {
+                showNativeImageError("无法读取剪贴板图片");
+            } else {
+                queueClipboardImage(image, target);
+            }
+            return true;
+        }
+        return false;
+    }
+
+    private NativeImageTarget captureNativeImageTarget() {
+        WebView target = webView;
+        if (target == null || !isChatPageLocation(target.getEngine().getLocation())) {
+            showNativeImageError("当前页面无法添加图片");
+            return null;
+        }
+        try {
+            Object value = target.getEngine().executeScript(
+                    "window.LkaChatContext && window.LkaChatContext.get && window.LkaChatContext.get().sessionId");
+            String sessionId = value == null ? "" : value.toString();
+            if (sessionId.isBlank()) {
+                showNativeImageError("当前会话尚未准备好，请稍后再试");
+                return null;
+            }
+            return new NativeImageTarget(target, sessionId);
+        } catch (RuntimeException error) {
+            showNativeImageError("当前会话尚未准备好，请稍后再试");
+            return null;
+        }
+    }
+
+    private void queueNativeImage(Path path, NativeImageTarget target) {
+        String mediaType = mediaTypeFor(path);
+        if (mediaType == null) return;
+        long sizeLimit = mediaType.startsWith("image/") ? MAX_NATIVE_IMAGE_BYTES : MAX_NATIVE_DOCUMENT_BYTES;
+        IMAGE_WORKER.execute(() -> {
+            try {
+                long size = Files.size(path);
+                if (size <= 0 || size > sizeLimit) {
+                    showNativeImageErrorLater(size > sizeLimit
+                            ? mediaType.startsWith("image/") ? "原始图片超过 20 MiB，未添加" : "文件超过 64 MiB，未添加"
+                            : "文件为空，未添加");
+                    return;
+                }
+                byte[] bytes = readBounded(path, sizeLimit);
+                if (bytes.length == 0) {
+                    showNativeImageErrorLater("文件为空，未添加");
+                    return;
+                }
+                dispatchNativeImage(path.getFileName().toString(), mediaType, bytes, target);
+            } catch (IOException | RuntimeException error) {
+                showNativeImageErrorLater("读取文件失败或超过大小限制");
+            }
+        });
+    }
+
+    private static byte[] readBounded(Path path, long maximumBytes) throws IOException {
+        try (InputStream input = Files.newInputStream(path);
+             ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+            byte[] buffer = new byte[8192];
+            long total = 0;
+            int count;
+            while ((count = input.read(buffer, 0, (int) Math.min(buffer.length, maximumBytes + 1 - total))) != -1) {
+                total += count;
+                if (total > maximumBytes) throw new IOException("File exceeds attachment limit");
+                output.write(buffer, 0, count);
+            }
+            return output.toByteArray();
+        }
+    }
+
+    private void queueClipboardImage(Image image, NativeImageTarget target) {
+        IMAGE_WORKER.execute(() -> {
+            try (ByteArrayOutputStream output = new ByteArrayOutputStream()) {
+                if (!ImageIO.write(SwingFXUtils.fromFXImage(image, null), "png", output)) {
+                    showNativeImageErrorLater("无法编码剪贴板图片");
+                    return;
+                }
+                byte[] bytes = output.toByteArray();
+                if (bytes.length > MAX_NATIVE_IMAGE_BYTES) {
+                    showNativeImageErrorLater("原始图片超过 20 MiB，未添加");
+                    return;
+                }
+                dispatchNativeImage("clipboard.png", "image/png", bytes, target);
+            } catch (IOException | RuntimeException error) {
+                showNativeImageErrorLater("处理剪贴板图片失败");
+            }
+        });
+    }
+
+    private void dispatchNativeImage(String filename, String mediaType, byte[] bytes, NativeImageTarget target) {
+        String encoded = Base64.getEncoder().encodeToString(bytes);
+        Platform.runLater(() -> {
+            if (webView != target.view() || !isChatPageLocation(target.view().getEngine().getLocation())) return;
+            try {
+                Object dispatched = target.view().getEngine().executeScript("(function(){"
+                        + "var composer=window.LkaImageComposer;"
+                        + "if(!composer||typeof composer.addNativeFile!=='function')return false;"
+                        + "composer.addNativeFile(" + jsonString(filename) + ","
+                        + jsonString(mediaType) + "," + jsonString(encoded) + ","
+                        + jsonString(target.sessionId()) + ");return true;})()");
+                if (Boolean.TRUE.equals(dispatched)) clearNativeImageFallback();
+                else showNativeImageError("当前页面尚未准备好添加图片");
+            } catch (RuntimeException error) {
+                showNativeImageError("当前页面无法添加图片");
+            }
+        });
+    }
+
+    private static String mediaTypeFor(Path path) {
+        String name = path.getFileName().toString().toLowerCase(java.util.Locale.ROOT);
+        if (name.endsWith(".png")) return "image/png";
+        if (name.endsWith(".jpg") || name.endsWith(".jpeg")) return "image/jpeg";
+        if (name.endsWith(".webp")) return "image/webp";
+        if (name.endsWith(".txt") || name.endsWith(".text") || name.endsWith(".md")
+                || name.endsWith(".pdf") || name.endsWith(".docx") || name.endsWith(".pptx")
+                || name.endsWith(".xlsx") || name.endsWith(".xls") || name.endsWith(".html")
+                || name.endsWith(".htm") || name.endsWith(".epub") || name.endsWith(".csv")
+                || name.endsWith(".json") || name.endsWith(".xml") || name.endsWith(".msg"))
+            return "application/octet-stream";
+        return null;
+    }
+
+    private void showNativeImageErrorLater(String message) {
+        Platform.runLater(() -> showNativeImageError(message));
+    }
+
+    private void showNativeImageError(String message) {
+        boolean shownInPage = false;
+        if (webView != null && isChatPageLocation(webView.getEngine().getLocation())) {
+            try {
+                Object handled = webView.getEngine().executeScript("(function(){"
+                        + "var notice=window.LkaImageComposer&&window.LkaImageComposer.errorText;"
+                        + "if(typeof notice!=='function')return false;notice(" + jsonString(message) + ");return true;"
+                        + "})()");
+                shownInPage = Boolean.TRUE.equals(handled);
+            } catch (RuntimeException ignored) {
+                // Keep the native status label as a fallback if the page is unloading.
+            }
+        }
+        if (nativeImageStatus != null) {
+            nativeImageStatus.setText(shownInPage ? "" : message);
+            nativeImageStatus.setManaged(!shownInPage);
+            nativeImageStatus.setVisible(!shownInPage);
+        }
+    }
+
+    private void clearNativeImageFallback() {
+        if (nativeImageStatus == null) return;
+        nativeImageStatus.setText("");
+        nativeImageStatus.setManaged(false);
+        nativeImageStatus.setVisible(false);
     }
 
     private void setNativeComposerBusy(boolean busy) {
@@ -1430,10 +1684,11 @@ final class PetControlWindow {
             String conversationId = payload.has("conversation_id") ? payload.get("conversation_id").getAsString() : "";
             String mode = payload.has("mode") ? payload.get("mode").getAsString() : "wait";
             String safetyMode = payload.has("safety_review_mode") ? payload.get("safety_review_mode").getAsString() : "";
+            String attachmentIds = payload.has("attachment_ids") ? payload.get("attachment_ids").toString() : "[]";
             System.out.println("[pet-chat] bridge parsed questionLength=" + question.length() + " conversationId=" + conversationId + " mode=" + mode);
             String model = payload.has("llm_model") ? payload.get("llm_model").getAsString() : "";
             String client = payload.has("llm_client") ? payload.get("llm_client").getAsString() : "";
-            sendChatRequest(question, conversationId, mode, safetyMode, client, model);
+            sendChatRequest(question, conversationId, mode, safetyMode, client, model, attachmentIds);
         } catch (RuntimeException error) {
             System.err.println("[pet-chat] bridge parse failed: " + error.getMessage());
             deliverChatResponse(jsonObject("error", "Desktop bridge parse failed: " + error.getMessage()));
@@ -1448,7 +1703,8 @@ final class PetControlWindow {
             String model = payload.has("llm_model") ? payload.get("llm_model").getAsString() : "";
             String client = payload.has("llm_client") ? payload.get("llm_client").getAsString() : "";
             String safetyMode = payload.has("safety_review_mode") ? payload.get("safety_review_mode").getAsString() : "";
-            Thread worker = new Thread(() -> sendChatStreamRequest(question, conversationId, client, model, safetyMode), "pet-chat-stream");
+            String attachmentIds = payload.has("attachment_ids") ? payload.get("attachment_ids").toString() : "[]";
+            Thread worker = new Thread(() -> sendChatStreamRequest(question, conversationId, client, model, safetyMode, attachmentIds), "pet-chat-stream");
             worker.setDaemon(true);
             worker.start();
         } catch (RuntimeException error) {
@@ -1456,9 +1712,10 @@ final class PetControlWindow {
         }
     }
 
-    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String safetyMode) {
+    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String safetyMode, String attachmentIds) {
         String requestJson = "{\"session_id\":" + jsonString(conversationId == null ? "" : conversationId)
                 + ",\"user_input\":" + jsonString(question == null ? "" : question)
+                + ",\"attachment_ids\":" + (attachmentIds == null ? "[]" : attachmentIds)
                 + ",\"llm\":{\"response_mode\":\"stream\""
                 + (client == null || client.isBlank() ? "" : ",\"client_name\":" + jsonString(client))
                 + (model == null || model.isBlank() ? "" : ",\"model\":" + jsonString(model)) + "}"
@@ -1876,13 +2133,14 @@ final class PetControlWindow {
         });
     }
 
-    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model) {
+    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model, String attachmentIds) {
         Thread worker = new Thread(() -> {
             String responseJson;
             try {
                 JsonObject requestBody = new JsonObject();
                 requestBody.addProperty("session_id", conversationId == null ? "" : conversationId);
                 requestBody.addProperty("user_input", question == null ? "" : question);
+                requestBody.add("attachment_ids", JsonParser.parseString(attachmentIds == null ? "[]" : attachmentIds));
                 if (safetyMode != null && !safetyMode.isBlank()) requestBody.addProperty("safety_review_mode", safetyMode);
                 if ((client != null && !client.isBlank()) || (model != null && !model.isBlank())) {
                     JsonObject llm = new JsonObject();

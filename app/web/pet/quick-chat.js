@@ -152,10 +152,13 @@
     readingOffset = transcript.scrollTop;
     restoringScroll = false;
     var toolbarHeight = document.body.classList.contains("native-composer") ? 0 : 28;
-    var desired = toolbarHeight + conversationHeight + visibleHeight(status) + visibleHeight(document.getElementById("backendOfflinePanel"));
+    var desired = toolbarHeight + conversationHeight + visibleHeight(document.getElementById("composerAttachments")) + visibleHeight(document.getElementById("attachmentNotice")) + visibleHeight(status) + visibleHeight(document.getElementById("backendOfflinePanel"));
     if (!picker.hidden || shell.classList.contains("sidebar-open")) desired = Math.max(desired, 310);
     if (document.body.classList.contains("workspace-picker-open")) desired = Math.max(desired, 510);
     if (waiting) desired = Math.max(310, toolbarHeight + conversationHeight + visibleHeight(document.getElementById("approvalQueueStatus")) + 12);
+    // Match native logical pixels and the DOM fallback; fractional measurements
+    // must not keep sending equivalent preferred sizes to the host.
+    desired = Math.ceil(desired);
     // Use natural child heights, never viewport/scrollHeight: the host resizes in response.
     var bridge = window.petBridge;
     if (bridge && typeof bridge.setQuickPanelHeight === "function" && (desired !== lastHeight || bridge !== lastBridge)) {
@@ -203,6 +206,8 @@
   window.addEventListener("resize", hideTooltip);
   var observer = new MutationObserver(schedule);
   observer.observe(shell, { childList: true, subtree: true, characterData: true, attributes: true, attributeFilter: ["hidden", "class", "disabled"] });
+  // Intrinsic image dimensions can change after the surrounding DOM has settled.
+  transcript.addEventListener("load", schedule, true);
   if (window.ResizeObserver) { new ResizeObserver(schedule).observe(transcript); }
   window.addEventListener("resize", schedule);
   window.addEventListener("lka-session-context", schedule);

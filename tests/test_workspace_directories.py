@@ -63,7 +63,10 @@ class WorkspaceDirectoryTests(unittest.IsolatedAsyncioTestCase):
                     self.assertEqual(outside.status_code, 403)
                     self.assertEqual(list(Path(forbidden).iterdir()), [])
                     listing = await remote.get("/pet/workspace-directories", headers={"Origin": origin})
-                    self.assertEqual(listing.status_code, 403, "directory enumeration stays local")
+                    self.assertEqual(listing.status_code, 200, "allowlisted mobile can browse computer folders")
+                    self.assertEqual(listing.json()["path"], str(Path(temporary).resolve()))
+                    rejected = await remote.get("/pet/workspace-directories", headers={"Origin": "http://evil.example"})
+                    self.assertEqual(rejected.status_code, 403)
 
     async def test_filtering_and_offset_pagination_are_stable(self):
         with TemporaryDirectory() as temporary:

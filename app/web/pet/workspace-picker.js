@@ -68,7 +68,7 @@
         // A WSL-only or moved workspace cannot be enumerated by Windows. Offer
         // the frontend's default location without changing the session itself.
         if (initial && path && (response.status === 404 || response.status === 422)) return browse('');
-        var message = response.status === 403 ? (/permission denied/i.test(data.detail || '') ? '没有读取这个目录的权限，请选择其他位置。' : '目录浏览仅支持电脑本机访问。你仍可手动输入电脑上的目录路径。') : response.status === 404 ? '目录不存在，检查路径或选择其他位置。' :
+        var message = response.status === 403 ? (/permission denied/i.test(data.detail || '') ? '没有读取这个目录的权限，请选择其他位置。' : '此地址尚未允许浏览目录，请检查电脑端的工作台来源配置。') : response.status === 404 ? '目录不存在，检查路径或选择其他位置。' :
           response.status === 422 ? '无法浏览这个路径，请选择本机磁盘上的普通文件夹。' : '读取目录失败，请重试。';
         throw new Error(message);
       }

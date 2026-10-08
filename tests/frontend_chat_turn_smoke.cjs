@@ -39,6 +39,7 @@ const server = http.createServer(async (req, res) => {
     }
   }
   if (url.pathname === '/memories' && req.method === 'POST') return json(res, 201, { memory_id: 'synthetic-memory', memory_file_status: 'synced' });
+  if (url.pathname === '/knowledge/file-types') return json(res, 200, { file_types: [{ extensions: ['.txt', '.text', '.md', '.pdf', '.docx', '.pptx', '.xlsx', '.xls', '.html', '.htm', '.epub', '.csv', '.json', '.xml', '.msg'], index_supported: true }] });
   if (url.pathname === '/agent/models') return json(res, 200, { clients: [] });
   if (url.pathname === '/agent/ui-defaults') return json(res, 200, { configured: false, defaults: {} });
   if (url.pathname === '/sessions' && req.method === 'GET') return json(res, 200, { sessions: [] });

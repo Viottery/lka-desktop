@@ -69,5 +69,10 @@ tasks.register('previewQuickConversation', JavaExec) {
             throw new GradleException('Pass -PfrontendRoot=<path to app/web/pet> or set LKA_FRONTEND_ROOT')
         }
         args frontendRoot.get()
+        if (providers.gradleProperty('binaryUploadOnly').isPresent()) args '--binary-upload-only'
+        if (providers.gradleProperty('resizeOnly').isPresent()) args '--resize-only'
+        if (providers.gradleProperty('binaryUploadBackend').isPresent()) {
+            systemProperty 'lka.preview.uploadBackend', providers.gradleProperty('binaryUploadBackend').get()
+        }
     }
 }

@@ -144,7 +144,8 @@ def browse_workspace_directories(
     limit: int = Query(default=100, ge=1, le=200),
 ) -> dict:
     """List directory names on the frontend machine; never read files or create paths."""
-    _require_local_page(request)
+    from app.api.routes.workbench_proxy import require_workbench_page
+    require_workbench_page(request)
     roots = _workspace_browse_roots()
     if path:
         current = _validate_browse_path(path, roots)
