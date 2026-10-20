@@ -1,10 +1,13 @@
 """Explicit, bounded proxy for the desktop workbench API."""
 from __future__ import annotations
 
+import asyncio
 import ipaddress
 import json
 import os
 import re
+import ssl
+import threading
 from urllib.parse import quote, urlsplit
 
 import httpx
@@ -89,6 +92,19 @@ _MAX_IMAGE_RESPONSE = 256 * 1024 * 1024
 _MAX_DOCUMENT_RESPONSE = 256 * 1024 * 1024
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".heic", ".heif", ".bmp", ".tif", ".tiff"}
 _STREAMS = {"agent/turn/stream"}
+_tls_context: ssl.SSLContext | None = None
+_tls_context_lock = threading.Lock()
+
+
+def _verified_context() -> ssl.SSLContext:
+    # Loading CA certificates on Windows for every request blocks the event
+    # loop and delays unrelated approvals/SSE. Reuse verification, not cookies
+    # or credentials; client and streamed-response ownership remain per request.
+    global _tls_context
+    with _tls_context_lock:
+        if _tls_context is None:
+            _tls_context = httpx.create_ssl_context(trust_env=False)
+        return _tls_context
 
 
 def _loopback(host: str) -> bool:
@@ -208,7 +224,8 @@ async def workbench_proxy(path: str, request: Request):
     try:
         streaming_request = path in _STREAMS or path.endswith("/stream") or path == "background/events"
         timeout = httpx.Timeout(connect=10, read=None if streaming_request else 600 if is_attachment_upload else 30, write=600 if is_attachment_upload else 30, pool=10)
-        client = httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False)
+        context = await asyncio.to_thread(_verified_context)
+        client = httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False, verify=context)
         headers["Accept-Encoding"] = "identity"
         upstream_request = client.build_request(request.method, url,
             params=list(request.query_params.multi_items()), headers=headers, content=bytes(body))

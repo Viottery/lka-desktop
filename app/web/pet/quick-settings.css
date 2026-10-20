@@ -1,4 +1,4 @@
-/* Quick settings: one quiet sheet, with controls aligned to the conversation. */
+/* Conversation settings shared by workbench and quick windows. */
 body.quick-mode #openGlobalAssistantQuick,
 body.quick-mode #newQuickSessionButton { width: 28px; min-width: 28px; height: 28px; padding: 5px; color: #53756f; }
 body.quick-mode #openGlobalAssistantQuick svg,
@@ -25,3 +25,7 @@ body.quick-mode #newQuickSessionButton svg { width: 18px; height: 18px; }
 .qs-panel :disabled { opacity: .55; cursor: default; }
 
 body.quick-mode:not(.native-composer) #toggleSettingsButton { display: inline-flex !important; }
+
+body.work-mode .qs-panel { top: 68px; bottom: auto; }
+#assistantSettingsButton[hidden] { display: none; }
+#assistantSettingsButton[aria-expanded="true"] { color: var(--teal-dark, #356d5e); background: #e5f1ef; }

@@ -1,6 +1,8 @@
 (function () {
   'use strict';
-  if (!document.body.classList.contains('quick-mode') || !window.LkaChatContext) return;
+  if (!window.LkaChatContext) return;
+  var quick = document.body.classList.contains('quick-mode');
+  if (!quick && !document.body.classList.contains('work-mode')) return;
   var chat = window.LkaChatContext, host = window.LkaMatterHost;
   var controller = null, owner = '', draft = null, busy = false, loading = false, error = '', notice = '', epoch = 0;
   var opened = false, lastFocus = null;
@@ -98,12 +100,12 @@
   chat.refreshQuickSettings = refresh;
   chat.updateQuickSettings = update;
 
-  // Browser quick windows share the same settings state and save path as JavaFX.
+  // Workbench and browser quick windows share the settings/save path with JavaFX.
   var panel = document.createElement('section'); panel.id = 'quickSettings'; panel.className = 'qs-panel'; panel.hidden = true;
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', '对话设置');
   panel.innerHTML = '<header><div><h2>设置</h2><p id="qsScope"></p></div><button id="qsClose" class="qs-icon" type="button" aria-label="关闭设置">×</button></header>' +
     '<form id="qsForm"><div class="qs-field"><label for="qsModel">对话模型</label><div class="qs-model-row"><select id="qsModel"></select><button id="qsRefresh" type="button" class="qs-icon" aria-label="刷新模型列表" title="刷新模型列表">↻</button></div></div>' +
-    '<div class="qs-field"><label for="qsSafety">安全审查</label><select id="qsSafety"><option value="backend">跟随后端配置</option><option value="llm">模型审查</option><option value="manual">每次确认</option><option value="skip">请求自动通过</option></select><small>后端策略可要求更严格的审查。</small></div>' +
+    '<div class="qs-field"><label for="qsSafety">审批模式</label><select id="qsSafety"><option value="backend">跟随后端配置</option><option value="llm">模型审查</option><option value="manual">每次确认</option><option value="skip">请求自动通过</option></select><small>后端策略可要求更严格的审查。</small></div>' +
     '<label class="qs-switch"><span>实时显示回复</span><input id="qsStream" type="checkbox"></label><p class="qs-help">审查方式与回复显示用于后续对话。</p>' +
     '<p id="qsStatus" role="status" aria-live="polite"></p><button id="qsApply" type="submit">应用更改</button></form>';
   document.body.appendChild(panel);
@@ -119,22 +121,41 @@
     el('qsStatus').textContent = value.loading ? '正在读取设置…' : value.error || value.notice || '更改在应用后保存。';
     el('qsStatus').classList.toggle('qs-error', !!value.error);
   }
-  function close(focus) { opened = false; panel.hidden = true; if (focus && lastFocus) lastFocus.focus(); }
+  function close(focus) {
+    opened = false; panel.hidden = true; if (button) button.setAttribute('aria-expanded', 'false');
+    if (focus && lastFocus && !lastFocus.hidden) lastFocus.focus();
+  }
   function open() {
-    lastFocus = document.activeElement; opened = true; panel.hidden = false; publish(); refresh();
+    if (!quick && context().kind !== 'manager') return;
+    lastFocus = document.activeElement; opened = true; panel.hidden = false;
+    if (button) button.setAttribute('aria-expanded', 'true');
+    if (!quick && button) {
+      var anchor = button.getBoundingClientRect();
+      panel.style.top = Math.max(10, anchor.bottom + 10) + 'px';
+      panel.style.right = Math.max(10, innerWidth - anchor.right) + 'px';
+      panel.style.maxHeight = 'calc(100dvh - ' + (Math.max(10, anchor.bottom + 10) + 10) + 'px)';
+    }
+    publish(); refresh();
     el('qsClose').focus();
   }
-  var button = el('toggleSettingsButton');
+  var button = quick ? el('toggleSettingsButton') : document.createElement('button');
+  if (!quick) {
+    button.id = 'assistantSettingsButton'; button.type = 'button'; button.className = 'icon-button';
+    el('toggleSettingsButton').before(button);
+  }
+  function syncEntry() { if (!quick) button.hidden = context().kind !== 'manager'; }
+  syncEntry();
   if (button) {
     button.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 3-.7 2.6-2 .9L4 6l-2 3 2 2v2l-2 2 2 3 2.3-.5 2 .9L9 21h6l.7-2.6 2-.9 2.3.5 2-3-2-2v-2l2-2-2-3-2.3.5-2-.9L15 3Z"/><circle cx="12" cy="12" r="3"/></svg>';
-    button.setAttribute('aria-label', '对话设置'); button.setAttribute('aria-controls', 'quickSettings'); button.title = '对话设置';
+    button.setAttribute('aria-label', quick ? '对话设置' : '真理设置'); button.setAttribute('aria-controls', 'quickSettings');
+    button.setAttribute('aria-expanded', 'false'); button.title = quick ? '对话设置' : '真理设置';
     button.addEventListener('click', function (event) { event.stopImmediatePropagation(); opened ? close(true) : open(); }, true);
   }
   el('qsClose').addEventListener('click', function () { close(true); });
   el('qsRefresh').addEventListener('click', function () { refresh(true); });
   el('qsForm').addEventListener('submit', function (event) { event.preventDefault(); update({ modelValue: el('qsModel').value, safetyMode: el('qsSafety').value, stream: el('qsStream').checked }); });
   panel.addEventListener('change', function () { owner = context().sessionId; draft = { modelValue: el('qsModel').value, safetyMode: el('qsSafety').value, stream: el('qsStream').checked }; });
-  document.addEventListener('pointerdown', function (event) { if (opened && !panel.contains(event.target) && !button.contains(event.target)) close(false); });
+  document.addEventListener('pointerdown', function (event) { if (opened && !panel.contains(event.target) && (!button || !button.contains(event.target))) close(false); });
   document.addEventListener('keydown', function (event) {
     if (!opened) return;
     if (event.key === 'Escape') { event.stopPropagation(); close(true); }
@@ -145,8 +166,11 @@
       else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first.focus(); }
     }
   });
+  window.addEventListener('resize', function () { if (!quick && opened) close(false); });
   window.addEventListener('lka-session-context', function () {
+    syncEntry();
     if (owner === context().sessionId) return;
+    if (!quick) close(false);
     ++epoch; owner = context().sessionId; controller = null; draft = null; busy = loading = false; error = notice = '';
     publish(); if (opened || window.petBridge && typeof window.petBridge.setQuickSettingsState === 'function') refresh();
   });

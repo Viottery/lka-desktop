@@ -23,6 +23,7 @@
     "test:manager-chat": "node tests/frontend_manager_chat_smoke.cjs",
     "test:quick-assistant": "node tests/frontend_quick_assistant_smoke.cjs",
     "test:quick-assistant-panel": "node tests/frontend_quick_assistant_panel_smoke.cjs",
+    "test:approvals": "node tests/frontend_approval_latency_smoke.cjs",
     "test:quick-settings": "node tests/frontend_quick_settings_smoke.cjs",
     "test:conversation-position": "node tests/conversation_position_test.cjs",
     "test:conversation-continuity": "node tests/frontend_conversation_continuity_smoke.cjs",

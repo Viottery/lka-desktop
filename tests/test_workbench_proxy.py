@@ -53,6 +53,30 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
                                   base_url="http://" + host) as client:
                 return await client.request(method, "/workbench/" + path, headers=headers, json=payload, content=content)
 
+    async def test_verification_context_is_built_once_off_the_event_loop(self):
+        import asyncio
+        import ssl
+        import threading
+        from app.api.routes import workbench_proxy
+
+        main_thread = threading.get_ident()
+        context = ssl.create_default_context()
+        threads = []
+        def build(**kwargs):
+            self.assertFalse(kwargs["trust_env"])
+            threads.append(threading.get_ident())
+            return context
+        with patch.object(workbench_proxy, "_tls_context", None), patch.object(
+                workbench_proxy.httpx, "create_ssl_context", side_effect=build) as create:
+            # Concurrent requests share one initialization; verification stays on.
+            contexts = await asyncio.gather(*(asyncio.to_thread(workbench_proxy._verified_context) for _ in range(6)))
+            self.assertTrue(all(value is context for value in contexts))
+            await self.request()
+            self.assertEqual(create.call_count, 1)
+            self.assertNotEqual(threads[0], main_thread)
+            self.assertTrue(context.check_hostname)
+            self.assertEqual(context.verify_mode, ssl.CERT_REQUIRED)
+
     async def test_loopback_list_forwards_path_query_bodyless_and_strips_browser_credentials(self):
         response = await self.request(headers={"Authorization": "Bearer browser-secret",
                                                 "Cookie": "session=browser-secret",

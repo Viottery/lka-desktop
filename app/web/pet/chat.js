@@ -138,6 +138,7 @@
   var approvalActionInFlight = false;
   var approvalQueueNotice = "";
   var approvalQueuePollTimer = null;
+  var approvalQueueEpoch = 0, approvalQueueRenderKey = "";
   var multiAgentCommandInFlight = {};
   var pendingContinuationCommands = {};
   var activeSessionId = "";
@@ -3322,6 +3323,11 @@
 
   function renderApprovalQueue() {
     if (!approvalQueueStatus) return;
+    // Background revalidation must not replace the focused button or disable
+    // a known pending item. The backend still validates FIFO on every decision.
+    var renderKey = JSON.stringify([pendingSafetyReviews, approvalQueueReady, approvalActionInFlight, approvalQueueNotice]);
+    if (approvalQueueRenderKey === renderKey) return;
+    approvalQueueRenderKey = renderKey;
     approvalQueueStatus.textContent = "";
     approvalQueueStatus.setAttribute("role", "dialog");
     approvalQueueStatus.setAttribute("aria-modal", "true");
@@ -3373,7 +3379,7 @@
         var button = document.createElement("button");
         button.type = "button";
         button.textContent = decision === "approve" ? "允许当前项" : "拒绝当前项";
-        button.disabled = !approvalQueueReady || approvalQueueRequestInFlight || approvalActionInFlight;
+        button.disabled = !approvalQueueReady || approvalActionInFlight;
         button.addEventListener("click", function () {
           decideHeadSafetyReview(head, decision);
         });
@@ -3395,13 +3401,14 @@
       return;
     }
     approvalQueueRequestInFlight = true;
-    renderApprovalQueue();
+    var epoch = approvalQueueEpoch;
     try {
       var response = await fetch(backendBaseUrl + "/agent/safety-reviews", {
         headers: { Accept: "application/json" }
       });
       if (!response.ok) throw new Error("HTTP " + response.status);
       var result = await response.json();
+      if (epoch !== approvalQueueEpoch) return;
       var reviews = Array.isArray(result && result.reviews) ? result.reviews : [];
       pendingSafetyReviews = reviews.filter(function (review) {
         return review && safeText(review.review_id).trim() && review.status === "pending";
@@ -3409,6 +3416,7 @@
       approvalQueueReady = true;
       if (!approvalActionInFlight) approvalQueueNotice = "";
     } catch (error) {
+      if (epoch !== approvalQueueEpoch) return;
       var wasReady = approvalQueueReady;
       approvalQueueReady = false;
       approvalQueueNotice = wasReady && pendingSafetyReviews.length
@@ -3429,7 +3437,8 @@
     var head = pendingSafetyReviews[0];
     if (!review || !head || review.review_id !== head.review_id || approvalActionInFlight || !approvalQueueReady) return;
     approvalActionInFlight = true;
-    approvalQueueNotice = "正在提交当前队列项…";
+    ++approvalQueueEpoch;
+    approvalQueueNotice = "正在提交…";
     renderApprovalQueue();
     try {
       var response = await fetch(backendBaseUrl + "/agent/safety-reviews/" + encodeURIComponent(head.review_id) + "/decision", {
@@ -3438,17 +3447,24 @@
         body: JSON.stringify({ decision: decision, reason: "用户通过 Agent 审批队列决定", decided_by: "user" })
       });
       if (response.status === 409) {
+        ++approvalQueueEpoch; approvalQueueReady = false;
         approvalQueueNotice = "队列顺序已变化，已重新读取当前首项。";
         await refreshSafetyReviewQueue();
         renderApprovalQueue();
         return;
       }
       if (!response.ok) throw new Error("HTTP " + response.status);
+      // Commit the acknowledged item locally without waiting for another GET.
+      // Fence snapshots started before the acknowledgement so it cannot return.
+      ++approvalQueueEpoch;
+      pendingSafetyReviews = pendingSafetyReviews.filter(function (item) { return item.review_id !== head.review_id; });
       approvalQueueNotice = "";
-      await refreshSafetyReviewQueue();
+      renderApprovalQueue();
+      refreshSafetyReviewQueue();
       setRunStatus(decision === "approve" ? "审批已通过，Agent 将继续执行。" : "审批已拒绝，Agent 将收到拒绝结果。");
     } catch (error) {
       var failureNotice = "审批提交失败：" + safeText(error.message);
+      ++approvalQueueEpoch; approvalQueueReady = false;
       await refreshSafetyReviewQueue();
       approvalQueueNotice = failureNotice;
       renderApprovalQueue();
