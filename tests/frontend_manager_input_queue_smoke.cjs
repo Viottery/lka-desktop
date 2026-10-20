@@ -22,6 +22,7 @@ function finish(run,status,answer) {
 }
 const server = http.createServer(async(req,res)=>{
  const route=new URL(req.url,'http://fixture').pathname;
+ if(route==='/__quiet-font'&&fs.existsSync('/mnt/c/Windows/Fonts/msyh.ttc')){res.writeHead(200,{'content-type':'font/collection'});return fs.createReadStream('/mnt/c/Windows/Fonts/msyh.ttc').pipe(res);}
  const file=path.resolve(ROOT,'.'+route);
  if(file.startsWith(ROOT+path.sep)&&fs.existsSync(file)&&fs.statSync(file).isFile()){res.writeHead(200,{'content-type':route.endsWith('.js')?'text/javascript':route.endsWith('.css')?'text/css':'text/html'});return fs.createReadStream(file).pipe(res);}
  let raw='';for await(const chunk of req)raw+=chunk;let body={};try{body=JSON.parse(raw||'{}');}catch{}
@@ -74,7 +75,7 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   browser=await chromium.launch({headless:true,executablePath:process.env.CHROME_PATH||'/tmp/lka-playwright-browsers/chromium_headless_shell-1217/chrome-headless-shell-linux64/chrome-headless-shell',args:['--no-sandbox']});
   const context=await browser.newContext(),page=await context.newPage();page.on('pageerror',e=>errors.push(e.message));
   await page.goto(origin+'/chat.html?mode=work&assistant=global&backend='+encodeURIComponent(origin));
-  await page.locator('#inputQueueControls:not([hidden])').waitFor();await wait(()=>streams.has('root-1'));
+  await page.locator('#chatForm[data-input-mode=continuous]').waitFor();await wait(()=>streams.has('root-1'));
   event('root-1','llm_delta',{display_target:'assistant_answer',delta:'原任务仍在生成'});
   await page.locator('#messages').filter({hasText:'原任务仍在生成'}).waitFor();
   // Attachment preparation and POST ordering do not lock the next text send.
@@ -95,6 +96,7 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   assert.deepEqual(posts[0].body.attachment_ids,['att_0123456789abcdef0123456789abcdef']);assert.deepEqual(posts[1].body.attachment_ids,[]);
   assert.equal(requests.filter(r=>r.route==='/agent/runs/root-1/stream').length,1,'enqueue never replaces existing SSE subscription');
   assert(!requests.some(r=>r.route==='/agent/turn/stream'),'no direct turn injection');
+  assert.equal(await page.locator('#inputQueueControls,.input-queue-status').count(),0,'normal conversation has no queue bar or receipt labels');
   await page.evaluate(()=>LkaChatContext.refreshConversation());assert.equal(await page.locator('.message.user').filter({hasText:'带附件排队'}).count(),1,'durable message ID replaces optimistic bubble');
   // The next root is discovered after completion, and durable history has one answer.
   // root-1 completes and the backend activates root-2 while this same tab is
@@ -115,11 +117,11 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await page.locator('.message.assistant').filter({hasText:'原任务已完成'}).waitFor();assert.equal(await page.locator('.message.assistant').filter({hasText:'原任务已完成'}).count(),1);
   // Failed execution pauses the FIFO; resuming follows the backend's new root.
   receipts[1].status='failed';activeRun=null;paused=true;runStatuses.set('root-2','failed');finish('root-2','failed');
-  await page.getByRole('button',{name:'继续处理队列'}).waitFor();await page.getByRole('button',{name:'继续处理队列'}).click();await wait(()=>streams.has('root-3'));runStatuses.set('root-3','running');
+  const priorDraft=await page.locator('#questionInput').inputValue();await page.locator('#questionInput').fill('');await page.getByRole('button',{name:'继续处理消息',exact:true}).waitFor();await page.getByRole('button',{name:'继续处理消息',exact:true}).click();await page.locator('#questionInput').fill(priorDraft);await wait(()=>streams.has('root-3'));runStatuses.set('root-3','running');
   assert(requests.some(r=>r.route.endsWith('/inputs/resume')&&r.method==='POST'));
   // A rejected submission preserves later drafts and blocks later local sends.
   failNext=true;await page.locator('#questionInput').fill('需要重试');await page.locator('#sendButton').click();
-  await page.locator('[data-input-status=submission_failed]').waitFor();const failedPost=requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').at(-1);
+  await page.locator('[data-input-status=submission_failed]').waitFor();assert.equal(await page.getByRole('button',{name:'重试发送',exact:true}).innerText(),'','send failure keeps an icon-only retry');const failedPost=requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').at(-1);
   assert.equal(await page.locator('#questionInput').inputValue(),'需要重试');
   await page.locator('#questionInput').fill('失败后的后续消息');await page.locator('#sendButton').click();await page.locator('#questionInput').fill('重试期间的新草稿');
   await new Promise(r=>setTimeout(r,150));assert.equal(requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').at(-1),failedPost,'later submission stays local until earlier retry');
@@ -130,16 +132,16 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   dropNext=true;await page.locator('#questionInput').fill('回执丢失');await page.locator('#sendButton').click();await wait(()=>receipts.length===6);
   await wait(()=>requests.some(r=>r.route.endsWith('/inputs')&&r.method==='POST'&&r.body.user_input==='回执丢失'));
   await page.locator('.message.user').filter({hasText:'回执丢失'}).waitFor();
-  await page.waitForFunction(()=>document.querySelectorAll('.message.user .input-queue-status[data-input-status=queued]').length>=3);
+  await page.waitForFunction(()=>document.querySelectorAll('.message.user[data-input-status=queued]').length>=3);
   await page.evaluate(()=>LkaChatContext.refreshConversation());assert.equal(await page.locator('.message.user').filter({hasText:'回执丢失'}).count(),1);
   // Reload retains stable IDs, reconnects the active root and preserves drafts.
-  await page.locator('#questionInput').fill('刷新保留草稿');await page.reload();await page.locator('#inputQueueControls:not([hidden])').waitFor();
+  await page.locator('#questionInput').fill('刷新保留草稿');await page.reload();await page.locator('#chatForm[data-input-mode=continuous]').waitFor();
   assert.equal(await page.locator('#questionInput').inputValue(),'刷新保留草稿');assert.equal(await page.locator('.message.user').filter({hasText:'回执丢失'}).count(),1);
   // An unconfirmed local POST remains retryable after a full reload.
   holdPost={};await page.locator('#questionInput').fill('重开后核对发送');await page.locator('#sendButton').click();await wait(()=>holdPost.release);
   const missingPost=requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').at(-1),lateReply=holdPost.release;holdPost=null;
   await page.locator('#questionInput').fill('重开前的第二条');await page.locator('#sendButton').click();
-  await page.reload();await page.locator('#inputQueueControls:not([hidden])').waitFor();
+  await page.reload();await page.locator('#chatForm[data-input-mode=continuous]').waitFor();
   await page.getByRole('button',{name:'重试发送'}).first().waitFor();
   const reloadBefore=requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').length;
   await page.locator('#questionInput').fill('重开后的第三条');await page.locator('#sendButton').click();
@@ -151,8 +153,8 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await wait(()=>history.some(m=>m.content==='重开后的第三条'));
   // An older GET resolving after resume cannot restore the old active root.
   receipts.find(r=>r.run_id==='root-3').status='failed';activeRun=null;paused=true;runStatuses.set('root-3','failed');finish('root-3','failed');
-  await page.getByRole('button',{name:'继续处理队列'}).waitFor();holdGet={};await wait(()=>holdGet.release);
-  const releaseOldGet=holdGet.release;holdGet=null;await page.getByRole('button',{name:'继续处理队列'}).click();await wait(()=>streams.has('root-4'));releaseOldGet();
+  await page.locator('#questionInput').fill('');await page.getByRole('button',{name:'继续处理消息',exact:true}).waitFor();holdGet={};await wait(()=>holdGet.release);
+  const releaseOldGet=holdGet.release;holdGet=null;await page.getByRole('button',{name:'继续处理消息',exact:true}).click();await wait(()=>streams.has('root-4'));releaseOldGet();
   await new Promise(r=>setTimeout(r,100));assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('agentic-rag-pet-chat-sessions-v4')).find(s=>s.kind==='manager').multiAgentRunId),'root-4');
   // A root first observed while ordinary is already paused: fetch its durable
   // status, do not open an SSE that will never advance, and render resume.
@@ -170,7 +172,7 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   assert.equal(await page.locator('#sendButton').getAttribute('aria-label'),'继续任务');
   assert.equal(requests.filter(r=>r.route==='/agent/runs/root-5/stream').length,0,'returning to paused root still does not subscribe');
   const ordinary=await context.newPage();await ordinary.goto(origin+'/chat.html?mode=work&session_id=ordinary&backend='+encodeURIComponent(origin));await ordinary.waitForFunction(()=>window.LkaChatContext?.get().sessionId==='ordinary');
-  assert.equal(await ordinary.locator('#inputQueueControls').isHidden(),true);assert(!requests.some(r=>r.route==='/sessions/ordinary/inputs'));
+  assert.equal(await ordinary.locator('#inputQueueControls').count(),0);assert(!requests.some(r=>r.route==='/sessions/ordinary/inputs'));
   // The native quick composer's generic bridge uses the same queued path.
   await page.close();await ordinary.close();
   const nativeContext=await browser.newContext(),native=await nativeContext.newPage();native.on('pageerror',e=>errors.push(e.message));
@@ -178,7 +180,7 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await native.locator('#runStatus').filter({hasText:'暂时无法核对消息队列'}).waitFor();
   await native.locator('#questionInput').fill('探测期间的草稿');assert.equal(await native.locator('#sendButton').isDisabled(),true,'unknown capability never falls back after transient failure');
   assert.equal(await native.evaluate(()=>__petChatSubmitText('探测期间的草稿')),false);
-  await native.locator('#inputQueueControls:not([hidden])').waitFor();
+  await native.locator('#chatForm[data-input-mode=continuous]').waitFor();
   await native.evaluate(()=>{
    window.nativeRequests=[];window.nativeDraft='';window.petBridge={setComposerBusy(){},setComposerAction(){},setQuickPanelHeight(){},focusComposer(){},setComposerDraft:text=>window.nativeDraft=text,
     requestMemory:raw=>{const r=JSON.parse(raw);nativeRequests.push(r);fetch(LkaChatContext.get().backend+r.path,{method:r.method,headers:{'Content-Type':'application/json'},body:r.body||undefined}).then(async response=>__lkaMemoryBridgeReceive(r.id,response.status,await response.text()));}};
@@ -196,7 +198,7 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await native.close();
   for(let i=0;i<24;i++)history.push({message_id:'old-'+i,role:'agent',content:'较早的阅读内容 '+i+'。'.repeat(18),payload:{}});
   const freshContext=await browser.newContext(),fresh=await freshContext.newPage();
-  await fresh.goto(origin+'/chat.html?assistant=quick&backend='+encodeURIComponent(origin));await fresh.locator('#inputQueueControls:not([hidden])').waitFor();
+  await fresh.goto(origin+'/chat.html?assistant=quick&backend='+encodeURIComponent(origin));await fresh.locator('#chatForm[data-input-mode=continuous]').waitFor();
   assert.equal(await fresh.locator('.message.user').filter({hasText:'[File input]'}).count(),1,'attachment-only history survives without local optimistic cache');
   assert.equal(await fresh.locator('.message.assistant').filter({hasText:'原任务已完成'}).count(),1,'actual backend agent-role answer survives fresh-cache history reload');
   // Native quick users may be reading old history when they explicitly send.
@@ -211,6 +213,31 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await wait(()=>history.some(m=>m.content==='从旧阅读位置发送'));
   const latestQuestion=fresh.locator('.message.user').filter({hasText:'从旧阅读位置发送'}).last();await latestQuestion.waitFor();
   await fresh.waitForFunction(()=>{const box=document.querySelector('#messages'),row=Array.from(box.querySelectorAll('.message.user')).find(x=>x.textContent.includes('从旧阅读位置发送'));if(!row)return false;const b=box.getBoundingClientRect(),r=row.getBoundingClientRect();return r.bottom>b.top&&r.top<b.bottom;});
+  // A persisted empty paused queue is completely quiet. If unfinished
+  // messages later need explicit recovery, reuse the existing composer icon.
+  await freshContext.close();receipts=[];history=[];activeRun=null;paused=true;
+  const quietContext=await browser.newContext({viewport:{width:1280,height:800}}),quiet=await quietContext.newPage();quiet.on('pageerror',e=>errors.push(e.message));
+  await quiet.goto(origin+'/chat.html?mode=work&assistant=global&backend='+encodeURIComponent(origin));
+  await quiet.locator('#chatForm[data-input-mode=continuous]').waitFor();
+  assert.equal(await quiet.locator('#inputQueueControls,.input-queue-status').count(),0,'paused empty queue creates no visible status UI');
+  assert.equal(await quiet.locator('#sendButton').getAttribute('data-action'),'send','nothing to resume when queue is empty');
+  const resumedBefore=requests.filter(r=>r.route.endsWith('/inputs/resume')).length;
+  receipts.push({input_id:'quiet-input',client_message_id:'quiet-input',message_id:'quiet-message',sequence:1,status:'queued',run_id:null});
+  history.push({message_id:'quiet-message',role:'user',content:'仍需继续的消息',payload:{client_message_id:'quiet-input'}});
+  await quiet.getByRole('button',{name:'继续处理消息',exact:true}).waitFor();
+  assert.equal(await quiet.locator('#sendButton').innerText(),'','continuation uses the existing icon');
+  assert.equal(await quiet.locator('#inputQueueControls,.input-queue-status').count(),0);
+  assert.equal(requests.filter(r=>r.route.endsWith('/inputs/resume')).length,resumedBefore,'no automatic continuation');
+  await quiet.waitForTimeout(300);await quiet.getByRole('button',{name:'继续处理消息',exact:true}).click();
+  await wait(()=>requests.filter(r=>r.route.endsWith('/inputs/resume')).length===resumedBefore+1);
+  const screenshots=process.env.QUIET_CHAT_SCREENSHOTS;
+  if(screenshots){
+   fs.mkdirSync(screenshots,{recursive:true});
+   if(fs.existsSync('/mnt/c/Windows/Fonts/msyh.ttc')){await quiet.addStyleTag({content:'@font-face{font-family:QuietChinese;src:url("'+origin+'/__quiet-font")}body,body *{font-family:QuietChinese,sans-serif!important}'});await quiet.evaluate(()=>document.fonts.ready);}
+   await quiet.screenshot({path:path.join(screenshots,'desktop.png')});await quiet.setViewportSize({width:390,height:844});
+   if(await quiet.evaluate(()=>document.getElementById('chatShell').classList.contains('sidebar-open')))await quiet.locator('#toggleSidebarButton').click();
+   await quiet.screenshot({path:path.join(screenshots,'mobile.png')});
+  }
   assert.deepEqual(errors,[]);console.log('PASS manager input queue: attachment FIFO, continuous sending, unchanged SSE, optimistic/durable reconciliation, next-root recovery, paused resume, stable retry, held failed sends, lost receipts, reload and ordinary gate');
  } finally { if(browser)await browser.close();for(const res of streams.values())res.destroy();await new Promise(r=>server.close(r)); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -1172,8 +1172,7 @@ body.mobile-workbench .session-mini.session-icon-action, body.mobile-workbench .
   flex-basis: 44px; width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0;
 }
 
-.input-queue-controls { display: flex; align-items: center; gap: 8px; padding: 2px 16px; font-size: 12px; color: var(--muted, #76787c); }
-.input-queue-controls[hidden] { display: none; }
-.input-queue-status { margin: 6px 0 0; font-size: 12px; opacity: .75; }
-.input-queue-status[data-input-status="submission_failed"], .input-queue-status[data-input-status="failed"] { color: #ae4037; }
-body.quick-mode .input-queue-controls { order: 1; flex: 0 0 auto; padding: 3px 8px; }
+.message-retry { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; min-width: 28px; min-height: 28px; margin-top: 6px; padding: 0; border: 0; border-radius: 50%; color: var(--muted); background: transparent; cursor: pointer; }
+.message-retry:hover { color: var(--teal, #1d6866); }
+.message-retry:focus-visible { outline: 2px solid var(--teal, #1d6866); outline-offset: 2px; }
+body.mobile-workbench .message-retry { width: 44px; height: 44px; }

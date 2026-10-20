@@ -168,7 +168,7 @@
     }
     restoringScroll = false;
     var toolbarHeight = document.body.classList.contains("native-composer") ? 0 : 28;
-    var desired = toolbarHeight + conversationHeight + visibleHeight(document.getElementById("quickAssistantBar")) + visibleHeight(document.getElementById("quickAssistantAttention")) + visibleHeight(document.getElementById("inputQueueControls")) + visibleHeight(document.getElementById("composerAttachments")) + visibleHeight(document.getElementById("attachmentNotice")) + visibleHeight(status) + visibleHeight(document.getElementById("backendOfflinePanel"));
+    var desired = toolbarHeight + conversationHeight + visibleHeight(document.getElementById("quickAssistantBar")) + visibleHeight(document.getElementById("quickAssistantAttention")) + visibleHeight(document.getElementById("composerAttachments")) + visibleHeight(document.getElementById("attachmentNotice")) + visibleHeight(status) + visibleHeight(document.getElementById("backendOfflinePanel"));
     if (!picker.hidden || shell.classList.contains("sidebar-open")) desired = Math.max(desired, 310);
     if (document.body.classList.contains("workspace-picker-open")) desired = Math.max(desired, 510);
     if (waiting) desired = Math.max(310, toolbarHeight + conversationHeight + visibleHeight(document.getElementById("approvalQueueStatus")) + 12);

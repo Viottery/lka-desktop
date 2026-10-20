@@ -1482,15 +1482,12 @@
     }
     if (role === "user") window.LkaImageComposer.renderHistory(bubble, details && details.attachments, sessionId);
     if (role === "user" && details && details.inputStatus) {
-      var receipt = document.createElement("p");
-      receipt.className = "input-queue-status";
-      receipt.setAttribute("data-input-status", details.inputStatus);
-      receipt.textContent = ({ submitting: "正在发送…", queued: "已排队", running: "处理中", completed: "已完成", failed: "处理失败", cancelled: "已取消", submission_failed: "发送未确认，请重试" })[details.inputStatus] || details.inputStatus;
-      if (details.inputError) receipt.textContent += " · " + details.inputError;
-      bubble.appendChild(receipt);
+      article.dataset.inputStatus = details.inputStatus;
       if (details.inputStatus === "submission_failed" && details.queueRequest) {
         var retryInput = document.createElement("button");
-        retryInput.type = "button"; retryInput.className = "retry-task-button"; retryInput.textContent = "重试发送";
+        retryInput.type = "button"; retryInput.className = "message-retry";
+        retryInput.title = "重试发送"; retryInput.setAttribute("aria-label", "重试发送");
+        retryInput.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M20 7v5h-5M20 12a8 8 0 1 0-2.3 5.7"/></svg>';
         retryInput.addEventListener("click", function () { retryQueuedInput(sessionId, details.clientId); });
         bubble.appendChild(retryInput);
       }
@@ -2660,17 +2657,21 @@
     resizeWorkbenchComposer();
     var session = getActiveSession(), status = session && session.runControlStatus || "";
     var activeRun = !!(session && session.multiAgentRunId && status && !isTerminalRunStatus(status));
-    var controlState = session && session.resumePending ? "resuming" : session && session.pauseRequested ? "pause_requested" : status || "idle";
+    var inputState = isManagerSession(session) ? queueState(session) : null;
+    var controlState = (session && session.resumePending || inputState && inputState.resuming) ? "resuming" : session && session.pauseRequested ? "pause_requested" : status || "idle";
     if (sendButton.getAttribute("data-run-state") !== controlState) sendButton.setAttribute("data-run-state", controlState);
     var draft = document.body.classList.contains("native-composer") ? session && readDraft(session.id) || "" : input.value;
     if (typeof overrideDraft === "string") draft = overrideDraft;
     var hasContent = !!safeText(draft).trim() || !!(session && window.LkaImageComposer.hasAttachments(session.id));
     var continuous = queueEnabled(session);
-    var action = hasContent || !activeRun ? "send" : status === "paused" ? "resume" : "pause";
+    var resumeInputs = !hasContent && inputQueueNeedsResume(session);
+    var action = resumeInputs ? "resume" : hasContent || !activeRun ? "send" : status === "paused" ? "resume" : "pause";
+    if (form && form.dataset.inputMode !== (continuous ? "continuous" : "single")) form.dataset.inputMode = continuous ? "continuous" : "single";
     var locked = backendOffline || !managerSessionReady || !!(session && (runCommandInFlight[session.id] || session.resumePending || session.pauseRequested));
     var running = activeRun && status !== "paused";
     if (continuous && action === "send") locked = backendOffline || !managerSessionReady;
-    var inputCapability = isManagerSession(session) ? queueState(session) : null;
+    if (resumeInputs && inputState.resuming) locked = true;
+    var inputCapability = inputState;
     if (action === "send" && inputCapability && !inputCapability.supported && !inputCapability.unsupported) locked = true;
     var disabled = locked || action === "send" && !continuous && (running || !!pendingState || !activeRun && composerRequestedBusy);
     if (sendButton.getAttribute("data-action") !== action) {
@@ -2683,7 +2684,7 @@
       action === "pause" ? "暂停任务，当前步骤结束后生效" : action === "resume" ? "从暂停的位置继续" :
       status === "paused" ? "发送新指令，打断并替换暂停的任务" : running ? "任务运行中，可先写好下一条消息" : "发送任务";
     if (continuous && action === "send") { label = "发送消息"; title = activeRun ? "发送后排队，当前任务结束后自动处理" : "发送消息"; }
-    renderInputQueueControls(session);
+    if (resumeInputs) { label = "继续处理消息"; title = "继续处理未完成的消息"; }
     if (sendButton.title !== title) sendButton.title = title;
     if (sendButton.getAttribute("aria-label") !== label) sendButton.setAttribute("aria-label", label);
     sendButton.disabled = !!disabled;
@@ -4311,27 +4312,28 @@
       persistSessions(); return true;
     } catch (ignored) { return false; }
   }
-  function renderInputQueueControls(session) {
-    var node = document.querySelector("#inputQueueControls");
-    if (!node && runStatus) {
-      node = document.createElement("div"); node.id = "inputQueueControls"; node.className = "input-queue-controls";
-      node.setAttribute("role", "status"); node.setAttribute("aria-live", "polite"); runStatus.insertAdjacentElement("afterend", node);
-    }
-    if (!node) return;
-    node.hidden = !queueEnabled(session);
-    if (node.hidden) return;
+  function inputQueueNeedsResume(session) {
+    if (!queueEnabled(session)) return false;
     var state = queueState(session);
-    node.textContent = "未完成 " + (state.pending_count || 0) + " 条" + (state.paused ? " · 队列已暂停" : "");
-    if (state.paused) {
-      var resume = document.createElement("button"); resume.type = "button"; resume.className = "retry-task-button";
-      resume.textContent = "继续处理队列"; resume.disabled = !!state.resuming;
-      resume.addEventListener("click", async function () {
-        if (state.resuming) return; state.resuming = true; renderInputQueueControls(session);
-        var epoch = (state.requestEpoch || 0) + 1; state.requestEpoch = epoch;
-        try { var snapshot = await inputQueueRequest(session, "POST", {}, "/resume"); if (!validInputSnapshot(snapshot)) throw new Error("队列状态无效"); if (managerInputQueues[session.id] === state) await applyInputSnapshot(session, snapshot, epoch); }
-        catch (error) { if (activeSessionId === session.id) setRunStatus("继续队列失败：" + error.message, "error"); }
-        finally { state.resuming = false; renderInputQueueControls(getActiveSession()); }
-      }); node.appendChild(resume);
+    return !!state.paused && state.pending_count > 0
+      && (!session.multiAgentRunId || isTerminalRunStatus(session.runControlStatus));
+  }
+  async function resumeManagerInputs(session) {
+    if (!inputQueueNeedsResume(session)) return;
+    var state = queueState(session);
+    if (state.resuming) return;
+    state.resuming = true;
+    if (activeSessionId === session.id) renderRunControls();
+    var epoch = (state.requestEpoch || 0) + 1; state.requestEpoch = epoch;
+    try {
+      var snapshot = await inputQueueRequest(session, "POST", {}, "/resume");
+      if (!validInputSnapshot(snapshot)) throw new Error("消息状态无效");
+      if (managerInputQueues[session.id] === state) await applyInputSnapshot(session, snapshot, epoch);
+    } catch (error) {
+      if (managerInputQueues[session.id] === state && activeSessionId === session.id) setRunStatus("暂时无法继续，请重试", "error");
+    } finally {
+      state.resuming = false;
+      if (activeSessionId === session.id) renderRunControls();
     }
   }
   function clearAcknowledgedQueueDraft(session, message) {
@@ -4501,7 +4503,7 @@
           message.queueRestoredDraft = later.trim() === text ? later : text + (text && later ? "\n" : "") + later;
           writeDraft(session.id, message.queueRestoredDraft);
           window.LkaImageComposer.restore(selected, session.id);
-          if (activeSessionId === session.id) { showDraftForSession(session); setRunStatus("消息发送未确认，后续消息等待重试；内容已保留：" + error.message, "error"); }
+          if (activeSessionId === session.id) { showDraftForSession(session); setRunStatus("发送失败，可点击消息旁的图标重试", "error"); }
           renderSubmission(); break;
         }
       }
@@ -4814,6 +4816,10 @@
     renderRunControls(safeText(question));
     if (backendOffline || sendButton.disabled) return false;
     var action = sendButton.getAttribute("data-action");
+    if (action === "resume" && inputQueueNeedsResume(getActiveSession())) {
+      resumeManagerInputs(getActiveSession());
+      return false;
+    }
     if (action === "pause" || action === "resume") {
       controlActiveRun(action === "pause" ? "interrupt" : "resume");
       return false; // Native host preserves its draft for control actions.
