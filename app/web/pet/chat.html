@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-store">
   <title>理事所 · 工作台</title>
   <link rel="icon" type="image/png" href="./assets/ursus-student-emblem.png">
-  <link rel="stylesheet" href="./chat.css?v=20261020-run-history">
+  <link rel="stylesheet" href="./chat.css?v=20261020-compact-approval">
   <link rel="stylesheet" href="./markdown.css?v=20260930-markdown">
   <link rel="stylesheet" href="./memory.css?v=20261002-projects">
   <link rel="stylesheet" href="./matters.css?v=20261019-layout">
@@ -62,7 +62,6 @@
       <div class="run-status" id="runStatus" role="status" aria-live="polite">就绪</div>
       <details class="run-timeline" id="runTimeline" hidden><summary id="runTimelineSummary">任务进度</summary><ol id="runTimelineList"></ol></details>
       <section class="multi-agent-status" id="multiAgentStatus" aria-live="polite" hidden></section>
-      <section class="approval-queue" id="approvalQueueStatus" aria-live="polite" role="dialog" aria-modal="true" aria-label="安全审查确认" hidden></section>
 
       <section class="backend-offline" id="backendOfflinePanel" hidden>
         <h3>后端服务未连接</h3>
@@ -74,6 +73,7 @@
 
       <section id="composerAttachments" class="composer-attachments" aria-label="待发送的附件" hidden></section>
       <p id="attachmentNotice" class="attachment-notice" role="status" aria-live="polite" hidden></p>
+      <section class="approval-queue" id="approvalQueueStatus" aria-live="polite" role="region" aria-label="待确认操作" hidden></section>
       <form class="composer" id="chatForm">
         <div class="composer-upload">
           <button id="uploadAttachmentButton" type="button" aria-label="上传图片或文件" title="上传图片或文件" aria-haspopup="true" aria-expanded="false" aria-controls="attachmentMenu"><svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" aria-hidden="true"><path d="M12 5v14M5 12h14"/></svg></button>
@@ -166,7 +166,7 @@
   <script src="./mobile.js?v=20261008-mobile-camera-label"></script>
   <script src="./image-composer.js?v=20261020-compat"></script>
   <script src="./conversation-position.js?v=20261020-reading"></script>
-  <script src="./chat.js?v=20261020-run-history"></script>
+  <script src="./chat.js?v=20261020-compact-approval"></script>
   <script src="./memory.js?v=20261020-compat"></script>
   <script src="./matters-host.js?v=20261020-compat"></script>
   <script src="./global-assistant.js?v=20261020-reading"></script>
@@ -174,7 +174,7 @@
   <script src="./matter-calendar.js?v=20261019-layout"></script>
   <script src="./matters.js?v=20261020-manager"></script>
   <script src="./projects.js?v=20261007-assistant-message"></script>
-  <script src="./quick-chat.js?v=20261020-run-history"></script>
+  <script src="./quick-chat.js?v=20261020-compact-approval"></script>
   <script src="./quick-assistant.js?v=20261020-reading"></script>
   <script src="./quick-settings.js?v=20261020-workbench-settings"></script>
   <script src="./qq-reader.js?v=20261005"></script>

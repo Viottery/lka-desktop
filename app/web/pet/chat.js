@@ -3347,75 +3347,73 @@
 
   function renderApprovalQueue() {
     if (!approvalQueueStatus) return;
-    // Background revalidation must not replace the focused button or disable
-    // a known pending item. The backend still validates FIFO on every decision.
-    var renderKey = JSON.stringify([pendingSafetyReviews, approvalQueueReady, approvalActionInFlight, approvalQueueNotice]);
+    var head = pendingSafetyReviews[0];
+    var origin = head && (getSessionById(head.session_id) || historyItems.find(function (item) { return item.id === head.session_id; }));
+    var sourceName = origin ? isManagerSession(origin) ? "真理" : origin.title || "独立任务" : "其他会话";
+    // Preserve focus and disclosure state while background snapshots revalidate.
+    var renderKey = JSON.stringify([pendingSafetyReviews, sourceName, approvalQueueReady, approvalActionInFlight, approvalQueueNotice]);
     if (approvalQueueRenderKey === renderKey) return;
     approvalQueueRenderKey = renderKey;
+    var oldDetails = approvalQueueStatus.querySelector(".approval-details");
+    var expanded = oldDetails && oldDetails.open && head && approvalQueueStatus.dataset.reviewId === head.review_id;
     approvalQueueStatus.textContent = "";
-    approvalQueueStatus.setAttribute("role", "dialog");
-    approvalQueueStatus.setAttribute("aria-modal", "true");
-    approvalQueueStatus.setAttribute("aria-label", "安全审查确认");
-    if (!pendingSafetyReviews.length && !approvalQueueNotice) {
-      approvalQueueStatus.hidden = true;
-      return;
-    }
-    approvalQueueStatus.hidden = false;
+    approvalQueueStatus.setAttribute("role", "region");
+    approvalQueueStatus.removeAttribute("aria-modal");
+    approvalQueueStatus.setAttribute("aria-label", "待确认操作");
+    approvalQueueStatus.dataset.reviewId = head ? head.review_id : "";
+    approvalQueueStatus.hidden = !head && !approvalQueueNotice;
+    if (approvalQueueStatus.hidden) return;
 
-    var heading = document.createElement("strong");
-    heading.textContent = "安全审批队列 · " + pendingSafetyReviews.length + " 项待处理";
-    approvalQueueStatus.appendChild(heading);
-    if (pendingSafetyReviews.length) {
-      var head = pendingSafetyReviews[0];
-      var summary = document.createElement("p");
-      summary.textContent = "当前第 1 项：" + safeText(head.tool_name || "工具调用")
-        + " · 风险 " + safeText(head.tool_risk || "unknown");
-      approvalQueueStatus.appendChild(summary);
-      if (head.reason) {
-        var reason = document.createElement("p");
-        reason.textContent = truncateText(safeText(head.reason), 260);
-        approvalQueueStatus.appendChild(reason);
-      }
-      if (Array.isArray(head.side_effects) && head.side_effects.length) {
-        var effects = document.createElement("p");
-        effects.textContent = "可能影响：" + head.side_effects.map(safeText).join("、");
-        approvalQueueStatus.appendChild(effects);
-      }
-      if (Array.isArray(head.input_fields) && head.input_fields.length) {
-        var fields = document.createElement("p");
-        fields.textContent = "涉及字段：" + head.input_fields.map(safeText).join("、");
-        approvalQueueStatus.appendChild(fields);
-      }
-      if (Array.isArray(head.workspace_access) && head.workspace_access.length) {
-        var paths = document.createElement("p");
-        paths.textContent = "申请访问工作区外路径：" + head.workspace_access.map(safeText).join("、");
-        approvalQueueStatus.appendChild(paths);
-      }
-      if (head.child_run_id) {
-        var child = document.createElement("p");
-        child.textContent = "子 Agent：" + safeText(head.child_run_id);
-        approvalQueueStatus.appendChild(child);
-      }
+    function textNode(tag, className, text) { var node = document.createElement(tag); node.className = className; node.textContent = text; return node; }
+    if (head) {
+      var content = document.createElement("div"); content.className = "approval-content";
+      var header = document.createElement("div"); header.className = "approval-heading";
+      var mark = document.createElement("span"); mark.className = "approval-mark"; mark.setAttribute("aria-hidden", "true");
+      mark.innerHTML = '<svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6Z"/><path d="M12 8v5m0 3h.01"/></svg>';
+      header.appendChild(mark); header.appendChild(textNode("strong", "approval-title", "需要确认"));
+      var source = textNode("span", "approval-source", "来自 " + sourceName); source.title = source.textContent; header.appendChild(source);
+      var risk = textNode("span", "approval-risk", { low: "低风险", medium: "中风险", high: "高风险", critical: "高风险" }[head.tool_risk] || "风险待评估");
+      risk.dataset.risk = safeText(head.tool_risk); header.appendChild(risk); content.appendChild(header);
+      var tool = textNode("p", "approval-tool", safeText(head.tool_name || "工具调用")); tool.title = tool.textContent; content.appendChild(tool);
+      var paths = Array.isArray(head.workspace_access) ? head.workspace_access : [];
+      var preview = paths.length ? "访问工作区外：" + safeText(paths[0]) + (paths.length > 1 ? "（另 " + (paths.length - 1) + " 处）" : "") : safeText(head.reason || "此操作需要你的允许后才能继续。");
+      var reason = textNode("p", "approval-reason", preview); reason.title = preview; content.appendChild(reason);
+      approvalQueueStatus.appendChild(content);
 
-      var actions = document.createElement("div");
-      actions.className = "approval-queue-actions";
+      var actions = document.createElement("div"); actions.className = "approval-queue-actions";
       ["approve", "reject"].forEach(function (decision) {
-        var button = document.createElement("button");
-        button.type = "button";
-        button.textContent = decision === "approve" ? "允许当前项" : "拒绝当前项";
+        var button = document.createElement("button"); button.type = "button";
+        button.className = decision === "approve" ? "approval-allow" : "approval-deny";
+        button.textContent = decision === "approve" ? "允许" : "拒绝";
+        button.setAttribute("aria-label", decision === "approve" ? "允许当前项" : "拒绝当前项");
         button.disabled = !approvalQueueReady || approvalActionInFlight;
-        button.addEventListener("click", function () {
-          decideHeadSafetyReview(head, decision);
-        });
+        button.addEventListener("click", function () { decideHeadSafetyReview(head, decision); });
         actions.appendChild(button);
       });
       approvalQueueStatus.appendChild(actions);
+
+      var details = document.createElement("details"); details.className = "approval-details"; details.open = !!expanded;
+      details.appendChild(textNode("summary", "", "操作详情"));
+      var facts = document.createElement("dl"); facts.className = "approval-facts";
+      function fact(label, value) { if (!value) return; facts.appendChild(textNode("dt", "", label)); facts.appendChild(textNode("dd", "", value)); }
+      fact("原因", safeText(head.reason));
+      fact("可能影响", Array.isArray(head.side_effects) ? head.side_effects.map(safeText).join("、") : "");
+      fact("涉及字段", Array.isArray(head.input_fields) ? head.input_fields.map(safeText).join("、") : "");
+      fact("工作区外路径", paths.map(safeText).join("\n"));
+      if (head.child_run_id) fact("执行方式", "子任务");
+      details.appendChild(facts);
+      if (head.session_id) {
+        var link = document.createElement("a"), url = new URL("./chat.html", location.href); url.search = "";
+        url.searchParams.set("mode", "work"); url.searchParams.set("session_id", head.session_id); url.searchParams.set("backend", backendBaseUrl);
+        if (head.run_id) url.searchParams.set("run_id", head.run_id);
+        link.href = url.href; link.target = "_blank"; link.rel = "noopener"; link.className = "approval-origin-link"; link.textContent = "查看来源会话";
+        details.appendChild(link);
+      }
+      approvalQueueStatus.appendChild(details);
     }
     if (approvalQueueNotice) {
-      var notice = document.createElement("p");
-      notice.className = "approval-queue-notice";
-      notice.textContent = safeText(approvalQueueNotice);
-      approvalQueueStatus.appendChild(notice);
+      var notice = textNode("p", "approval-queue-notice", safeText(approvalQueueNotice));
+      notice.setAttribute("role", "status"); approvalQueueStatus.appendChild(notice);
     }
   }
 

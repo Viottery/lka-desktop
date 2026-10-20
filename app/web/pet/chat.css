@@ -165,7 +165,7 @@ body {
 .approval-queue-actions { display: flex; gap: 6px; margin-top: 6px; }
 .approval-queue-actions button { min-height: 26px; padding: 3px 9px; border: 1px solid rgba(242, 211, 156, .36); border-radius: 6px; color: var(--text); background: rgba(255,255,255,.08); cursor: pointer; }
 .approval-queue-actions button:disabled { opacity: .55; cursor: wait; }
-.approval-queue-notice { color: #ffe0a3 !important; }
+.approval-queue-notice { color: #8a7148; }
 
 .session-sidebar {
   position: absolute;
@@ -767,22 +767,48 @@ body.work-mode .run-status:not(:empty) { padding-inline: 30px; }
 /* JavaFX uses a native textarea so Windows IME tracks the real caret. */
 body.native-composer .composer { display: none; }
 
-/* Keep required manual reviews visible even in the compact pet panel. */
+/* A quiet cross-session review sits directly above the composer. */
 .approval-queue:not([hidden]) {
-  position: absolute; z-index: 30; left: 50%; top: 50%;
-  width: min(calc(100% - 24px), 480px); max-height: min(75vh, 540px);
-  overflow-y: auto; transform: translate(-50%, -50%);
-  padding: 20px; border: 1px solid #d8b979; border-radius: 18px;
-  background: #fffdf8; box-shadow: 0 0 0 100vmax #0b252b99, 0 24px 70px #09272c55;
-  color: #203940; font-size: 13px; line-height: 1.55;
+  position: relative; flex: 0 0 auto; display: grid; grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center; column-gap: 18px; width: min(760px, calc(100% - 48px)); min-height: 0;
+  max-height: min(38vh, 300px); overflow-y: auto; align-self: center; margin: 0 0 6px; padding: 12px 14px 8px;
+  border: 1px solid #dbe5de; border-left: 3px solid #b18b50; border-radius: 12px;
+  background: #fcfdfb; box-shadow: 0 3px 12px #203c3a08; color: #203c3a; font-size: 12px; line-height: 1.5;
 }
 .approval-queue[hidden] { display: none !important; }
-.approval-queue strong { display: block; font-size: 16px; margin-bottom: 10px; }
-.approval-queue p { margin: 9px 0; overflow-wrap: anywhere; }
-.approval-queue-actions { margin-top: 16px; gap: 9px; }
-.approval-queue-actions button { flex: 1; min-height: 39px; border-radius: 9px; font-size: 12px; font-weight: 650; }
-.approval-queue-actions button:first-child { background: #1d6866; border-color: #1d6866; color: #fff; }
-.approval-queue-actions button:last-child { background: #fff8f4; border-color: #e1b4a6; color: #984f41; }
+.approval-content { min-width: 0; }
+.approval-heading { display: flex; align-items: center; gap: 7px; min-width: 0; }
+.approval-mark { display: inline-flex; flex: 0 0 16px; color: #a3834d; }
+.approval-title { flex: none; font-size: 11px; font-weight: 600; }
+.approval-source { min-width: 0; color: #7b8e84; font-size: 10px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.approval-risk { flex: none; margin-left: auto; color: #829087; font-size: 10px; }
+.approval-risk[data-risk="high"], .approval-risk[data-risk="critical"] { color: #a34f39; }
+.approval-queue .approval-tool { color: #203c3a; margin: 7px 0 2px; font-size: 12px; font-weight: 550; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.approval-queue .approval-reason { margin: 0; color: #6a8072; font-size: 11px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow-wrap: anywhere; }
+.approval-queue-actions { display: flex; gap: 7px; align-items: center; margin: 0; }
+.approval-queue-actions button { flex: none; min-height: 34px; min-width: 54px; padding: 6px 13px; border: 1px solid transparent; border-radius: 8px; font: inherit; font-size: 12px; font-weight: 500; cursor: pointer; }
+.approval-queue-actions .approval-allow { background: #53756f; border-color: #53756f; color: #fff; }
+.approval-queue-actions .approval-allow:hover { background: #3d635b; border-color: #3d635b; }
+.approval-queue-actions .approval-deny { background: transparent; border-color: #dce5de; color: #6f7971; }
+.approval-queue-actions .approval-deny:hover { background: #f8eeea; border-color: #e3c9bf; color: #984f41; }
+.approval-queue-actions button:disabled { opacity: .5; cursor: default; }
+.approval-details { grid-column: 1 / -1; margin-top: 5px; min-width: 0; }
+.approval-details > summary { width: fit-content; padding: 3px 0; color: #7b8e84; font-size: 10px; cursor: pointer; }
+.approval-facts { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 7px 12px; margin: 9px 0; padding-top: 10px; border-top: 1px solid #e5ebe5; font-size: 11px; }
+.approval-facts dt { color: #829087; }
+.approval-facts dd { margin: 0; color: #4d6657; white-space: pre-wrap; overflow-wrap: anywhere; }
+.approval-origin-link { display: inline-block; padding-block: 4px; color: #53756f; font-size: 11px; }
+.approval-queue .approval-queue-notice { grid-column: 1 / -1; margin: 5px 0 0; color: #8a7148; font-size: 11px; overflow-wrap: anywhere; }
+body.mobile-workbench .approval-queue:not([hidden]) { width: min(760px, calc(100% - 24px)); }
+@media (max-width: 600px) {
+  .approval-queue:not([hidden]) { width: calc(100% - 24px); column-gap: 10px; padding: 10px 12px 7px; }
+  .approval-content { grid-column: 1 / -1; }
+  .approval-details { grid-column: 1; grid-row: 2; align-self: center; margin-top: 4px; }
+  .approval-details[open] { grid-column: 1 / -1; grid-row: 3; }
+  .approval-details > summary { min-height: 36px; display: flex; align-items: center; }
+  .approval-queue-actions { grid-column: 2; grid-row: 2; margin-top: 4px; }
+  .approval-queue-actions button { min-height: 44px; min-width: 58px; }
+}
 
 /* Long-work interaction surfaces share the same ink, paper and teal hierarchy. */
 .continue-button { border-color: #b8d7d3; color: var(--teal-dark); background: #ecf6f4; }
@@ -960,7 +986,7 @@ body.quick-mode .sidebar-header { padding-bottom: 10px; }
 body.quick-mode .sidebar-tools { padding: 0 0 9px; }
 body.quick-mode .sidebar-footer { padding: 6px 0 0; }
 body.quick-mode .sidebar-backdrop { z-index: 21; background: #163b4433; }
-body.quick-mode .approval-queue:not([hidden]) { order: 2; position: relative; top: auto; left: auto; transform: none; width: auto; margin: 3px 8px 8px; max-height: 270px; padding: 12px; flex: 0 1 auto; box-shadow: 0 4px 14px #163b4412; }
+body.quick-mode .approval-queue:not([hidden]) { order: 2; width: calc(100% - 16px); margin: 3px 8px 7px; max-height: min(42vh, 260px); }
 body.quick-mode .backend-offline { order: 2; margin: 3px 8px 8px; padding: 11px; max-height: 170px; overflow-y: auto; font-size: 11px; }
 body.quick-mode .backend-offline h3 { font-size: 12px; margin: 0 0 5px; }
 .quick-project-picker { position: absolute; z-index: 23; top: 0; right: 7px; left: 7px; padding: 11px; max-height: calc(100% - 12px); display: flex; flex-direction: column; gap: 7px; border: 1px solid #d8dfd2; border-radius: 12px; background: #faf8f2; box-shadow: 0 8px 24px #163b4422; }

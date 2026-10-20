@@ -165,7 +165,7 @@
     var desired = toolbarHeight + conversationHeight + visibleHeight(document.getElementById("quickAssistantBar")) + visibleHeight(document.getElementById("quickAssistantAttention")) + visibleHeight(document.getElementById("composerAttachments")) + visibleHeight(document.getElementById("attachmentNotice")) + visibleHeight(status) + visibleHeight(document.getElementById("backendOfflinePanel"));
     if (!picker.hidden || shell.classList.contains("sidebar-open")) desired = Math.max(desired, 310);
     if (document.body.classList.contains("workspace-picker-open")) desired = Math.max(desired, 510);
-    if (waiting) desired = Math.max(310, toolbarHeight + conversationHeight + visibleHeight(document.getElementById("approvalQueueStatus")) + 12);
+    if (waiting) desired += visibleHeight(document.getElementById("approvalQueueStatus")) + 12;
     // Match native logical pixels and the DOM fallback; fractional measurements
     // must not keep sending equivalent preferred sizes to the host.
     desired = Math.ceil(desired);
