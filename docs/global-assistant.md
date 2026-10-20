@@ -18,10 +18,16 @@
 
 真理和普通会话分别记住最后阅读的消息与偏移，按后端地址、会话和工作台／快速窗口隔离保存。首次进入定位最新；上翻历史后，新消息、重绘或尺寸变化保留阅读位置，已经贴底时继续跟随最新。快速窗口发送新问题时从提问开头阅读，长回复增长不会强行拉到底。位置缓存在本机，上限100条，不保存消息正文；浏览器禁用存储时退化为当前页面内记忆。
 
+## 多终端连接
+
+多个已授权终端可以连接同一后端的默认真理，共用持久会话和消息历史。任务事件通过原运行的事件流读取，队列和跟进状态通过轮询核对；终端根据新取得的运行编号接续后续回复。
+不同终端发出的消息按后端受理顺序处理，界面显示已发送、排队和运行状态，不把受理回执当作完成结果。
+草稿和阅读位置保存在各浏览器本地，不跨设备同步；同一浏览器的同源窗口可能共用本地记录。
+
 ## 连续发送与排队
 
-支持消息队列的后端允许在真理回复期间继续发送消息。每条消息先保存到后端，
-页面显示排队或处理状态；当前轮结束后按顺序为下一条开启新轮。
+支持消息队列的后端允许在真理回复期间继续发送消息。收到后端回执后，
+页面显示已排队或处理状态；当前轮结束后按顺序为下一条开启新轮。发送未确认的消息可用原消息标识重试核对，避免重复入队。
 后发消息不注入当前运行。关闭窗口或刷新页面后，可重新读取消息状态并连接当前运行。
 暂停或等待审批／答复时，后续消息仍可排队；队列不能代替原操作的确认。
 运行失败或取消会暂停队列，点击继续处理后推进剩余消息，不自动重试失败请求。
@@ -42,12 +48,6 @@
 
 事项缓存升级到 v2，用户清单、日历和规划进度默认排除 internal 记录。完整同步仍保存 visibility 变更，使用户事项转为内部事项时能立即从个人视图移除。开启后端内部事项写入前必须升级相关前端。
 
-## 验证
-
-`npm run test:global-assistant` 使用本地合成 HTTP、管理会话与事件，验证管理开关和版本冲突、旧版/关闭/删除状态、草稿隔离、等待事件过期、游标推进、链接、同页切换以及桌面/窄屏布局。连接错误显示在主对话区域，可直接重试，侧栏仍可切回普通任务。测试不调用个人服务或模型。
-
-轻量入口的生命周期使用 `npm run test:quick-assistant`，身份栏、CAS和待处理提醒使用 `npm run test:quick-assistant-panel`。Java 最小宽度和重开行为使用 `gradlew.bat -p desktop-pet-java verifyPetQuickAssistant` 验证。管理会话与运行恢复专项使用 `npm run test:manager-chat`。同时运行 `npm run test:matter-store`、`test:matter-host`、`test:matters`；代理测试见 `tests/test_workbench_proxy.py`，Java 入口与桥接验证见 `PetMemoryBridgeCheck`。
-
 ## 快速窗口设置
 
 底栏的星形图标返回真理，加号图标创建独立任务；悬停可查看名称。齿轮打开对话设置，提供模型、安全审查和实时回复显示，并通过「应用更改」保存。真理模型单独保存到当前管理会话；独立任务的模型沿用共享默认设置。更改用于后续新运行，不打断当前任务。
@@ -56,6 +56,18 @@
 
 桌宠形态、自动动作、互动和大小位置设置收进「桌宠外观与行为」，默认折叠。
 
-阅读位置与连接连续性专项：`npm run test:conversation-position`、`npm run test:conversation-continuity`、`npm run test:assistant-lifecycle`。均使用合成页面／后端，覆盖刷新恢复、普通与管理会话切换、后台并发流及原生请求标识。
+## 验证入口
 
-连续消息队列专项：`npm run test:manager-input-queue`，覆盖附件顺序、稳定消息标识重试、后台连续运行、暂停队列、刷新恢复和快速窗口发送。
+浏览器回归使用合成后端与原生桥接替身，不调用个人服务或真实模型。
+
+| 行为 | npm scripts |
+| --- | --- |
+| 工作台与快速入口、身份校验及管理状态 | `test:global-assistant`、`test:quick-assistant`、`test:quick-assistant-panel`、`test:manager-chat` |
+| 连续消息、附件顺序、重试及后台后续运行 | `test:manager-input-queue` |
+| 阅读位置、切换复用与并发回复归属 | `test:conversation-position`、`test:conversation-continuity`、`test:assistant-lifecycle` |
+| 默认执行目录与消息来源过滤 | `test:manager-workspace`、`test:backend-messages` |
+| 模型与安全审查设置 | `test:quick-settings` |
+| 普通任务运行控制 | `test:run-controls`、`test:chat` |
+| 事项缓存、清单与日历 | `test:matter-store`、`test:matter-host`、`test:matters`、`test:matter-calendar` |
+
+用 `npm run <script>` 运行对应入口。Java 窗口与桥接使用 `verifyPetQuickAssistant`、`verifyPetMemoryBridge`、`verifyPetRunStream`；代理路由测试见 `tests/test_workbench_proxy.py`。环境与分发检查见[仓库交付说明](repository_delivery.md)。
