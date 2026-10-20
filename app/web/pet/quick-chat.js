@@ -94,13 +94,7 @@
       row.setAttribute("aria-label", row.classList.contains("user") ? "你的提问" : "真理的回复");
       var details = row.querySelector(".agent-run-details");
       if (details) {
-        var warning = details.querySelector(".agent-warning-list");
-        if (details.hidden !== !warning) details.hidden = !warning;
-        if (warning) {
-          if (!details.classList.contains("quick-warning-details")) details.classList.add("quick-warning-details");
-          var summary = details.querySelector("summary");
-          if (summary.textContent !== "需要留意") summary.textContent = "需要留意";
-        }
+        if (details.hidden) details.hidden = false;
       }
       Array.prototype.forEach.call(row.querySelectorAll(".markdown-body pre"), function (pre) {
         pre.tabIndex = 0; pre.setAttribute("aria-label", "代码，可滚动查看");

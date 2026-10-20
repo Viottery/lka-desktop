@@ -42,6 +42,7 @@
   var runTimelineSummary = document.querySelector("#runTimelineSummary");
   var runTimelineList = document.querySelector("#runTimelineList");
   var liveAnswers = Object.create(null), runProcesses = Object.create(null), timelineViewKey = "";
+  var historicalProcesses = new Map();
   var multiAgentStatus = document.querySelector("#multiAgentStatus");
   var approvalQueueStatus = document.querySelector("#approvalQueueStatus");
   var workspaceSummary = document.querySelector("#workspaceSummary");
@@ -454,6 +455,7 @@
       return {};
     }
     return {
+      runId: safeText(result.run_id).trim(),
       traceId: safeText(result.trace_id).trim(),
       logPath: safeText(result.log_path).trim(),
       selectedPackage: safeText(result.selected_package).trim(),
@@ -536,6 +538,7 @@
       pendingApproval: pendingApproval,
       progressEvents: normalizeProgressEvents(rawMessage.progressEvents || rawMessage.progress_events),
       verificationWarnings: normalizeVerificationWarnings(rawMessage.verificationWarnings || rawMessage.verification_warnings),
+      runId: safeText(rawMessage.runId || rawMessage.run_id).trim(),
       traceId: safeText(rawMessage.traceId || rawMessage.trace_id).trim(),
       logPath: safeText(rawMessage.logPath || rawMessage.log_path).trim(),
       attachments: window.LkaImageComposer.normalize(rawMessage.attachments),
@@ -1494,7 +1497,7 @@
       }
     }
     if (role === "assistant") {
-      appendAgentRunDetails(bubble, details || {});
+      appendAgentRunDetails(bubble, details || {}, sessionId);
     }
     if (role === "assistant" && pendingApproval && pendingApproval.status === "pending") {
       var approvalBox = document.createElement("div");
@@ -1542,18 +1545,19 @@
     return { article: article, body: body };
   }
 
-  function appendAgentRunDetails(bubble, details) {
+  function appendAgentRunDetails(bubble, details, sessionId) {
     if (!bubble || !details) {
       return;
     }
     var progressEvents = normalizeProgressEvents(details.progressEvents || details.progress_events);
     var warnings = normalizeVerificationWarnings(details.verificationWarnings || details.verification_warnings);
+    var runId = safeText(details.runId || details.run_id).trim();
     var traceId = safeText(details.traceId || details.trace_id).trim();
     var logPath = safeText(details.logPath || details.log_path).trim();
     var selectedPackage = safeText(details.selectedPackage || details.selected_package).trim();
     var initialPackage = safeText(details.initialPackage || details.initial_package).trim();
     var usedPackages = Array.isArray(details.usedPackages || details.used_packages) ? (details.usedPackages || details.used_packages).join(", ") : "";
-    if (!progressEvents.length && !warnings.length && !traceId && !logPath && !selectedPackage && !initialPackage && !usedPackages) {
+    if (!runId && !progressEvents.length && !warnings.length && !traceId && !logPath && !selectedPackage && !initialPackage && !usedPackages) {
       return;
     }
 
@@ -1563,21 +1567,39 @@
     summary.textContent = "运行过程";
     box.appendChild(summary);
 
-    if (traceId || selectedPackage || logPath) {
-      var meta = document.createElement("p");
-      meta.className = "agent-run-meta";
-      var parts = [];
-      if (initialPackage || selectedPackage) parts.push("起始包=" + (initialPackage || selectedPackage));
-      if (usedPackages) parts.push("已用=" + usedPackages);
-      if (traceId) {
-        parts.push("trace=" + traceId);
-      }
-      if (logPath) {
-        parts.push("log=" + logPath);
-      }
-      meta.textContent = parts.join(" | ");
-      box.appendChild(meta);
+    var processBody = document.createElement("div"); processBody.className = "run-history-content";
+    box.appendChild(processBody);
+    var loaded = false, loading = false;
+    async function load() {
+      if (!box.open || loaded || loading) return;
+      loading = true; processBody.textContent = "正在读取运行过程…";
+      try {
+        if (!runId && traceId && sessionId) runId = await findHistoricalRun(sessionId, traceId);
+        if (!runId) {
+          processBody.textContent = "这次运行没有保存可回看的事件。";
+          loaded = true; return;
+        }
+        box.dataset.runId = runId;
+        var scope = assistantCacheEpoch;
+        var process = await loadHistoricalProcess(runId);
+        if (scope !== assistantCacheEpoch || !box.isConnected) return;
+        processBody.textContent = "";
+        var entries = process.entries.filter(function (entry) { return entry.kind === "model" || entry.kind === "tool" || entry.kind === "review"; });
+        if (!entries.length) entries = process.entries;
+        if (entries.length) {
+          var list = document.createElement("ol"); list.className = "run-history-list";
+          entries.forEach(function (entry) { var row = document.createElement("li"); renderProcessEntry(row, entry); list.appendChild(row); });
+          processBody.appendChild(list);
+          var fallback = box.querySelector(".agent-progress-list"); if (fallback) fallback.hidden = true;
+        } else processBody.textContent = "这次运行没有保存可回看的事件。";
+        loaded = process.complete;
+      } catch (error) {
+        processBody.textContent = error.status === 404 ? "这次运行的事件记录已不可用。" : "暂时无法读取运行过程。";
+        var retry = document.createElement("button"); retry.type = "button"; retry.className = "text-action"; retry.textContent = "重试";
+        retry.addEventListener("click", load); processBody.appendChild(retry);
+      } finally { loading = false; }
     }
+    box.addEventListener("toggle", load);
 
     if (progressEvents.length) {
       var list = document.createElement("ol");
@@ -2626,6 +2648,7 @@
       pendingApproval: pendingApproval,
       progressEvents: normalizeProgressEvents(options && options.progressEvents),
       verificationWarnings: normalizeVerificationWarnings(options && options.verificationWarnings),
+      runId: safeText(options && options.runId).trim(),
       traceId: safeText(options && options.traceId).trim(),
       logPath: safeText(options && options.logPath).trim(),
       attachments: window.LkaImageComposer.normalize(options && options.attachments),
@@ -2874,6 +2897,7 @@
         clientId: safeText(entry.payload && entry.payload.client_message_id),
         progressEvents: details.progressEvents || [],
         verificationWarnings: details.verificationWarnings || [],
+        runId: details.runId || "",
         traceId: details.traceId || "",
         logPath: details.logPath || "",
         selectedPackage: details.selectedPackage || "",
@@ -3688,11 +3712,12 @@
     if (status === "completed") {
       window.__petChatReceive({
         session_id: session.id,
+        run_id: session.multiAgentRunId,
         answer: turnState.answer || "本轮完成。",
         progress_events: turnState.events
       });
     } else if (status) {
-      window.__petChatReceive({ session_id: session.id, error: "Agent run " + status + "." });
+      window.__petChatReceive({ session_id: session.id, run_id: session.multiAgentRunId, error: "Agent run " + status + "." });
     }
   }
 
@@ -3885,12 +3910,18 @@
   }
 
   function recordProcessOutput(session, eventName, data) {
-    var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
     var runId = safeText(data && data.run_id || session.multiAgentRunId);
     var process = runProcesses[session.id];
     if (!process || (runId && process.runId !== runId)) {
       process = runProcesses[session.id] = { runId: runId, sequence: 0, entries: [], serial: 0 };
     }
+    var changed = appendProcessEvent(process, eventName, data);
+    process.entries = process.entries.slice(-100);
+    return changed;
+  }
+
+  function appendProcessEvent(process, eventName, data) {
+    var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
     var sequence = Number(data && data.sequence) || 0;
     if (sequence && sequence <= process.sequence) return false;
     if (sequence) process.sequence = sequence;
@@ -3931,8 +3962,48 @@
       if (!message) return false;
       entries.push({ key: ++process.serial, type: eventName, kind: "event", message: message, at: processEventTime(data) });
     } else return false;
-    process.entries = entries.slice(-100);
+    process.entries = entries;
     return true;
+  }
+
+  async function findHistoricalRun(sessionId, traceId) {
+    var offset = 0;
+    while (true) {
+      var response = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(sessionId) + "/runs?limit=100&offset=" + offset);
+      if (!response.ok) throw new Error("运行索引暂不可用");
+      var result = await response.json();
+      var runs = Array.isArray(result.runs) ? result.runs : [];
+      var match = runs.find(function (run) { return run.session_id === sessionId && run.trace_id === traceId; });
+      if (match) return safeText(match.run_id);
+      if (result.next_offset == null) return "";
+      if (!Number.isSafeInteger(result.next_offset) || result.next_offset <= offset) throw new Error("运行索引无效");
+      offset = result.next_offset;
+    }
+  }
+
+  async function loadHistoricalProcess(runId) {
+    var key = backendBaseUrl + "/" + runId, cached = historicalProcesses.get(key);
+    if (cached) return cached;
+    var request = (async function () {
+      var response = await fetch(backendBaseUrl + "/agent/runs/" + encodeURIComponent(runId) + "/events?after_sequence=0", { headers: { Accept: "application/json" } });
+      if (!response.ok) { var failure = new Error("运行事件暂不可用"); failure.status = response.status; throw failure; }
+      var result = await response.json();
+      if (result.run_id !== runId || !Array.isArray(result.events)) throw new Error("运行事件身份不匹配");
+      var process = { runId: runId, sequence: 0, entries: [], serial: 0, complete: false };
+      result.events.slice().sort(function (a, b) { return a.sequence - b.sequence; }).forEach(function (event) {
+        if (event.run_id !== runId) return;
+        appendProcessEvent(process, event.type, event);
+        if (["run_completed", "run_failed", "run_cancelled", "run_timed_out"].indexOf(event.type) >= 0) process.complete = true;
+      });
+      return process;
+    })();
+    historicalProcesses.set(key, request);
+    while (historicalProcesses.size > 12) historicalProcesses.delete(historicalProcesses.keys().next().value);
+    try {
+      var process = await request;
+      if (!process.complete && historicalProcesses.get(key) === request) historicalProcesses.delete(key);
+      return process;
+    } catch (error) { if (historicalProcesses.get(key) === request) historicalProcesses.delete(key); throw error; }
   }
 
   function renderProcessEntry(item, entry) {
@@ -4687,10 +4758,10 @@
             if (streamState.review && activeSessionId === session.id) showSafetyReview(streamState.review, streamState);
             if (streamState.viaBridge && eventName === "run_cancelled") return;
             if (streamState.viaBridge && ["run_failed", "run_timed_out"].indexOf(eventName) >= 0) {
-              window.__petChatReceive({ session_id: session.id, error: eventMessage(data) || "Agent run " + streamState.terminalStatus }); return;
+              window.__petChatReceive({ session_id: session.id, run_id: session.multiAgentRunId, error: eventMessage(data) || "Agent run " + streamState.terminalStatus }); return;
             }
             if (streamState.viaBridge && eventName === "run_completed") {
-              window.__petChatReceive({ session_id: session.id,
+              window.__petChatReceive({ session_id: session.id, run_id: session.multiAgentRunId,
                 answer: streamState.answer || "本轮没有生成可显示的回答。", progress_events: streamState.events });
               reconcileCompletedSession(session.id);
             }
@@ -4718,7 +4789,7 @@
             return;
           }
           if (streamState.terminalStatus && streamState.terminalStatus !== "completed") {
-            window.__petChatReceive({ session_id: session.id, error: "Agent run " + streamState.terminalStatus + "." });
+            window.__petChatReceive({ session_id: session.id, run_id: session.multiAgentRunId, error: "Agent run " + streamState.terminalStatus + "." });
             return;
           }
         } catch (streamError) {
@@ -4741,7 +4812,7 @@
           }
           throw streamError;
         }
-        window.__petChatReceive({ session_id: session.id,
+        window.__petChatReceive({ session_id: session.id, run_id: session.multiAgentRunId,
           answer: streamState.answer || "本轮没有生成可显示的回答。", progress_events: streamState.events });
         reconcileCompletedSession(session.id);
       }
@@ -4945,7 +5016,7 @@
       if (isBackendOfflineError(result.error)) {
         setBackendOfflineState(true, "后端未连接：" + result.error);
       }
-      addMessageToSession(session, "assistant", errorText, true);
+      addMessageToSession(session, "assistant", errorText, true, { runId: safeText(result.run_id) });
     } else {
       if (hasAnswerText) recordRunEvent(session, "run_completed", {});
       setBackendOfflineState(false, "");
@@ -4955,7 +5026,9 @@
       } else {
         var answerText = safeText(extractAnswer(result)).trim();
         if (answerText) {
-          addMessageToSession(session, "assistant", answerText, false, buildAgentRunDetails(result));
+          var runDetails = buildAgentRunDetails(result);
+          runDetails.runId = runDetails.runId || (!runDetails.traceId ? session.multiAgentRunId : "") || "";
+          addMessageToSession(session, "assistant", answerText, false, runDetails);
         } else if (!session.messages || !session.messages.length) {
           // Use backend history only as a bootstrap fallback for an empty local session.
           if (backendMessages.length) {
@@ -5371,7 +5444,7 @@
   }
   window.addEventListener("lka-matter-auth-changed", function () {
     assistantCacheEpoch++; assistantPreparation = null; quickAssistantManager = null; preparedAssistantId = "";
-    managerWorkspaceRequests = Object.create(null);
+    managerWorkspaceRequests = Object.create(null); historicalProcesses.clear();
     activeAgentTurnGeneration++;
     if (activeAgentEventController) activeAgentEventController.abort();
     activeAgentEventController = null; pendingState = null;

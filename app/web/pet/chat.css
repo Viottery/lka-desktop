@@ -915,7 +915,7 @@ body.quick-mode .message.user .message-content { margin: 0; color: #738477; font
 body.quick-mode .message.assistant .bubble { background: transparent; }
 body.quick-mode .message.error .bubble { padding: 8px 10px; border: 1px solid #e5c4b4; border-radius: 9px; background: #fff2ea; color: #965b48; }
 body.quick-mode .message.error .message-content { margin: 0; font-size: 12px; }
-body.quick-mode .agent-run-details:not(.quick-warning-details), body.quick-mode .agent-run-details[hidden] { display: none; }
+body.quick-mode .agent-run-details[hidden] { display: none; }
 body.quick-mode .quick-warning-details { margin-top: 8px; padding: 5px 8px; border-color: #e5d7b7; background: #faf3e3; font-size: 11px; }
 body.quick-mode .quick-warning-details .agent-run-meta,
 body.quick-mode .quick-warning-details .agent-progress-list { display: none; }
@@ -1176,3 +1176,9 @@ body.mobile-workbench .session-mini.session-icon-action, body.mobile-workbench .
 .message-retry:hover { color: var(--teal, #1d6866); }
 .message-retry:focus-visible { outline: 2px solid var(--teal, #1d6866); outline-offset: 2px; }
 body.mobile-workbench .message-retry { width: 44px; height: 44px; }
+
+/* Completed turns reuse the same model text and tool rows as live SSE. */
+.run-history-list { list-style: none; margin: 12px 0 0; padding: 0 0 0 12px; border-left: 1px solid #dce5d8; }
+.run-history-list .run-process-entry { padding: 5px 0 9px; }
+.run-history-content { color: var(--muted); margin-top: 8px; }
+body.quick-mode .agent-run-details { display: block; background: transparent; border: 0; border-top: 1px solid #dce5d8; border-radius: 0; padding: 8px 0 0; }

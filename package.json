@@ -10,6 +10,7 @@
     "test:matter-calendar": "node tests/matter_calendar_test.cjs",
     "test:sessions": "node tests/frontend_session_lifecycle_smoke.cjs",
     "test:chat": "node tests/frontend_chat_turn_smoke.cjs",
+    "test:run-history": "node tests/frontend_run_history_smoke.cjs",
     "test:run-controls": "node tests/frontend_run_controls_smoke.cjs",
     "test:messages": "node tests/frontend_messages_smoke.cjs",
     "test:message-refresh": "node tests/frontend_message_refresh_smoke.cjs",
