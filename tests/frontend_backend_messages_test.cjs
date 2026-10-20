@@ -19,7 +19,7 @@ const context = {
 };
 context.getSessionById=id=>context.sessions.find(s=>s.id===id);
 vm.createContext(context);
-for (const name of ['normalizeBackendRole','normalizeBackendMessages','sessionFromBackendDetail','sessionMessageSnapshot','queueEnabled','mergeBackendSession']) vm.runInContext(implementation(name),context);
+for (const name of ['truncateText','usefulBackendTitle','backendManagerInstruction','normalizeBackendRole','normalizeBackendMessages','sessionFromBackendDetail','sessionMessageSnapshot','queueEnabled','reconcileHistoryReset','mergeBackendSession']) vm.runInContext(implementation(name),context);
 const records = [
  {role:'user',content:'输入类型：background；这是用户讨论的文字'},
  ...['manager','background','task_report','forwarded'].map(origin=>({role:'tool',content:'private '+origin,payload:{input_envelope:{origin}}})),
@@ -29,6 +29,22 @@ const records = [
  {role:'user',content:'user input',payload:{input_origin:'user'}},
  {role:'system',content:'system prompt'}
 ];
+const taskText='在工作区创建 `hello.py`。\n\n```python\nprint("hello world")\n```';
+const task={message_id:'instruction-1',role:'tool',content:'发送方：管理会话 secret-source；调试信息 secret-debug',payload:{input_origin:'manager',trace_id:'private-trace',input_envelope:{origin:'manager',purpose:taskText,input_id:'secret-id',debug_info:{private:'secret-debug'}}}};
+const projected=context.normalizeBackendMessages([task]);
+assert.equal(projected[0].role,'assistant');
+assert.equal(projected[0].messageKind,'manager_instruction');
+assert.equal(projected[0].messageId,'instruction-1');
+assert.equal(projected[0].text,taskText,'multiline task and code survive without the envelope');
+assert.equal(projected[0].traceId,'','instructions do not acquire execution details');
+assert(!JSON.stringify(projected).includes('secret-'));
+for (const origin of ['background','task_report','user']) {
+ const conflicting={...task,payload:{...task.payload,input_origin:origin}};
+ assert(!context.normalizeBackendMessages([conflicting]).some(m=>m.messageKind==='manager_instruction'),'only explicit manager inputs become instructions');
+}
+assert.equal(context.normalizeBackendMessages([{...task,payload:{input_envelope:{origin:'manager',purpose:{invalid:true}}}}]).length,0);
+assert.equal(context.normalizeBackendMessages([{...task,payload:{input_envelope:{origin:'manager',purpose:'   '}}}]).length,0);
+assert.equal(context.normalizeBackendMessages([{...task,role:'assistant',content:'real answer'}])[0].text,'real answer');
 const normalized=context.normalizeBackendMessages(records);
 assert.deepEqual(Array.from(normalized,m=>m.text),[records[0].content,'legacy visible tool','actual delivery','user input']);
 assert.equal(normalized[2].traceId,'trace-delivery');

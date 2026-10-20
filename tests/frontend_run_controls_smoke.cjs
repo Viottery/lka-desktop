@@ -216,6 +216,7 @@ async function testLayout(browser, origin, layout) {
   assert.equal(await page.locator('#sendButton').isDisabled(), false);
 
   if (layout === 'work') {
+    if (!(await page.locator('#contextRail').isVisible())) await page.locator('#toggleSettingsButton').click();
     await page.locator('#settingsTabButton').click();
     await page.locator('#streamToggle').uncheck();
     await page.waitForTimeout(60);

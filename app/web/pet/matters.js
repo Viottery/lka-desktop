@@ -4,7 +4,7 @@
   var host = window.LkaMatterHost, store, rows = [], snapshot = {}, drafts = new Map(), activeDraft = null;
   var calendarScroll = {}, pendingWrites = new Set(), undoAction = null, noticeTimer, dateTarget = null, previousFocus, lastListScope, lastCalendarAnchor, lastTray, layoutFrame, monthCompact = innerHeight < 760;
   var state = { view: 'today', plan: null, directory: null, selected: null, query: '', calendarMode: 'week', anchor: day(new Date()) };
-  var opened = false, started = false, adding = false, directories = null, assistantLoaded = false, assistantManager = null, storeNamespace = null;
+  var openRequest = 0, opened = false, started = false, adding = false, directories = null, assistantLoaded = false, assistantManager = null, storeNamespace = null;
   var statusNames = { open: '待办', in_progress: '进行中', waiting: '等待中', done: '已完成', cancelled: '已取消' };
   var views = { inbox: ['收集箱', '先记下来，再决定何时做。'], today: ['今天', '把注意力留给今天要推进的事。'], upcoming: ['接下来', '看看未来的安排，给行动留出时间。'], calendar: ['日历', '把行动放进时间里。'], projects: ['项目规划', '从目标走到下一步。'], all: ['全部任务', '查看所有尚未完成的行动。'], history: ['完成记录', '已经完成和取消的事项。'] };
   var paths = { inbox: 'M4 4h16v16H4z M4 13h5l2 3h2l2-3h5', today: 'M5 5h14v15H5z M8 3v4m8-4v4M5 10h14m-10 4h3v3H9z', upcoming: 'M5 5h14v15H5z M8 3v4m8-4v4M5 10h14m-6 3 3 3-3 3m-5-3h8', calendar: 'M4 5h16v15H4z M8 3v4m8-4v4M4 10h16m-12 4h1m3 0h1m3 0h1m-9 3h1m3 0h1', projects: 'M4 7h6l2 2h8v11H4z M4 7V4h6l2 3h8v2', all: 'M9 6h11M9 12h11M9 18h11M4 6h.1M4 12h.1M4 18h.1', history: 'M4 11a8 8 0 1 1 2 7M4 5v6h6m2-4v5l3 2', plus: 'M12 5v14M5 12h14', date: 'M4 5h16v15H4z M8 3v4m8-4v4M4 10h16', search: 'M16 16l5 5M18 10a8 8 0 1 1-16 0 8 8 0 0 1 16 0', back: 'm10 6-6 6 6 6M4 12h16', spark: 'm12 3 2.5 6.5L21 12l-6.5 2.5L12 21l-2.5-6.5L3 12l6.5-2.5z', sync: 'M20 7v5h-5M4 17v-5h5M5 8a7 7 0 0 1 12-3l3 3M4 16l3 3a7 7 0 0 0 12-3', close: 'm6 6 12 12M18 6 6 18' };
@@ -20,10 +20,14 @@
   var backdrop = document.createElement('button'); backdrop.className = 'mw-pane-backdrop'; backdrop.hidden = true; backdrop.setAttribute('aria-label','收起侧面板'); backdrop.onclick = function () { if (!el('matterEditor').hidden) el('matterEditorClose').click(); else el('matterAssistantClose').click(); }; root.appendChild(backdrop);
   function updateLayout() {
     var pane = !el('matterEditor').hidden ? 'editor' : !el('matterAssistant').hidden ? 'assistant' : 'none';
-    var rail = innerWidth <= 650 || state.navCollapsed === true || state.navCollapsed == null && (innerWidth < 780 || pane !== 'none' && innerWidth < 1200);
+    // Docked beside the workbench sidebar, the view is narrower than the window; size against the view itself.
+    var viewWidth = root.getBoundingClientRect().width || innerWidth;
+    var rail = viewWidth <= 650 || state.navCollapsed === true || state.navCollapsed == null && (viewWidth < 780 || pane !== 'none' && viewWidth < 1200);
     root.dataset.pane = pane; root.dataset.nav = rail ? 'rail' : 'full';
+    // Below 900px of view width the detail pane overlays the list instead of taking a column.
+    root.dataset.paneOverlay = pane !== 'none' && viewWidth < 900 ? 'true' : 'false';
     var toggle = el('matterToggleNav'); toggle.setAttribute('aria-expanded', String(!rail)); var toggleText = rail ? '展开导航' : '收起导航'; toggle.title = toggleText; toggle.setAttribute('aria-label',toggleText);
-    backdrop.hidden = pane === 'none' || innerWidth >= 900; ['.mw-main','.mw-sidebar'].forEach(function(selector){var node=root.querySelector(selector);if(!backdrop.hidden){node.setAttribute('inert','');node.setAttribute('aria-hidden','true');}else{node.removeAttribute('inert');node.removeAttribute('aria-hidden');}});
+    backdrop.hidden = pane === 'none' || viewWidth >= 900; ['.mw-main','.mw-sidebar'].forEach(function(selector){var node=root.querySelector(selector);if(!backdrop.hidden){node.setAttribute('inert','');node.setAttribute('aria-hidden','true');}else{node.removeAttribute('inert');node.removeAttribute('aria-hidden');}});
     var main = root.querySelector('.mw-main'), content = el('matterContent'), width = main.getBoundingClientRect().width;
     var calendarRail = width >= 1020 && content.clientHeight >= 450;
     root.dataset.calendarRail = String(calendarRail);
@@ -146,12 +150,21 @@
   }
   function open(options) {
     options = options || {};
-    if (!host.standalone && host.quick) { if (window.petBridge && typeof window.petBridge.openMatters === 'function') window.petBridge.openMatters(JSON.stringify(options)); else window.open('./matters.html?backend=' + encodeURIComponent(host.backend) + '&project_id=' + encodeURIComponent(options.projectId || ''), 'lka-matters', 'width=1000,height=740'); return; }
+    if (!host.standalone && host.quick) { if (window.petBridge && typeof window.petBridge.openMatters === 'function') window.petBridge.openMatters(JSON.stringify(options)); else window.open('./matters.html?backend=' + encodeURIComponent(host.backend) + '&project_id=' + encodeURIComponent(options.projectId || '') + '&matter_id=' + encodeURIComponent(options.matterId || ''), 'lka-matters', 'width=1000,height=740'); return; }
+    var request = ++openRequest;
     opened = true; root.hidden = false; document.body.classList.add('matter-workspace-open');
-    el('matterBack').textContent = host.standalone ? '打开对话工作台' : '返回对话工作台';
-    host.ready.then(function () { if (started && storeNamespace !== host.namespace) resetStore(); var first = !started; init(); if (options.projectId) { state.directory = { project_id: options.projectId, name: options.projectName || '关联目录' }; state.view = 'all'; state.plan = null; } if (options.view && views[options.view]) state.view = options.view; renderList(); if (!root.contains(document.activeElement)) root.focus(); if (!first) refresh(false); }).catch(function (e) { note(errorText(e), true); });
+    el('matterBack').textContent = host.standalone ? '打开对话工作台' : '返回对话';
+    host.ready.then(async function () { if (!opened || request !== openRequest) return; if (started && storeNamespace !== host.namespace) resetStore(); var first = !started; init(); if (options.projectId) { state.directory = { project_id: options.projectId, name: options.projectName || '关联目录' }; state.view = 'all'; state.plan = null; } if (options.view && views[options.view]) state.view = options.view; renderList(); if (!root.contains(document.activeElement)) root.focus(); if (!first) refresh(false);
+      if (options.matterId) {
+        // Join initial/background sync rather than timing out before slow pages arrive.
+        if (!lookup(options.matterId)) await store.sync({ force: false });
+        if (!opened || request !== openRequest) return;
+        if (lookup(options.matterId)) select(options.matterId);
+        else note('没有在当前事项中找到这条记录，它可能已被删除或归档。', true);
+      }
+    }).catch(function (e) { if (opened && request === openRequest) note(errorText(e), true); });
   }
-  function close() { opened = false; root.hidden = true; document.body.classList.remove('matter-workspace-open'); }
+  function close() { openRequest++; opened = false; root.hidden = true; document.body.classList.remove('matter-workspace-open'); }
   function select(id) { var r = lookup(id); if (!r) return; previousFocus = document.activeElement; state.selected = id; activeDraft = drafts.get(id) || { id: id, revision: r.revision, original: JSON.parse(JSON.stringify(r)), values: JSON.parse(JSON.stringify(r)), dirty: false }; drafts.set(id, activeDraft); renderEditor(); renderList(); el('matterEditTitle').focus(); }
   function newDraft(kind, patch) { var id = 'new-' + Date.now(), values = Object.assign({ kind: kind, title: '', summary: '', status: 'open', priority: 'normal', due_at: null, scheduled_on: null, scheduled_start: null, scheduled_end: null, inbox: !state.plan, parent_matter_id: kind === 'plan' ? null : state.plan, project_id: state.plan && lookup(state.plan) ? lookup(state.plan).project_id : state.directory ? state.directory.project_id : null, section: '', sections: [] }, patch || {}); if (patch && (patch.scheduled_on || patch.scheduled_start)) values.inbox = false; activeDraft = { key: id, values: values, original: JSON.parse(JSON.stringify(values)), dirty: false }; drafts.set(id, activeDraft); state.selected = null; renderEditor(); el('matterEditTitle').focus(); }
   function optionsHTML(values, selected) { return Object.keys(values).map(function (k) { return '<option value="' + esc(k) + '"' + (k === selected ? ' selected' : '') + '>' + esc(values[k]) + '</option>'; }).join(''); }
@@ -270,6 +283,9 @@
   document.addEventListener('visibilitychange', function () { if (!document.hidden && opened && store) refresh(false); });
   window.setInterval(function () { if (opened && !document.hidden && store) refresh(false); }, 60000);
   root.addEventListener('keydown', function (e) { if (e.key === 'Tab' && !backdrop.hidden) { var pane = !el('matterEditor').hidden ? el('matterEditor') : el('matterAssistant'), focusable = Array.from(pane.querySelectorAll('button,input,textarea,select,iframe,[tabindex]')).filter(function(n){return !n.disabled && n.tabIndex >= 0 && n.getClientRects().length;}); if (focusable.length) { var first = focusable[0], last = focusable[focusable.length-1], outside = !pane.contains(document.activeElement); if (e.shiftKey && (document.activeElement === first || outside)) { e.preventDefault(); last.focus(); } else if (!e.shiftKey && (document.activeElement === last || outside)) {e.preventDefault();first.focus();} } } if (e.key === 'Escape') { if (!dateMenu.hidden) {closeDateMenu();e.stopPropagation();return;}  if (!el('matterAssistant').hidden) el('matterAssistant').hidden = true; else if (activeDraft) { activeDraft = null; state.selected = null; renderEditor(); renderList(); } else if (!host.standalone) close(); e.stopPropagation(); } if ((e.ctrlKey || e.metaKey) && e.key === 'Enter' && activeDraft) { e.preventDefault(); el('matterEditForm').requestSubmit(); } if (e.key.toLowerCase() === 'n' && !e.ctrlKey && !e.metaKey && !/INPUT|TEXTAREA|SELECT/.test(e.target.tagName)) {e.preventDefault();newDraft('task');} if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') { e.preventDefault(); el('matterSearch').focus(); } });
-  window.LkaMatters = { open: open, close: close, isOpen: function () { return opened; }, parseQuick: parseQuick };
-  if (host.standalone) open({ projectId: new URLSearchParams(location.search).get('project_id') || undefined });
+  // The receiving window resolves the reference after its own cache is ready.
+  function openMatter(id) { open({ view: 'all', matterId: id }); }
+  window.LkaMatters = { open: open, close: close, isOpen: function () { return opened; }, parseQuick: parseQuick, openMatter: openMatter,
+    titleOf: function (id) { var r = lookup(id); return r ? r.title : ''; } };
+  if (host.standalone) { var params = new URLSearchParams(location.search); open({ projectId: params.get('project_id') || undefined, matterId: params.get('matter_id') || undefined }); }
 })();

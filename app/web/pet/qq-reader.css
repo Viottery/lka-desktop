@@ -9,7 +9,7 @@
 .message-history > p { margin: 10px 0; }
 .message-history label { display: grid; gap: 5px; margin: 9px 0; font-size: 12px; }
 .message-history input, .message-history select { min-width: 0; width: 100%; border: 1px solid var(--line, #deddd6); border-radius: 7px; padding: 7px 8px; color: inherit; background: var(--paper, #faf9f5); font: inherit; }
-.message-history small { color: var(--muted, #68726e); font-size: 11px; line-height: 1.45; }
+.message-history small { color: var(--muted, #68726e); font-size: 12px; line-height: 1.45; }
 .message-policy-form { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 10px; }
 .message-policy-form .message-check { display: flex; align-items: center; gap: 7px; }
 .message-policy-form .message-check input { width: auto; }
@@ -36,7 +36,7 @@
 .reading-detail { margin-top: 12px; padding: 10px; border: 1px solid var(--line, #d8e4e6); background: var(--surface, #fff); border-radius: 8px; }
 .reading-quote { margin: 8px 0; padding: 8px 10px; border-left: 3px solid var(--teal, #237b80); background: var(--paper, #f5f8f8); }
 .reading-quote p, .message-reading pre { white-space: pre-wrap; overflow-wrap: anywhere; }
-.message-reading pre { max-height: 260px; overflow: auto; font: inherit; font-size: 11px; }
+.message-reading pre { max-height: 260px; overflow: auto; font: inherit; font-size: 12px; }
 .reading-form textarea { width: 100%; min-height: 72px; resize: vertical; color: inherit; background: var(--paper, #f5f8f8); border: 1px solid var(--line, #d8e4e6); border-radius: 7px; padding: 7px; font: inherit; box-sizing: border-box; }
 .reading-form [hidden] { display: none; }
 .reading-form .message-check { display: flex; align-items: center; gap: 7px; }

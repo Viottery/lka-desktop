@@ -102,7 +102,8 @@ const server = http.createServer(async (req, res) => {
     page.on('pageerror', error => failures.push(error.message));
     await page.goto(origin + '/chat.html?mode=work&with_memory=1&backend=' + encodeURIComponent(origin));
     await page.waitForFunction(() => typeof window.__petChatSubmitText === 'function');
-    await workspaceArrived;
+    await page.waitForTimeout(300);
+    assert(!requests.some(r => r.path === '/pet/session-workspace'), 'opening an untouched task creates no workspace directory');
     const accepted = await page.evaluate(() => window.__petChatSubmitText('合成首条用户消息'));
     assert.equal(accepted, true, 'native-compatible submit hook accepts the first user message');
     const immediate = await page.evaluate(() => ({
@@ -111,6 +112,7 @@ const server = http.createServer(async (req, res) => {
     }));
     assert.equal(immediate.visible, true, 'first user message is visible before workspace creation/binding or the Agent reply completes');
     assert(immediate.sessions.some(s => s.messages.some(m => m.role === 'user' && m.text === '合成首条用户消息')), 'first user message is already persisted locally');
+    await workspaceArrived;
     const createsBeforeHandoff = requests.filter(r => r.method === 'POST' && r.path === '/sessions').length;
     await page.evaluate(() => {
       window.__handoffs = [];
@@ -203,6 +205,8 @@ const server = http.createServer(async (req, res) => {
     assert.equal(await panels.locator('#sidebarResizeHandle').isVisible(), false, 'collapsed list has no invisible resize handle');
     assert.equal(await panels.locator('#toggleSidebarButton').getAttribute('aria-expanded'), 'false');
     assert(await mainWidth() > initialWidth + 200, 'closing the list frees its entire column');
+    assert.equal(await panels.locator('#contextRail').isVisible(), false, 'ordinary tasks start with the file/settings rail collapsed');
+    await panels.locator('#toggleSettingsButton').click();
     await panels.locator('#filesTabButton').click();
     const widthWithoutList = await mainWidth();
     await panels.locator('#toggleSettingsButton').click();
@@ -480,7 +484,7 @@ const server = http.createServer(async (req, res) => {
     await quick.screenshot({ path: path.resolve(ROOT, '../../../.runtime/quick-chat-preview/conversation.png') });
     assert.equal(await quick.locator('.memory-message-action:visible').count(), 0, 'message actions do not squeeze quick text');
     assert.equal(await quick.locator('#messages .bubble > strong:visible').count(), 0, 'role labels do not repeat on each quick message');
-    assert.equal(await quick.locator('#messages .markdown-body strong').evaluate(el => getComputedStyle(el).fontSize), '13px', 'bold reply text keeps readable body sizing');
+    assert(await quick.locator('#messages .markdown-body strong').evaluate(el => getComputedStyle(el).fontSize === getComputedStyle(el.closest('.markdown-body')).fontSize), 'bold reply text uses the same readable size as the redesigned body');
     assert.equal(await quick.locator('#messages').evaluate(el => el.scrollTop), 0, 'long reply starts at its beginning');
     await quick.locator('#messages').evaluate(el => { el.scrollTop = 65; });
     await quick.waitForTimeout(30);
@@ -522,14 +526,14 @@ const server = http.createServer(async (req, res) => {
     await quick.waitForTimeout(80);
     const typography = await quick.evaluate(() => {
       const node = Array.from(document.querySelectorAll('#messages .assistant .message-content')).at(-1);
-      const messages = document.getElementById('messages');
+      const bubble = node.closest('.bubble'), bubbleStyle = getComputedStyle(bubble);
       return { title: getComputedStyle(node.querySelector('h1')).fontSize,
         body: getComputedStyle(node).fontSize, code: getComputedStyle(node.querySelector('pre')).maxHeight,
-        width: node.getBoundingClientRect().width, available: messages.clientWidth - 18,
+        width: node.getBoundingClientRect().width, available: bubble.clientWidth - parseFloat(bubbleStyle.paddingLeft) - parseFloat(bubbleStyle.paddingRight),
         overflow: document.documentElement.scrollWidth > innerWidth };
     });
-    assert.equal(typography.title, '15px'); assert.equal(typography.body, '13px'); assert.equal(typography.code, '128px');
-    assert(typography.width >= typography.available - 2, 'assistant text has the full reading column');
+    assert.equal(typography.title, '15px'); assert.equal(typography.body, '13.5px'); assert.equal(typography.code, '128px');
+    assert(typography.width >= typography.available - 2, 'assistant text fills the padded reply bubble: ' + JSON.stringify(typography));
     assert.equal(typography.overflow, false, 'wide code/table do not overflow the whole window');
     await quick.screenshot({ path: path.resolve(ROOT, '../../../.runtime/quick-chat-preview/markdown.png') });
     await quick.locator('#messages .message.user').last().locator('.message-content').evaluate(el => {
@@ -670,13 +674,13 @@ const server = http.createServer(async (req, res) => {
     assert.equal(requests.filter(r => r.method === 'POST' && r.path === '/sessions').length, createsBeforeExisting);
     const fixedLayout = await destination.evaluate(() => {
       const tools = document.querySelector('.sidebar-tools').getBoundingClientRect();
-      const first = document.querySelector('#sessionList .session-item').getBoundingClientRect();
+      const first = document.querySelector('#sessionList .session-group-label, #sessionList .session-item').getBoundingClientRect();
       const user = document.querySelector('#messages .message.user'), row = user.getBoundingClientRect(), bubble = user.querySelector('.bubble').getBoundingClientRect();
       return { historyGap: first.top - tools.bottom, userRightGap: row.right - bubble.right };
     });
-    assert(fixedLayout.historyGap >= 0 && fixedLayout.historyGap < 24, 'history begins below search; the assistant navigation row cannot stretch search to the bottom');
+    assert(fixedLayout.historyGap >= 0 && fixedLayout.historyGap < 24, 'grouped history begins below search; navigation cannot stretch search to the bottom');
     assert(Math.abs(fixedLayout.userRightGap) < 2, 'memory action cannot push the user bubble left');
-    await destination.route('**/__layoutfont', route => route.fulfill({ path:'/mnt/c/Windows/Fonts/msyh.ttc', contentType:'font/collection' }));
+    await destination.route('**/__layoutfont', route => route.fulfill({ path:process.env.SMOKE_FONT_PATH || (process.platform === 'win32' ? 'C:/Windows/Fonts/msyh.ttc' : '/mnt/c/Windows/Fonts/msyh.ttc'), contentType:'font/collection' }));
     await destination.addStyleTag({ content:"@font-face{font-family:LayoutChinese;src:url('/__layoutfont')}body,button,input,select,textarea{font-family:LayoutChinese,sans-serif!important}" });
     await destination.evaluate(() => document.fonts.ready);
     await destination.screenshot({ path:'/tmp/lka-workbench-aligned.png' });

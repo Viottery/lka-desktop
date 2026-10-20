@@ -109,7 +109,20 @@ async function until(predicate, message) {
     async function nav(view) { await page.locator('[data-matter-view="' + view + '"]').click(); }
     async function openEditor(id) { await nav('all'); await page.locator('#matterSearch').fill(''); await page.locator('[data-matter-open="' + id + '"]').click(); await page.locator('#matterEditTitle').waitFor(); }
     async function closeEditor() { if (await page.locator('#matterEditorClose').isVisible()) await page.locator('#matterEditorClose').click(); }
+    holdSync = true;
     await page.goto(origin + '/matters.html?backend=' + encodeURIComponent(backend));
+    await until(() => waitingSync.length === 1, 'reference waits for initial matter sync');
+    await page.evaluate(id => window.LkaMatters.openMatter(id), precise.matter_id);
+    assert.equal(await page.locator('#matterEditor').isVisible(), false, 'reference does not select before its record loads');
+    holdSync = false; waitingSync.splice(0).forEach(respond => respond());
+    await page.locator('#matterEditTitle').waitFor();
+    assert.equal(await page.locator('#matterEditTitle').inputValue(), precise.title, 'ordinary reference selects after paginated sync');
+    await page.locator('#matterEditTitle').fill('引用事项未保存草稿');
+    await page.evaluate(id => window.LkaMatters.openMatter(id), precise.matter_id);
+    await page.waitForTimeout(50);
+    assert.equal(await page.locator('#matterEditTitle').inputValue(), '引用事项未保存草稿', 'reopening the same reference preserves its draft');
+    await page.locator('#matterEditTitle').fill(precise.title);
+    await closeEditor();
     await page.waitForFunction(() => document.querySelector('#matterCacheState')?.textContent.includes('已同步'));
     assert.equal(matterRequests().filter(r => r.path.startsWith('/matters/sync')).length, 2, 'complete bootstrap pages over 200 records');
     assert.equal(new URL('http://fixture' + matterRequests()[1].path).searchParams.get('after'), '200');
@@ -299,7 +312,7 @@ async function until(predicate, message) {
     await work.waitForFunction(() => !!window.LkaMatters);
     await work.locator('#questionInput').fill('原会话未发送的草稿');
     before = matterRequests().length;
-    await work.locator('#openMattersButton').click(); await work.locator('#matterWorkspace').waitFor();
+    await work.locator('#openMattersSidebarButton').click(); await work.locator('#matterWorkspace').waitFor();
     await work.waitForTimeout(100); assert.equal(matterRequests().length, before, 'workbench entry reuses the shared fresh cache');
     await fonts(work); await work.screenshot({ path: path.join(OUT, 'workbench-tasks.png') });
     const originalConversation = await work.evaluate(() => window.LkaChatContext.get().sessionId);
@@ -334,7 +347,32 @@ async function until(predicate, message) {
     assert.match(popup.url(), /matters\.html/);
     assert.equal(await quickPage.locator('#matterWorkspace').isVisible(), false, 'quick entry keeps tasks in an independent window');
     assert.equal(matterRequests().length, before, 'quick independent window reuses fresh cache');
-    await popup.close(); await quickPage.close();
+    await popup.close();
+    await quickPage.evaluate(id => {
+      const ref = document.createElement('button'); ref.className = 'matter-ref'; ref.dataset.matterId = id; ref.textContent = '打开引用事项';
+      ref.style.cssText = 'position:fixed;top:0;left:0;z-index:9999'; document.body.appendChild(ref);
+    }, precise.matter_id);
+    const referencePopupPromise = quickPage.waitForEvent('popup');
+    await quickPage.locator('.matter-ref').click();
+    const referencePopup = await referencePopupPromise;
+    await referencePopup.locator('#matterEditTitle').waitFor();
+    assert.equal(new URL(referencePopup.url()).searchParams.get('matter_id'), precise.matter_id, 'quick fallback carries the referenced id');
+    assert.equal(await referencePopup.locator('#matterEditTitle').inputValue(), rows.get(precise.matter_id).title, 'quick fallback window selects the referenced record');
+    assert.equal(await quickPage.locator('#matterWorkspace').isVisible(), false, 'quick reference stays in the independent window');
+    await referencePopup.close();
+    const nativeOptions = await quickPage.evaluate(id => {
+      const previous = window.petBridge;
+      let options;
+      window.petBridge = { openMatters(value) { options = JSON.parse(value); } };
+      try { window.LkaMatters.openMatter(id); } finally { window.petBridge = previous; }
+      return options;
+    }, precise.matter_id);
+    assert.deepEqual(nativeOptions, { view: 'all', matterId: precise.matter_id }, 'quick native bridge carries the referenced id');
+    // PetMatterWindow applies these options by calling LkaMatters.open in its retained page.
+    await page.evaluate(options => window.LkaMatters.open(options), nativeOptions);
+    await page.locator('#matterEditTitle').waitFor();
+    assert.equal(await page.locator('#matterEditTitle').inputValue(), rows.get(precise.matter_id).title, 'native receiving page consumes the reference options');
+    await closeEditor(); await quickPage.close();
 
     await page.setViewportSize({ width: 480, height: 850 }); await page.locator('#matterSearch').fill('');
     await fonts(page); await page.screenshot({ path: path.join(OUT, 'mobile-list.png') });

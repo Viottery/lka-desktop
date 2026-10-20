@@ -9,7 +9,8 @@ const ROOT = process.env.FRONTEND_ROOT || path.resolve(__dirname,'../app/web/pet
 const requests=[], errors=[];
 let managerWorkspace=null, managerRevision=1, parentFails=false;
 const extraManagerWorkspaces=new Map();
-let ordinaryMessages=[{role:'tool',content:'ordinary internal dispatch',payload:{input_origin:'manager'}},{role:'assistant',content:'ordinary initial answer'}];
+const dispatchedTask='在自己的工作区内创建 `hello.py`，内容为 `print("hello world")`。\n完成后报告路径与文件内容。';
+let ordinaryMessages=[{message_id:'dispatch-first',role:'tool',content:'内部来源 secret-source 与调试 secret-debug',payload:{input_origin:'manager',input_envelope:{origin:'manager',purpose:dispatchedTask,input_id:'secret-id',debug_info:{private:'secret-debug'}}}},{role:'tool',content:'ordinary internal dispatch',payload:{input_origin:'manager'}},{role:'assistant',content:'ordinary initial answer'}];
 let holdOrdinaryRefresh=false,releaseOrdinaryRefresh,onOrdinaryHeld;
 let managerMessages=[], holdSessionRefresh=false, heldSessionResponse, onHeldSession, finishBusy;
 const stamp=new Date().toISOString();
@@ -171,11 +172,37 @@ const server=http.createServer(async(req,res)=>{
   await ordinary.waitForFunction(()=>!!window.LkaChatContext?.get().sessionId);await ordinary.locator('[data-session-id="ordinary"]').first().waitFor();
   assert.equal(await ordinary.locator('[data-session-id="manager-empty"]').count(),0);
   assert(!requests.some(r=>r.route==='/sessions/manager-empty'&&r.method==='DELETE'));
-  await ordinary.waitForFunction(()=>!!window.LkaChatContext?.get().workspace);
-  assert(requests.some(r=>r.route==='/pet/session-workspace'),'ordinary workspaces still prepared');
+  await ordinary.waitForTimeout(300);
+  assert(!requests.some(r=>r.route==='/pet/session-workspace'),'an untouched ordinary task defers its workspace until first use');
   // A stale ordinary history response arrives after a complete new local turn.
   await ordinary.evaluate(()=>LkaChatContext.openSession('ordinary'));
   await ordinary.locator('#messages').filter({hasText:'ordinary initial answer'}).waitFor();
+  async function assertDispatchVisible(){
+   const instruction=ordinary.locator('.message[data-message-kind="manager_instruction"]');
+   assert.equal(await instruction.count(),1,'first supervisor instruction is visible exactly once');
+   assert.equal(await instruction.getAttribute('class'),'message user','delegation appears on the input side');
+   assert.equal(await instruction.locator('strong').first().textContent(),'真理派发的任务');
+   assert.equal(await instruction.evaluate(node=>getComputedStyle(node).alignItems),'flex-end','instruction uses the workbench input alignment');
+   await ordinary.evaluate(()=>document.body.classList.add('quick-mode'));
+   assert(await instruction.locator('strong').first().isVisible(),'delegation sender is also visible in quick mode');
+   await ordinary.evaluate(()=>document.body.classList.remove('quick-mode'));
+   assert.equal(await instruction.locator('.markdown-body code').first().textContent(),'hello.py','task formatting survives the side change');
+   const reply=ordinary.locator('#messages .message.assistant').filter({hasText:'ordinary initial answer'});
+   assert.equal(await reply.count(),1,'execution reply remains on the assistant side');
+   assert.equal(await reply.locator('strong').first().textContent(),'真理');
+   assert((await instruction.textContent()).includes('hello.py'));
+   assert((await instruction.textContent()).includes('完成后报告路径与文件内容。'));
+   assert.equal(await ordinary.locator('#messages .message.user:not([data-message-kind="manager_instruction"])').count(),0,'dispatch never impersonates human input');
+   assert(!/secret-source|secret-debug|secret-id|ordinary internal dispatch/.test(await ordinary.locator('#messages').textContent()));
+   const cached=await ordinary.evaluate(()=>JSON.parse(localStorage.getItem('agentic-rag-pet-chat-sessions-v4')).find(s=>s.id==='ordinary'));
+   assert.equal(cached.messages[0].messageKind,'manager_instruction','sender survives cache sanitization');
+   assert.notEqual(cached.messages[0].role,'user','input-side rendering does not make delegation a human message');
+   assert.equal(cached.messages[0].text,dispatchedTask);
+  }
+  await assertDispatchVisible();
+  await ordinary.goto(origin+'/chat.html?mode=work&backend='+encodeURIComponent(origin)+'&session_id=ordinary');
+  await ordinary.locator('#messages').filter({hasText:'ordinary initial answer'}).waitFor();
+  await assertDispatchVisible();
   const oldHistoryArrived=new Promise(resolve=>onOrdinaryHeld=resolve);holdOrdinaryRefresh=true;
   await ordinary.evaluate(()=>dispatchEvent(new Event('focus')));await oldHistoryArrived;
   await ordinary.locator('#questionInput').fill('已完成的新用户指令');await ordinary.locator('#sendButton').click();
@@ -183,6 +210,7 @@ const server=http.createServer(async(req,res)=>{
   await ordinary.locator('#sendButton:not([disabled])').waitFor();
   releaseOrdinaryRefresh();await ordinary.waitForTimeout(250);
   assert((await ordinary.locator('#messages').textContent()).includes('已完成的新用户指令'),'late filtered history preserves a completed user turn');
+  assert.equal(await ordinary.locator('#messages .message.user').filter({hasText:'已完成的新用户指令'}).locator('strong').first().textContent(),'你','human intervention retains its own sender');
   assert((await ordinary.locator('#messages').textContent()).includes('合成管理回复'),'late filtered history preserves its real assistant answer');
   // Explicit manager links initialize that exact controller, including embedded views.
   for(const embedded of [false,true]){

@@ -11,7 +11,7 @@ const state=()=>({session:manager,controller:{default_execution_workspace:{path:
 function send(res,n,x){res.writeHead(n,{'content-type':'application/json','cache-control':'no-store'});res.end(JSON.stringify(x));}
 const server=http.createServer(async(req,res)=>{
  const u=new URL(req.url,'http://fixture');if(!u.pathname.startsWith('/mock')&&u.pathname!=='/pet/session-workspace'){
-  if(u.pathname==='/font'){res.writeHead(200,{'content-type':'font/collection'});return fs.createReadStream('/mnt/c/Windows/Fonts/msyh.ttc').pipe(res);}
+  if(u.pathname==='/font'){res.writeHead(200,{'content-type':'font/collection'});return fs.createReadStream(process.env.SMOKE_FONT_PATH || (process.platform === 'win32' ? 'C:/Windows/Fonts/msyh.ttc' : '/mnt/c/Windows/Fonts/msyh.ttc')).pipe(res);}
   const f=path.resolve(ROOT,'.'+u.pathname.replace(/^\/desktop-pet/,''));if(f.startsWith(ROOT+path.sep)&&fs.existsSync(f)&&fs.statSync(f).isFile()){res.writeHead(200,{'content-type':f.endsWith('.js')?'text/javascript':f.endsWith('.css')?'text/css':'text/html'});return fs.createReadStream(f).pipe(res);}return send(res,404,{});
  }
  let raw='';for await(const d of req)raw+=d;const b=raw?JSON.parse(raw):{},p=u.pathname.replace(/^\/mock/,'');requests.push({p,method:req.method,b});

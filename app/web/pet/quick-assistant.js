@@ -22,6 +22,7 @@
     el('qaState').textContent = loading ? '请稍候' : matched ? state.controller.status === 'active' ? '管理已启用' : '管理已暂停' : '';
     el('qaManage').hidden = !matched || loading; el('qaManage').disabled = toggling;
     el('qaManage').textContent = toggling ? '正在更新' : matched && state.controller.status === 'active' ? '暂停管理' : '启用管理';
+    el('qaManage').setAttribute('role', 'switch'); el('qaManage').setAttribute('aria-checked', String(!!(matched && state.controller.status === 'active')));
     el('qaManage').title = matched && state.controller.status === 'active' ? '暂停后，已委托的任务仍会继续' : '允许真理整理事项和委托任务';
     el('qaRetry').hidden = !failure; el('qaRetry').disabled = loading;
     attention.hidden = !matched || !current;

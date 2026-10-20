@@ -7,14 +7,14 @@ body.quick-mode .qa-bar {
 .qa-identity { display: inline-flex; align-items: center; gap: 7px; border: 0; padding: 0; color: inherit; background: transparent; font: inherit; cursor: pointer; }
 .qa-identity .qa-star { color: #6b8d7b; font-size: 17px; line-height: 1; }
 .qa-identity strong { font-size: 12px; font-weight: 600; }
-#qaMode { font-size: 10px; color: #87988a; }
+#qaMode { font-size: 12px; color: #87988a; }
 .qa-actions { display: inline-flex; align-items: center; gap: 10px; }
-#qaState { color: #87988a; font-size: 10px; }
-.qa-actions button, .qa-attention button { border: 0; min-height: 24px; padding: 3px 0; background: transparent; font: inherit; font-size: 10px; color: #466d58; cursor: pointer; white-space: nowrap; }
+#qaState { color: #87988a; font-size: 12px; }
+.qa-actions button, .qa-attention button { border: 0; min-height: 24px; padding: 3px 0; background: transparent; font: inherit; font-size: 12px; color: #466d58; cursor: pointer; white-space: nowrap; }
 .qa-actions button:hover, .qa-attention button:hover { text-decoration: underline; }
-#qaNotice { flex: 1 0 100%; color: #94704e; font-size: 11px; line-height: 1.7; margin: 2px 0 0; }
+#qaNotice { flex: 1 0 100%; color: #94704e; font-size: 12px; line-height: 1.7; margin: 2px 0 0; }
 body.quick-mode .qa-attention { order: -1; display: flex; align-items: center; flex: 0 0 auto; gap: 7px; margin: 0 9px; padding: 6px 8px; border-radius: 6px; background: #f3efdf; color: #8b7651; }
-.qa-attention [id=qaAttentionText] { min-width: 0; flex: 1; font-size: 11px; line-height: 1.6; }
+.qa-attention [id=qaAttentionText] { min-width: 0; flex: 1; font-size: 12px; line-height: 1.6; }
 .qa-attention-dot { width: 5px; height: 5px; flex-shrink: 0; background: #b69b65; border-radius: 50%; }
 .qa-bar [hidden], .qa-attention[hidden] { display: none !important; }
 .qa-bar button:disabled { opacity: .55; cursor: default; }

@@ -14,7 +14,7 @@ const ordinary = {session_id:'ordinary_fixture',kind:'ordinary',title:'原来的
 const send = (res,n,v) => {res.writeHead(n,{'content-type':'application/json'});res.end(JSON.stringify(v));};
 const server = http.createServer((req,res) => {
  const u = new URL(req.url,'http://localhost');
- if (u.pathname === '/__smoke-font') { res.writeHead(200,{'content-type':'font/collection'}); return fs.createReadStream(process.env.SMOKE_FONT_PATH || '/mnt/c/Windows/Fonts/msyh.ttc').pipe(res); }
+ if (u.pathname === '/__smoke-font') { res.writeHead(200,{'content-type':'font/collection'}); return fs.createReadStream(process.env.SMOKE_FONT_PATH || (process.platform === 'win32' ? 'C:/Windows/Fonts/msyh.ttc' : '/mnt/c/Windows/Fonts/msyh.ttc')).pipe(res); }
  if (!u.pathname.startsWith('/mock') && u.pathname !== '/pet/session-workspace') {
   let relative = decodeURIComponent(u.pathname).replace(/^\/desktop-pet/,'');
   if (relative === '/') relative = '/chat.html';
@@ -138,6 +138,8 @@ const server = http.createServer((req,res) => {
  await page.locator('#questionInput').fill('帮我梳理这周的安排，先看看哪些事情需要我决定。');
  await page.locator('#gaTab-goals').click(); await page.screenshot({path:path.join(OUT,'global-desktop.png')});
  await page.setViewportSize({width:390,height:844});
+ // The page sees the resize on its next frame; read panel state only after it has been applied.
+ await page.evaluate(()=>new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))));
  if(await page.locator('#toggleSidebarButton').getAttribute('aria-expanded')==='true')await page.locator('#toggleSidebarButton').click();
  await page.waitForFunction(()=>document.querySelector('#sessionSidebar').getBoundingClientRect().right<=0);
  await page.evaluate(async()=>{await document.fonts.ready;await Promise.allSettled(document.getAnimations().map(animation=>animation.finished));});

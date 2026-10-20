@@ -77,6 +77,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Base64;
+import java.util.prefs.Preferences;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ConcurrentHashMap;
@@ -120,6 +121,14 @@ final class PetControlWindow {
     private static final double RESIZE_HANDLE_SIZE = 10;
     private static final double MIN_QUICK_WIDTH = 340;
     private static final double MIN_QUICK_HEIGHT = 118;
+    // Bubble mode: a borderless transparent strip that follows the pet and cannot be moved alone.
+    // Fixed size: resizing with content made the history jump while it streamed.
+    private static final double BUBBLE_WIDTH = 360;
+    private static final double BUBBLE_HEIGHT = 420;
+    // Matches the web user bubble: 288px wide, 16px from the right edge.
+    private static final double BUBBLE_INPUT_WIDTH = 288;
+    private static final double BUBBLE_INPUT_ROW_HEIGHT = 46;
+    private static final String BUBBLE_MODE_PREF = "quickBubbleMode";
     private static final long MAX_NATIVE_IMAGE_BYTES = 256L * 1024 * 1024;
     private static final long MAX_NATIVE_DOCUMENT_BYTES = 256L * 1024 * 1024;
     private static final int MAX_NATIVE_ATTACHMENTS_PER_PASTE = 4;
@@ -201,6 +210,18 @@ final class PetControlWindow {
     private int lastPetX;
     private int lastPetY;
     private boolean initialPositionInitialized;
+    private final Preferences preferences = Preferences.userNodeForPackage(PetControlWindow.class);
+    private boolean bubbleMode = preferences.getBoolean(BUBBLE_MODE_PREF, false);
+    private int petWidth;
+    private int petHeight;
+    private HBox composerRow;
+    private HBox quickFooter;
+    private HBox footerRightActions;
+    private Button quickCloseButton;
+    private HBox bubbleSideActions;
+    private VBox quickComposer;
+    private HBox bubbleComposerLine;
+    private Button nativeImageButtonRef;
 
     PetControlWindow(PetControlActions actions, String chatUrl, String projectRoot, List<PetModelOption> initialModelLibrary) {
         this.actions = actions;
@@ -224,7 +245,9 @@ final class PetControlWindow {
                 stage.hide();
             } else {
                 refreshSettingsState();
-                if (!initialPositionInitialized) {
+                if (bubbleMode) {
+                    positionBubbleBesidePet(petX, petY);
+                } else if (!initialPositionInitialized) {
                     ensureInitialPositionNearPet(petX, petY);
                     stage.setX(petX + relativeX);
                     stage.setY(petY + relativeY);
@@ -331,6 +354,7 @@ final class PetControlWindow {
         quickCard.getStyleClass().add("pet-quick-card");
         quickCard.setCenter(buildWebView());
         quickCard.setBottom(buildTools());
+        applyQuickLayout();
 
         SVGPath resizeGrip = iconGraphic("M0 8L8 0 M4 8L8 4");
         resizeGrip.setOpacity(0.45);
@@ -453,11 +477,14 @@ final class PetControlWindow {
         nativeImageStatus.setMaxWidth(Double.MAX_VALUE);
         nativeImageStatus.setManaged(false);
         nativeImageStatus.setVisible(false);
-        HBox composerRow = new HBox(6, nativeImageButton, nativeInput, nativeSendButton);
+        composerRow = new HBox(6, nativeImageButton, nativeInput, nativeSendButton);
+        composerRow.getStyleClass().add("pet-quick-composer-row");
         composerRow.setAlignment(Pos.TOP_LEFT);
         HBox.setMargin(nativeImageButton, new Insets(4, 0, 0, 0));
         HBox.setMargin(nativeSendButton, new Insets(4, 0, 0, 0));
         VBox composer = new VBox(2, composerRow, nativeImageStatus);
+        quickComposer = composer;
+        nativeImageButtonRef = nativeImageButton;
         composer.getStyleClass().add("pet-native-composer");
         composer.getStyleClass().add("pet-quick-composer");
         HBox.setHgrow(nativeInput, Priority.ALWAYS);
@@ -479,7 +506,9 @@ final class PetControlWindow {
         settingsMenuButton.getStyleClass().add("pet-compact-settings");
         styleFooterButton(settingsMenuButton, "设置");
         Button closeButton = iconButton("M6 6l12 12 M18 6 6 18", "关闭快速会话", () -> stage.hide());
+        quickCloseButton = closeButton;
         HBox rightActions = new HBox(2, newSessionButton, workbenchButton, settingsMenuButton, closeButton);
+        footerRightActions = rightActions;
         rightActions.setAlignment(Pos.CENTER_RIGHT);
 
         Region footerSpacer = new Region();
@@ -492,6 +521,10 @@ final class PetControlWindow {
         footer.setMaxHeight(24);
         footer.setOnMousePressed(this::startDrag);
         footer.setOnMouseDragged(this::dragPanel);
+        quickFooter = footer;
+        bubbleSideActions = new HBox(2);
+        bubbleSideActions.getStyleClass().add("pet-bubble-side-actions");
+        bubbleSideActions.setAlignment(Pos.CENTER);
         return new VBox(5, composer, footer);
     }
 
@@ -959,7 +992,10 @@ final class PetControlWindow {
             button.setOnAction(event -> action.fire());
             interactions.getChildren().add(button);
         }
-        VBox petOptions = new VBox(10, modelBox, randomToggle, interactions);
+        CheckBox bubbleToggle = new CheckBox("气泡模式（跟随桌宠的透明对话）");
+        bubbleToggle.setSelected(bubbleMode);
+        bubbleToggle.selectedProperty().addListener((observable, oldValue, newValue) -> setBubbleMode(newValue));
+        VBox petOptions = new VBox(10, modelBox, randomToggle, bubbleToggle, interactions);
         TitledPane petSection = new TitledPane("桌宠外观与行为", petOptions);
         petSection.setId("quickSettingsPetSection");
         petSection.setExpanded(false);
@@ -1345,11 +1381,13 @@ final class PetControlWindow {
     }
 
     private void updateResizeCursor(MouseEvent event) {
+        if (bubbleMode) return;
         if (stage == null || !stage.isShowing() || activeResizeEdge != ResizeEdge.NONE) return;
         stage.getScene().setCursor(resizeEdgeAt(event.getSceneX(), event.getSceneY()).cursor);
     }
 
     private void beginResize(MouseEvent event) {
+        if (bubbleMode) return;
         if (event.getButton() != MouseButton.PRIMARY || stage == null || !stage.isShowing()) return;
         ResizeEdge edge = resizeEdgeAt(event.getSceneX(), event.getSceneY());
         if (edge == ResizeEdge.NONE) return;
@@ -1437,6 +1475,7 @@ final class PetControlWindow {
             if (stage == null || stage.getScene() == null || activeResizeEdge != ResizeEdge.NONE) return;
             boolean empty = requestedContentHeight <= 0;
             double previousHeight = stage.getHeight();
+            if (bubbleMode) return;
             double anchoredBottom = stage.getY() + previousHeight;
             List<Screen> screens = Screen.getScreensForRectangle(
                     stage.getX() + stage.getWidth() / 2, stage.getY() + stage.getHeight() / 2, 1, 1);
@@ -1512,6 +1551,7 @@ final class PetControlWindow {
     }
 
     private void dragPanel(javafx.scene.input.MouseEvent event) {
+        if (bubbleMode) return;
         relativeX = dragStartRelativeX + event.getScreenX() - dragStartMouseX;
         relativeY = dragStartRelativeY + event.getScreenY() - dragStartMouseY;
         initialPositionInitialized = true;
@@ -1584,6 +1624,109 @@ final class PetControlWindow {
         return "";
     }
 
+    private static String withQueryParam(String rawUrl, String key, String value) {
+        int fragment = rawUrl.indexOf('#');
+        String base = fragment < 0 ? rawUrl : rawUrl.substring(0, fragment);
+        String suffix = fragment < 0 ? "" : rawUrl.substring(fragment);
+        return base + (base.contains("?") ? "&" : "?") + key + "=" + value + suffix;
+    }
+
+    void setPetSize(int width, int height) {
+        petWidth = Math.max(0, width);
+        petHeight = Math.max(0, height);
+    }
+
+    // Bubble strip is centred horizontally on the pet; the input bubble rests just above the pet's head.
+    private void positionBubbleBesidePet(int petX, int petY) {
+        List<Screen> screens = Screen.getScreensForRectangle(petX, petY, 1, 1);
+        Screen screen = screens.isEmpty() ? Screen.getPrimary() : screens.get(0);
+        double scaleX = screen.getOutputScaleX() > 0 ? screen.getOutputScaleX() : 1.0;
+        double scaleY = screen.getOutputScaleY() > 0 ? screen.getOutputScaleY() : 1.0;
+        double petLeft = petX / scaleX, petTop = petY / scaleY;
+        double w = (petWidth > 0 ? petWidth : 260) / scaleX, h = (petHeight > 0 ? petHeight : 320) / scaleY;
+        Rectangle2D bounds = screen.getVisualBounds();
+        stage.setMinWidth(BUBBLE_WIDTH); stage.setMinHeight(BUBBLE_HEIGHT);
+        stage.setWidth(BUBBLE_WIDTH); stage.setHeight(BUBBLE_HEIGHT);
+        // The strip starts at the pet's centre line, so the pet's head meets the bottom-left of
+        // 真理's latest bubble while the input bubble sits to its right; flip left near the edge.
+        double x = petLeft + w / 2.0;
+        if (x + BUBBLE_WIDTH > bounds.getMaxX() - 8) x = petLeft + w / 2.0 - BUBBLE_WIDTH;
+        // Tuned on the desktop: 0.22 plus one old bubble (62) plus 1.5 current bubbles (46).
+        double y = petTop + h * 0.22 - BUBBLE_HEIGHT + 62 + 1.5 * BUBBLE_INPUT_ROW_HEIGHT;
+        x = clamp(x, bounds.getMinX() + 8, bounds.getMaxX() - BUBBLE_WIDTH - 8);
+        y = clamp(y, bounds.getMinY() + 8, bounds.getMaxY() - BUBBLE_HEIGHT - 8);
+        stage.setX(x);
+        stage.setY(y);
+        relativeX = x - petLeft;
+        relativeY = y - petTop;
+        lastPetX = petX;
+        lastPetY = petY;
+        initialPositionInitialized = true;
+    }
+
+    private void setBubbleMode(boolean enabled) {
+        if (bubbleMode == enabled) return;
+        bubbleMode = enabled;
+        preferences.putBoolean(BUBBLE_MODE_PREF, enabled);
+        applyQuickLayout();
+        if (!enabled) { initialPositionInitialized = false; manualSizePreferred = false; }
+        if (stage != null && stage.isShowing()) {
+            int petX = lastPetX, petY = lastPetY;
+            if (enabled) positionBubbleBesidePet(petX, petY);
+            else {
+                stage.setMinWidth(MIN_QUICK_WIDTH); stage.setMinHeight(MIN_QUICK_HEIGHT);
+                stage.setWidth(WIDTH); stage.setHeight(INITIAL_HEIGHT);
+                ensureInitialPositionNearPet(petX, petY);
+                stage.setX(petX + relativeX); stage.setY(petY + relativeY);
+            }
+        }
+        loadChatPage();
+    }
+
+    // Card mode keeps the footer toolbar; bubble mode keeps only settings and close beside the input bubble.
+    private void applyQuickLayout() {
+        if (quickCard == null || composerRow == null || quickFooter == null) return;
+        if (bubbleMode) quickCard.getStyleClass().add("pet-bubble-mode"); else quickCard.getStyleClass().removeAll("pet-bubble-mode");
+        if (webView != null) webView.setPageFill(bubbleMode ? Color.TRANSPARENT : Color.WHITE);
+        quickFooter.setVisible(!bubbleMode);
+        quickFooter.setManaged(!bubbleMode);
+        if (bubbleComposerLine == null) {
+            Region spacer = new Region();
+            HBox.setHgrow(spacer, Priority.ALWAYS);
+            bubbleComposerLine = new HBox(0, spacer);
+            bubbleComposerLine.setAlignment(Pos.BOTTOM_RIGHT);
+            bubbleComposerLine.getStyleClass().add("pet-bubble-composer-line");
+        }
+        nativeImageButtonRef.setVisible(!bubbleMode);
+        nativeImageButtonRef.setManaged(!bubbleMode);
+        if (bubbleMode) {
+            if (!bubbleComposerLine.getChildren().contains(composerRow)) {
+                bubbleSideActions.getChildren().setAll(settingsMenuButton, quickCloseButton);
+                composerRow.getChildren().add(composerRow.getChildren().indexOf(nativeInput), bubbleSideActions);
+                int index = quickComposer.getChildren().indexOf(composerRow);
+                quickComposer.getChildren().remove(composerRow);
+                bubbleComposerLine.getChildren().add(composerRow);
+                quickComposer.getChildren().add(Math.max(0, index), bubbleComposerLine);
+            }
+            composerRow.setMinWidth(BUBBLE_INPUT_WIDTH); composerRow.setPrefWidth(BUBBLE_INPUT_WIDTH); composerRow.setMaxWidth(BUBBLE_INPUT_WIDTH);
+            composerRow.setAlignment(Pos.CENTER_LEFT);
+            HBox.setMargin(nativeSendButton, Insets.EMPTY);
+            nativeInput.setPrefRowCount(1);
+            nativeInput.setPromptText("Привет, Doctor.");
+        } else if (bubbleComposerLine.getChildren().remove(composerRow)) {
+            composerRow.getChildren().remove(bubbleSideActions);
+            int index = quickComposer.getChildren().indexOf(bubbleComposerLine);
+            quickComposer.getChildren().remove(bubbleComposerLine);
+            quickComposer.getChildren().add(Math.max(0, index), composerRow);
+            footerRightActions.getChildren().addAll(settingsMenuButton, quickCloseButton);
+            composerRow.setMinWidth(Region.USE_COMPUTED_SIZE); composerRow.setPrefWidth(Region.USE_COMPUTED_SIZE); composerRow.setMaxWidth(Double.MAX_VALUE);
+            composerRow.setAlignment(Pos.TOP_LEFT);
+            HBox.setMargin(nativeSendButton, new Insets(4, 0, 0, 0));
+            nativeInput.setPrefRowCount(2);
+            nativeInput.setPromptText("写下问题，或交给我一件事…");
+        }
+    }
+
     private String cacheBustedUrl(String rawUrl) {
         String separator = rawUrl.contains("?") ? "&" : "?";
         return rawUrl + separator + "desktopTs=" + System.currentTimeMillis();
@@ -1608,7 +1751,9 @@ final class PetControlWindow {
             return;
         }
         cancelAllSavedRunStreams();
-        String targetUrl = cacheBustedUrl(quickAssistantPageUrl(chatUrl));
+        String pageUrl = quickAssistantPageUrl(chatUrl);
+        if (bubbleMode) pageUrl = withQueryParam(pageUrl, "layout", "bubble");
+        String targetUrl = cacheBustedUrl(pageUrl);
         System.out.println("[pet-chat] loading chat page url=" + targetUrl);
         webView.getEngine().load(targetUrl);
     }

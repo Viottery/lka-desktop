@@ -32,7 +32,7 @@ body.mobile-workbench .chat-topbar {
 }
 body.mobile-workbench .chat-session-meta { min-width: 0; }
 body.mobile-workbench .chat-session-meta strong { font-size: 17px; letter-spacing: -.02em; }
-body.mobile-workbench .chat-session-meta span { font-size: 11px; }
+body.mobile-workbench .chat-session-meta span { font-size: 12px; }
 body.mobile-workbench .topbar-actions { gap: 2px; }
 body.mobile-workbench .icon-button, body.mobile-workbench .quiet-button {
   display: inline-grid; place-items: center; flex: 0 0 44px; width: 44px; min-width: 44px; height: 44px; min-height: 44px;
@@ -50,7 +50,7 @@ body.mobile-workbench .context-strip {
 body.mobile-workbench .context-dot { width: 5px; height: 5px; flex-basis: 5px; box-shadow: none; background: #6c9480; }
 body.mobile-workbench .context-copy { flex-direction: row; align-items: center; gap: 8px; }
 body.mobile-workbench .context-copy span { white-space: nowrap; }
-body.mobile-workbench .context-copy strong { font-size: 11px; font-weight: 500; color: #6f8378; }
+body.mobile-workbench .context-copy strong { font-size: 12px; font-weight: 500; color: #6f8378; }
 body.mobile-workbench #changeWorkspaceButton { min-height: 44px; font-size: 12px; padding-inline: 10px; }
 body.mobile-workbench #openMemoryQuickButton { display: none; }
 body.mobile-workbench .messages {
@@ -58,8 +58,8 @@ body.mobile-workbench .messages {
   scroll-padding-block: 20px; overscroll-behavior-y: contain;
 }
 body.mobile-workbench .bubble { font-size: 15px; line-height: 1.8; max-width: min(88%, 640px); }
-body.mobile-workbench .message.assistant .bubble { width: 100%; max-width: 100%; background: transparent; border: 0; padding-inline: 0; }
-body.mobile-workbench .message.assistant .bubble > strong { font-size: 11px; color: #4b7566; margin-bottom: 8px; }
+body.mobile-workbench .message.assistant .bubble { width: 100%; max-width: 100%; min-width: 0; background: transparent; border: 0; padding-inline: 14px; }
+body.mobile-workbench .message.assistant .bubble > strong { font-size: 12px; color: #4b7566; margin-bottom: 8px; }
 body.mobile-workbench .message.user .bubble { background: #e7f0e7; border-color: #dce8dc; border-radius: 18px 18px 5px 18px; }
 body.mobile-workbench .message-content { overflow-wrap: anywhere; }
 body.mobile-workbench .markdown-body { font-size: 15px; line-height: 1.85; }
@@ -70,7 +70,7 @@ body.mobile-workbench .memory-message-action { min-height: 44px; padding: 8px 10
 body.mobile-workbench .welcome { padding: 24px 0 34px; }
 body.mobile-workbench .welcome h1 { font-size: clamp(24px, 3.2vw, 30px); line-height: 1.4; margin-top: 16px; }
 body.mobile-workbench .welcome p { font-size: 14px; }
-body.mobile-workbench .welcome-eyebrow { background: #e9f1e9; color: #527261; border-color: #d7e6d7; letter-spacing: 0; font-size: 11px; font-weight: 500; }
+body.mobile-workbench .welcome-eyebrow { background: #e9f1e9; color: #527261; border-color: #d7e6d7; letter-spacing: 0; font-size: 12px; font-weight: 500; }
 body.mobile-workbench .welcome-suggestions { gap: 8px; margin-top: 24px; }
 body.mobile-workbench .welcome-suggestions button { min-height: 44px; box-shadow: none; padding: 10px 12px; font-size: 12px; text-align: left; }
 body.mobile-workbench .composer {
@@ -87,7 +87,7 @@ body.mobile-workbench #sendButton {
   display: grid; place-items: center; min-width: 48px; width: 48px; height: 48px; align-self: end;
   border-radius: 16px; padding: 0; background: #346d58;
 }
-body.mobile-workbench .composer-hint { margin: 0 3px; font-size: 10px; }
+body.mobile-workbench .composer-hint { margin: 0 3px; font-size: 12px; }
 body.mobile-workbench .mobile-nav {
   display: flex; align-items: stretch; gap: 4px; min-height: var(--mobile-nav-height);
   padding: 3px max(12px, env(safe-area-inset-left, 0px)) calc(3px + env(safe-area-inset-bottom, 0px));
@@ -96,7 +96,7 @@ body.mobile-workbench .mobile-nav {
 body.mobile-workbench .mobile-nav button {
   flex: 1 1 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px;
   min-width: 44px; min-height: 54px; margin: 0; border: 0; border-radius: 12px; background: transparent;
-  font-size: 11px; color: #718578; padding: 5px 0; font-weight: 500;
+  font-size: 12px; color: #718578; padding: 5px 0; font-weight: 500;
 }
 body.mobile-workbench .mobile-nav button[aria-pressed="true"] { background: #eaf2e9; color: #2c6753; }
 body.mobile-workbench .mobile-nav button:active { background: #e1ecdf; }
@@ -108,7 +108,7 @@ body.mobile-workbench .sidebar-view-switch, body.mobile-workbench .sidebar-load-
 body.mobile-workbench .session-item { min-height: 76px; padding: 12px 10px; }
 body.mobile-workbench .session-title { font-size: 14px; }
 body.mobile-workbench .session-row button { min-width: 44px; min-height: 44px; padding: 6px; }
-body.mobile-workbench .session-meta { font-size: 11px; }
+body.mobile-workbench .session-meta { font-size: 12px; }
 body.mobile-workbench .mobile-close-sessions { display: none; }
 body.mobile-workbench .context-rail {
   position: absolute; inset: 0 0 0 auto; grid-column: auto; grid-row: auto; width: min(420px, 100%);
@@ -125,12 +125,12 @@ body.mobile-workbench .rail-tabs button { min-height: 44px; font-size: 14px; }
 body.mobile-workbench .run-controls { padding: 18px; gap: 18px; }
 body.mobile-workbench .run-control input, body.mobile-workbench .run-control select { height: 46px; font-size: 16px; }
 body.mobile-workbench .run-control span, body.mobile-workbench .stream-toggle { font-size: 13px; }
-body.mobile-workbench .run-control small, body.mobile-workbench .model-catalog-row small { font-size: 11px; }
+body.mobile-workbench .run-control small, body.mobile-workbench .model-catalog-row small { font-size: 12px; }
 body.mobile-workbench .run-controls button, body.mobile-workbench .model-catalog-row button,
 body.mobile-workbench .file-toolbar button, body.mobile-workbench .file-panel-action { min-height: 44px; font-size: 13px; }
 body.mobile-workbench .stream-toggle { min-height: 44px; }
 body.mobile-workbench .file-item { min-height: 48px; font-size: 13px; }
-body.mobile-workbench .file-item small { font-size: 11px; }
+body.mobile-workbench .file-item small { font-size: 12px; }
 body.mobile-workbench .file-preview { font-size: 13px; }
 body.mobile-workbench .file-list { max-height: min(40dvh, 340px); }
 body.mobile-workbench .mobile-project-session { min-height: 44px; margin: 12px 18px 0; padding: 10px 14px; font-size: 13px; text-align: left; border: 1px solid #cfdfd1; border-radius: 10px; background: #eef5ec; }
@@ -214,13 +214,13 @@ body.mobile-workbench .mc-key-hint { display: none; }
   body.mobile-workbench .mc-conversation-header p { display: none; }
   body.mobile-workbench .mc-search { flex-wrap: wrap; padding: 0 12px 7px; gap: 6px; }
   body.mobile-workbench .mc-search > input { flex: 1 1 150px; }
-  body.mobile-workbench .mc-search .mc-check { min-height: 24px; font-size: 11px; }
+  body.mobile-workbench .mc-search .mc-check { min-height: 24px; font-size: 12px; }
   body.mobile-workbench .mc-filter-details { padding-inline: 12px; max-height: 90px; overflow: auto; }
   body.mobile-workbench .mc-timeline { min-height: 48px; padding: 12px; }
   body.mobile-workbench .mc-composer { padding: 8px 12px 6px; }
   body.mobile-workbench .mc-composer-actions { gap: 4px; }
-  body.mobile-workbench #mcSendHint { min-width: 0; font-size: 10px; }
-  body.mobile-workbench .mc-composer-actions .mc-quiet { padding-inline: 8px; font-size: 11px; }
+  body.mobile-workbench #mcSendHint { min-width: 0; font-size: 12px; }
+  body.mobile-workbench .mc-composer-actions .mc-quiet { padding-inline: 8px; font-size: 12px; }
   body.mobile-workbench .mc-scroll, body.mobile-workbench .mc-detail-body { padding: 14px; }
   body.mobile-workbench .mc-detail-header { flex-wrap: wrap; padding: 10px 12px; }
   body.mobile-workbench .mc-detail-header h3 { font-size: 16px; }
@@ -283,7 +283,7 @@ body.mobile-workbench #mcSendHint { grid-row: 2; grid-column: 1 / -1; text-align
   body.mobile-workbench .mc-search { flex-wrap: nowrap; }
   body.mobile-workbench .mc-search > input { flex: 1 1 0; min-width: 0; }
   body.mobile-workbench .mc-search button { padding-inline: 8px; }
-  body.mobile-workbench .mc-search .mc-check { font-size: 11px; min-height: 44px; }
+  body.mobile-workbench .mc-search .mc-check { font-size: 12px; min-height: 44px; }
   body.mobile-workbench .mc-composer textarea { resize: none; }
 }
 @media (max-height: 520px) {
@@ -465,7 +465,7 @@ body.mobile-workbench .mobile-nav button {
   gap: 3px;
   border-radius: 14px;
   color: #708278;
-  font-size: 10px;
+  font-size: 12px;
   transition: background-color 120ms ease, color 120ms ease;
 }
 body.mobile-workbench .mobile-nav button svg { width: 20px; height: 20px; }

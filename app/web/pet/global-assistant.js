@@ -46,6 +46,8 @@
     if (connectionFailed) el('gaState').textContent = '连接异常';
     el('gaToggle').hidden = !manager; el('gaToggle').disabled = changing || connectionFailed || !!opening;
     el('gaToggle').textContent = changing ? '正在更新…' : active ? '暂停管理' : '启用管理';
+    // Rendered as a switch: on = management active.
+    el('gaToggle').setAttribute('role', 'switch'); el('gaToggle').setAttribute('aria-checked', String(!!active)); el('gaToggle').title = active ? '暂停管理' : '启用管理';
     el('gaModeHelp').textContent = active ? '助手可整理事项、委托任务。暂停管理后，已委托的任务仍会独立运行。' : '管理暂停时仍可对话、查看进展。启用后，助手可整理事项和委托任务。';
   }
   function managerPath(suffix) { return '/managers/' + encodeURIComponent(manager.session.session_id) + (suffix || ''); }

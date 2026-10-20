@@ -161,6 +161,7 @@ const within = async (page, selector) => {
     await desktop.goto(remoteOrigin + '/desktop-pet/chat.html?mode=work&session_id=transfer-existing');
     await desktop.locator('#messages').getByText('合成历史回复', { exact: true }).waitFor();
     assert.equal(await desktop.evaluate(() => document.body.classList.contains('mobile-workbench')), false);
+    if (!(await desktop.locator('#contextRail').isVisible())) await desktop.locator('#toggleSettingsButton').click();
     await desktop.locator('#filesTabButton').click();
     await desktop.locator('#fileList .file-download-button').first().waitFor();
     await within(desktop, '#fileUploadButton'); await within(desktop, '#fileChooseWorkspaceButton');

@@ -173,6 +173,7 @@ final class SpinePetGdxApp extends ApplicationAdapter {
         profilesLastModified = getProfilesLastModified();
         spineAssetsLastModified = getSpineAssetsLastModified(activeConfig);
         controlWindow = new PetControlWindow(new PetMenuActions(), options.chatUrl, options.projectRoot, modelLibrary);
+        controlWindow.setPetSize(options.renderedWidth(), options.renderedHeight());
         controlWindow.updateModelLibrary(modelLibrary, activeProfileId);
         nextRandomActionAfterSeconds = randomBetween(14f, 30f);
         nextRandomMoveAfterSeconds = randomBetween(30f, 65f);

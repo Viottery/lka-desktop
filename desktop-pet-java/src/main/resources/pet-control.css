@@ -319,3 +319,62 @@
 .quick-settings-panel .quick-settings-pet-action,
 .quick-settings-panel .quick-settings-danger { -fx-font-size: 12px; -fx-padding: 5 8; }
 .quick-settings-panel .quick-settings-danger { -fx-text-fill: #a04f45; }
+
+/* Bubble mode: no card, no footer; the composer is the user's always-present input bubble.
+   Geometry mirrors the web user bubble (workbench-theme.css "Pet bubble mode"): 288px wide,
+   16px right inset, 15px text, 11/15 padding, 18/18/6/18 radius, #e3eee6 fill. */
+.pet-quick-card.pet-bubble-mode {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-effect: null;
+    -fx-padding: 0;
+}
+.pet-bubble-mode .pet-quick-composer { -fx-alignment: bottom-right; -fx-padding: 2 16 10 10; }
+.pet-bubble-mode .pet-bubble-composer-line { -fx-alignment: bottom-right; }
+.pet-bubble-mode .pet-quick-composer-row {
+    -fx-alignment: center-left;
+    -fx-spacing: 6;
+    -fx-padding: 8 8 8 8;
+    -fx-background-color: #e3eee6;
+    -fx-background-radius: 18 18 6 18;
+    -fx-effect: dropshadow(gaussian, rgba(36,58,50,0.16), 16, 0, 0, 4);
+}
+.pet-bubble-mode .pet-quick-native-input {
+    -fx-font-size: 14px;
+    -fx-pref-height: 30;
+    -fx-min-height: 30;
+    -fx-max-height: 30;
+    -fx-text-fill: #243a32;
+    -fx-prompt-text-fill: #7c8f84;
+}
+.pet-bubble-mode .pet-quick-native-send {
+    -fx-min-width: 30; -fx-pref-width: 30; -fx-max-width: 30;
+    -fx-min-height: 30; -fx-pref-height: 30; -fx-max-height: 30;
+    -fx-background-radius: 15;
+    -fx-background-color: #3f7a66;
+}
+/* Two visible lines; the inner content box must not add its own padding. */
+.pet-bubble-mode .pet-quick-native-input .content { -fx-padding: 3 0 7 0; }
+/* Settings and close sit inside the input bubble on a soft chip, before the send button. */
+.pet-bubble-side-actions {
+    -fx-padding: 0 7 0 0;
+    -fx-spacing: 2;
+    -fx-alignment: center;
+    -fx-background-color: transparent;
+    -fx-border-color: transparent rgba(36,58,50,0.16) transparent transparent;
+    -fx-border-width: 0 1 0 0;
+    -fx-border-insets: 6 0 6 0;
+}
+.pet-bubble-side-actions .pet-quick-footer-button { -fx-opacity: 0.75; -fx-min-width: 26; -fx-pref-width: 26; -fx-max-width: 26; -fx-min-height: 26; -fx-pref-height: 26; -fx-max-height: 26; -fx-background-radius: 13; -fx-background-color: transparent; }
+.pet-bubble-side-actions .pet-quick-footer-button:hover { -fx-opacity: 1; -fx-background-color: rgba(255,255,255,0.75); }
+/* Multi-line drafts scroll without a visible scrollbar. */
+.pet-bubble-mode .pet-quick-native-input .scroll-bar:vertical,
+.pet-bubble-mode .pet-quick-native-input .scroll-bar:horizontal {
+    -fx-opacity: 0;
+    -fx-pref-width: 0; -fx-max-width: 0; -fx-min-width: 0;
+    -fx-padding: 0;
+}
+.pet-bubble-mode .pet-quick-native-input .scroll-bar .increment-button,
+.pet-bubble-mode .pet-quick-native-input .scroll-bar .decrement-button { -fx-padding: 0; }
+.pet-bubble-mode .pet-quick-native-input .corner { -fx-background-color: transparent; }
+.pet-bubble-mode .pet-quick-native-input { -fx-padding: 0 0 0 4; }

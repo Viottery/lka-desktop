@@ -97,9 +97,10 @@
   var deletedSnapshotsKey = sessionsKey + "-deleted-snapshots";
   var draftKeyPrefix = sessionsKey + "-draft-";
   var panelSizeKey = "agentic-rag-workbench-panel-sizes-v1";
-  var panelVisibilityKey = "lka-workbench-panel-visibility-v1";
+  var panelVisibilityKey = "lka-workbench-panel-visibility-v2";
+  var legacyPanelVisibilityKey = "lka-workbench-panel-visibility-v1";
   var desktopPanels = workMode && urlParams.get("layout") !== "mobile";
-  var panelVisibility = { sidebar: true, rail: true };
+  var panelVisibility = { sidebar: true, rail: false, followup: true };
   var deletedSessionIds = Object.create(null);
   var deletingSessionIds = Object.create(null);
   var deletedThisPage = Object.create(null);
@@ -117,6 +118,10 @@
   var historyHasMore = false;
   var historyLoading = false;
   var historyRequestGeneration = 0;
+  var historyRequestInFlight = false;
+  var historyActiveRequestKey = "";
+  var historyActiveRequestGeneration = 0;
+  var historyResetQueued = false;
   var historySearchTimer = null;
   var historyError = "";
   var lastKnownSearch = "";
@@ -177,10 +182,19 @@
   var workspaceSwitchPromise = Promise.resolve(true);
   var bridgeWorkspaceRetryScheduled = false;
 
+  var runStatusFadeTimer = 0;
   function setRunStatus(text, kind) {
     if (!runStatus) return;
-    runStatus.textContent = safeText(text);
-    runStatus.className = "run-status" + (kind ? " " + kind : "");
+    var value = safeText(text);
+    runStatus.textContent = value;
+    clearTimeout(runStatusFadeTimer);
+    // "就绪" carries no information; short confirmations fade so the transcript keeps its height.
+    var idle = !kind && /^(就绪|真理已就绪)?$/.test(value.trim());
+    var transient = !kind && !idle && !/^(正在|等待|请|暂时|无法|当前)/.test(value.trim());
+    runStatus.className = "run-status" + (kind ? " " + kind : "") + (idle ? " is-idle" : "");
+    if (transient) runStatusFadeTimer = setTimeout(function () {
+      if (runStatus.textContent === value) runStatus.classList.add("is-idle");
+    }, 4000);
   }
 
   function loadRunSettings() {
@@ -515,6 +529,7 @@
     try {
       localStorage.setItem(runCursorKeyPrefix + encodeURIComponent(session.id), JSON.stringify({
         run_id: session.multiAgentRunId,
+        history_reset_at: session.historyResetAt || "",
         sequence: session.multiAgentSequence || 0
       }));
     } catch (ignored) {
@@ -533,6 +548,7 @@
     }
     return {
       role: role,
+      messageKind: role === "assistant" && rawMessage.messageKind === "manager_instruction" ? "manager_instruction" : "",
       text: text,
       isError: !!rawMessage.isError,
       pendingApproval: pendingApproval,
@@ -562,6 +578,7 @@
       rawSession.conversation_id || rawSession.id || rawSession.session_id
     );
     var runCursor = loadRunCursor(conversationId);
+    if (rawSession.historyResetAt && runCursor.history_reset_at !== rawSession.historyResetAt) runCursor = {};
     var savedRunId = safeText(runCursor.run_id).trim();
     var savedSequence = Math.max(0, Number(runCursor.sequence) || 0);
     var messageList = Array.isArray(rawSession.messages) ? rawSession.messages : [];
@@ -586,8 +603,10 @@
       conversation_id: conversationId,
       kind: safeText(rawSession.kind).trim() || "ordinary",
       backendHistoryVersion: rawSession.backendHistoryVersion === 1 ? 1 : 0,
+      historyResetAt: safeText(rawSession.historyResetAt).trim(),
       title: normalizedTitle,
       title_is_custom: customTitle,
+      backend_title: usefulBackendTitle(rawSession.backend_title),
       created_at: Number(rawSession.created_at) || Date.now(),
       updated_at: Number(rawSession.updated_at) || Date.now(),
       workspace: rawSession.kind === "manager" ? "" : safeText(rawSession.workspace).trim(),
@@ -851,6 +870,12 @@
     return firstUser ? truncateText(firstUser, 20) : "新会话";
   }
 
+  // Backend-generated titles beat a truncated first message, but never a user rename.
+  function usefulBackendTitle(title) {
+    var cleaned = truncateText(safeText(title).trim(), 40);
+    return /^(New Chat|Chat|新会话|新任务|管理会话)$/i.test(cleaned) ? "" : cleaned;
+  }
+
   function applySessionTitle(session) {
     if (!session) {
       return;
@@ -863,7 +888,7 @@
       return;
     }
     session.title_is_custom = false;
-    session.title = deriveAutoSessionTitle(session);
+    session.title = usefulBackendTitle(session.backend_title) || deriveAutoSessionTitle(session);
     if (/^\[(Image|File|Audio) input\]$/.test(session.title)) session.title = session.title === "[File input]" ? "文件任务" : session.title === "[Audio input]" ? "音频任务" : "图片任务";
   }
 
@@ -982,12 +1007,22 @@
     return Number.isFinite(parsed) ? parsed : Date.now();
   }
 
+  function backendManagerInstruction(entry) {
+    if (entry.role !== "tool") return "";
+    var payload = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
+    var envelope = payload.input_envelope && typeof payload.input_envelope === "object" ? payload.input_envelope : {};
+    if ((payload.input_origin || envelope.origin) !== "manager" || envelope.origin !== "manager") return "";
+    // Project explicit task text only; never render the provenance/debug envelope.
+    return typeof envelope.purpose === "string" ? envelope.purpose.trim() : "";
+  }
+
   function normalizeBackendRole(entry) {
     // Provenance describes persisted inputs, never the agent's actual answer.
     if (entry.role === "assistant" || entry.role === "agent") return "assistant";
     var payload = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
     var envelope = payload.input_envelope && typeof payload.input_envelope === "object" ? payload.input_envelope : {};
     var origin = safeText(payload.input_origin || envelope.origin).trim();
+    if (origin === "manager" && backendManagerInstruction(entry)) return "assistant";
     if (origin && origin !== "user") return "";
     if (entry.role === "user" || origin === "user") return "user";
     // Older backends persisted visible tool messages without input provenance.
@@ -1010,8 +1045,10 @@
       id: sessionId,
       conversation_id: sessionId,
       kind: rawSession.kind,
+      historyResetAt: rawSession.metadata && rawSession.metadata.history_reset_at,
       title: safeText(rawSession.title).trim() || "新会话",
       title_is_custom: !!(rawSession.metadata && rawSession.metadata.title_is_custom),
+      backend_title: rawSession.title,
       created_at: timestampToMillis(rawSession.created_at),
       updated_at: timestampToMillis(rawSession.updated_at),
       workspace: rawSession.workspace && rawSession.workspace.path || "",
@@ -1042,12 +1079,17 @@
       return;
     }
 
+    var historyReset = reconcileHistoryReset(existing, remoteSession);
+    if (historyReset < 0) return;
     var existingMessages = Array.isArray(existing.messages) ? existing.messages : [];
     var remoteMessages = Array.isArray(remoteSession.messages) ? remoteSession.messages : [];
     // A sync started before the user sent a turn must not replace its local messages.
-    if (isManagerSession(existing) && (queueEnabled(existing) || existingMessages.some(function (item) { return !!item.queueRequest; }))
+    if (historyReset > 0) {
+      existing.messages = remoteMessages;
+      existing.backendHistoryVersion = remoteSession.backendHistoryVersion;
+    } else if (isManagerSession(existing) && (queueEnabled(existing) || existingMessages.some(function (item) { return !!item.queueRequest; }))
         && (expectedMessages === undefined || expectedMessages === sessionMessageSnapshot(existing.id))) {
-      existing.messages = mergeQueuedMessages(existing, remoteMessages);
+      existing.messages = mergeQueuedMessages(existing, remoteSession);
       existing.backendHistoryVersion = remoteSession.backendHistoryVersion;
     } else if (!managerPendingTurns[existing.id] && !(pendingState && pendingState.conversationId === existing.id)
         && (expectedMessages === undefined || expectedMessages === sessionMessageSnapshot(existing.id))
@@ -1058,9 +1100,8 @@
     if (renamingSessionId !== existing.id && remoteSession.title && remoteSession.title_is_custom) {
       existing.title = remoteSession.title;
       existing.title_is_custom = true;
-    } else if (!existing.title_is_custom && remoteSession.title && remoteSession.title !== "New Chat" && remoteSession.title !== "新会话") {
-      existing.title = remoteSession.title;
     }
+    if (usefulBackendTitle(remoteSession.backend_title)) existing.backend_title = usefulBackendTitle(remoteSession.backend_title);
     existing.kind = remoteSession.kind;
     existing.workspace_is_custom = existing.workspace_is_custom || remoteSession.workspace_is_custom;
     existing.updated_at = Math.max(Number(existing.updated_at) || 0, Number(remoteSession.updated_at) || 0);
@@ -1276,7 +1317,7 @@
     if (!raw || !raw.session_id) return null;
     return {
       id: safeText(raw.session_id), conversation_id: safeText(raw.session_id), kind: safeText(raw.kind).trim() || "ordinary",
-      title: safeText(raw.title).trim() || "新会话", title_is_custom: true,
+      title: safeText(raw.title).trim() || "新会话", title_is_custom: true, backend_title: usefulBackendTitle(raw.title),
       updated_at: timestampToMillis(raw.updated_at), created_at: timestampToMillis(raw.created_at),
       workspace: raw.workspace && raw.workspace.path || "", messages: [defaultGreetingMessage()],
       project_id: raw.project_id || "",
@@ -1286,10 +1327,30 @@
 
   async function loadHistoryPage(reset) {
     if (managerEmbedding) return;
-    if (!reset && (historyLoading || !historyHasMore)) return;
-    var generation = reset ? ++historyRequestGeneration : historyRequestGeneration;
     var deletedView = viewingDeletedSessions;
     var query = sessionSearchInput ? sessionSearchInput.value.trim() : "";
+    var requestKey = (deletedView ? "deleted" : "active") + "\u0000" + query;
+    if (historyRequestInFlight) {
+      if (!reset) return;
+      // Repeated resets for the same active request are already satisfied. If
+      // the search or view changed, let the old request drain and run only the
+      // latest requested page afterward.
+      if (!historyResetQueued && requestKey === historyActiveRequestKey
+          && historyActiveRequestGeneration === historyRequestGeneration) return;
+      historyRequestGeneration += 1;
+      historyResetQueued = true;
+      historyLoading = true;
+      historyOffset = 0;
+      historyHasMore = true;
+      historyError = "";
+      lastKnownSearch = query;
+      if (deletedView) deletedHistoryItems = [];
+      else historyItems = [];
+      renderSessionList();
+      return;
+    }
+    if (!reset && (!historyHasMore || historyLoading)) return;
+    var generation = reset ? ++historyRequestGeneration : historyRequestGeneration;
     if (reset) {
       historyOffset = 0;
       historyHasMore = true;
@@ -1299,6 +1360,9 @@
       else historyItems = [];
     }
     historyLoading = true;
+    historyRequestInFlight = true;
+    historyActiveRequestKey = requestKey;
+    historyActiveRequestGeneration = generation;
     renderSessionList();
     try {
       var url = backendBaseUrl + (deletedView ? "/sessions/deleted" : "/sessions")
@@ -1317,11 +1381,36 @@
     } catch (error) {
       if (generation === historyRequestGeneration) historyError = "加载失败：" + safeText(error.message || error);
     } finally {
+      historyRequestInFlight = false;
+      historyActiveRequestKey = "";
+      historyActiveRequestGeneration = 0;
       if (generation === historyRequestGeneration) {
         historyLoading = false;
         renderSessionList();
       }
+      if (historyResetQueued) {
+        historyResetQueued = false;
+        loadHistoryPage(true);
+      } else if (generation !== historyRequestGeneration) {
+        historyLoading = false;
+        renderSessionList();
+      }
     }
+  }
+
+  function historyIndexSignature(rawValue) {
+    try {
+      var rows = JSON.parse(rawValue || "[]");
+      if (!Array.isArray(rows)) return "";
+      return JSON.stringify(rows.map(function (item) {
+        if (!item || typeof item !== "object") return null;
+        var messages = Array.isArray(item.messages) ? item.messages : [];
+        var last = messages[messages.length - 1] || {};
+        return [item.id || item.session_id || "", item.title || "", !!item.title_is_custom,
+          Number(item.updated_at) || 0, item.workspace || "", item.project_id || "",
+          messages.length, last.messageId || last.message_id || last.id || "", last.role || ""];
+      }));
+    } catch (ignored) { return ""; }
   }
 
   function formatTimestamp(timestamp) {
@@ -1329,21 +1418,59 @@
     var date = new Date(value);
     var hours = String(date.getHours()).padStart(2, "0");
     var minutes = String(date.getMinutes()).padStart(2, "0");
-    return hours + ":" + minutes;
+    var days = sessionDayOffset(value);
+    if (days === 0) return hours + ":" + minutes;
+    if (days === 1) return "昨天 " + hours + ":" + minutes;
+    if (date.getFullYear() === new Date().getFullYear()) return (date.getMonth() + 1) + "月" + date.getDate() + "日";
+    return date.getFullYear() + "/" + (date.getMonth() + 1) + "/" + date.getDate();
+  }
+
+  function sessionDayOffset(timestamp) {
+    var day = new Date(Number(timestamp) || Date.now()); day.setHours(0, 0, 0, 0);
+    var today = new Date(); today.setHours(0, 0, 0, 0);
+    return Math.max(0, Math.round((today - day) / 86400000));
+  }
+
+  function sessionGroupLabel(timestamp) {
+    var days = sessionDayOffset(timestamp);
+    return days === 0 ? "今天" : days === 1 ? "昨天" : days < 7 ? "最近 7 天" : days < 30 ? "最近 30 天" : "更早";
+  }
+
+  // One quiet line of the latest exchange; markdown punctuation is noise in a list.
+  function sessionPreviewText(session) {
+    if (!session || session.summary_only) return "";
+    var list = Array.isArray(session.messages) ? session.messages : [];
+    for (var i = list.length - 1; i >= 0; i -= 1) {
+      var text = safeText(list[i] && list[i].text).replace(/```[\s\S]*?```/g, " ").replace(/[#*_>`|\[\]-]+/g, " ").replace(/\s+/g, " ").trim();
+      if (text && list[i].role !== "system" && list[i].text !== defaultGreetingMessage().text) return (list[i].role === "user" ? "你：" : "") + truncateText(text, 48);
+    }
+    return "";
+  }
+
+  function sessionRunState(session) {
+    if (!session) return "";
+    if (pendingState && pendingState.conversationId === session.id) return "running";
+    var status = safeText(session.runControlStatus);
+    if (status === "waiting_confirmation" || status === "waiting_user") return "waiting";
+    if (status === "paused") return "paused";
+    if ((status === "queued" || status === "running") && session.multiAgentRunId) return "running";
+    return "";
   }
 
   function sidebarDocked() { return desktopPanels && window.innerWidth > 700; }
   function railDocked() { return desktopPanels && window.innerWidth > 1180; }
+  // The ordinary file/settings rail and 真理's follow-up ledger remember their visibility separately.
+  function railVisibilityKey() { return isManagerSession(getActiveSession()) ? "followup" : "rail"; }
   function panelOpen(side) {
     if (side === "sidebar") return sidebarDocked() ? panelVisibility.sidebar : chatShell.classList.contains("sidebar-open");
-    return railDocked() ? panelVisibility.rail : chatShell.classList.contains("settings-open");
+    return railDocked() ? panelVisibility[railVisibilityKey()] : chatShell.classList.contains("settings-open");
   }
   function syncWorkbenchPanels() {
     if (!desktopPanels || !chatShell) return;
     var topbar = document.querySelector(".chat-topbar");
     if (topbar) document.body.style.setProperty("--workbench-header-height", Math.ceil(topbar.getBoundingClientRect().height) + "px");
     document.body.classList.toggle("work-sidebar-hidden", !panelVisibility.sidebar);
-    document.body.classList.toggle("work-rail-hidden", !panelVisibility.rail);
+    document.body.classList.toggle("work-rail-hidden", !panelVisibility[railVisibilityKey()]);
     var managerView = isManagerSession(getActiveSession()), followup = document.querySelector(".ga-workspace");
     [["sidebar", toggleSidebarButton, "sessionSidebar", "会话列表"], ["rail", toggleSettingsButton, "contextRail", managerView ? "跟进面板" : "工作区与设置"]].forEach(function (item) {
       var open = panelOpen(item[0]), button = item[1], panel = item[0] === "rail" && managerView && followup ? followup : document.getElementById(item[2]);
@@ -1361,7 +1488,7 @@
     });
   }
   function setWorkbenchPanelVisible(side, open) {
-    panelVisibility[side] = !!open;
+    panelVisibility[side === "rail" ? railVisibilityKey() : side] = !!open;
     if (open) setPanelSize(side, panelSize(side));
     try { localStorage.setItem(panelVisibilityKey, JSON.stringify(panelVisibility)); } catch (ignored) {}
     syncWorkbenchPanels();
@@ -1466,14 +1593,18 @@
 
   function createMessageElement(role, text, isError, pendingApproval, sessionId, details) {
     var article = document.createElement("article");
-    article.className = "message " + role + (isError ? " error" : "");
+    var managerInstruction = !!(details && details.messageKind === "manager_instruction");
+    // Delegation is an input-side bubble; keep its source separate from human input.
+    var displayRole = managerInstruction ? "user" : role;
+    article.className = "message " + displayRole + (isError ? " error" : "");
     if (details && details.clientId) article.dataset.clientId = details.clientId;
 
     var bubble = document.createElement("div");
     bubble.className = "bubble";
 
     var label = document.createElement("strong");
-    label.textContent = role === "user" ? "你" : "真理";
+    if (managerInstruction) article.dataset.messageKind = "manager_instruction";
+    label.textContent = managerInstruction ? "真理派发的任务" : role === "user" ? "你" : "真理";
 
     bubble.appendChild(label);
     var richAnswer = role === "assistant" && !isError;
@@ -1483,6 +1614,19 @@
     else body.textContent = text;
     if (safeText(text).trim()) {
       bubble.appendChild(body);
+    }
+    // A delegated brief can run to many paragraphs; show its opening and let the reader expand it.
+    if (managerInstruction && safeText(text).length > 180) {
+      article.classList.add("is-collapsible", "is-collapsed");
+      var expand = document.createElement("button");
+      expand.type = "button"; expand.className = "message-expand"; expand.textContent = "展开全部";
+      expand.setAttribute("aria-expanded", "false");
+      expand.addEventListener("click", function () {
+        var collapsed = article.classList.toggle("is-collapsed");
+        expand.textContent = collapsed ? "展开全部" : "收起";
+        expand.setAttribute("aria-expanded", String(!collapsed));
+      });
+      bubble.appendChild(expand);
     }
     if (role === "user") window.LkaImageComposer.renderHistory(bubble, details && details.attachments, sessionId);
     if (role === "user" && details && details.inputStatus) {
@@ -1590,6 +1734,9 @@
           var list = document.createElement("ol"); list.className = "run-history-list";
           entries.forEach(function (entry) { var row = document.createElement("li"); renderProcessEntry(row, entry); list.appendChild(row); });
           processBody.appendChild(list);
+          var toolCount = entries.filter(function (entry) { return entry.kind === "tool"; }).length;
+          var failedCount = entries.filter(function (entry) { return entry.kind === "tool" && /failed|error|rejected|blocked|timeout|timed_out/.test(entry.status || ""); }).length;
+          summary.textContent = "运行过程" + (toolCount ? " · " + toolCount + " 次工具调用" : "") + (failedCount ? " · " + failedCount + " 次未成功" : "");
           var fallback = box.querySelector(".agent-progress-list"); if (fallback) fallback.hidden = true;
         } else processBody.textContent = "这次运行没有保存可回看的事件。";
         loaded = process.complete;
@@ -1692,7 +1839,7 @@
       var folderName = parts.pop() || "";
       var isDefaultFolder = folderName === (session && session.id) ||
         (/^session-[0-9a-f]{64}$/.test(folderName) && parts.slice(-2).join("/") === "Local Knowledge Agent/Workspaces");
-      workspaceSummary.textContent = isManagerSession(session) ? "真理 · 按授权范围处理任务" : !path ? "正在准备独立工作区…" : isDefaultFolder ? "默认任务工作区" : folderName;
+      workspaceSummary.textContent = isManagerSession(session) ? "真理 · 按授权范围处理任务" : !path ? (getSessionMessageCount(session) ? "正在准备独立工作区…" : "新任务 · 发送后创建工作区") : isDefaultFolder ? "默认任务工作区" : folderName;
       workspaceSummary.title = path || "尚未设置工作区";
     }
     var managerView = isManagerSession(session);
@@ -1732,7 +1879,7 @@
       var button = document.createElement("button");
       button.type = "button";
       button.className = "file-panel-action";
-      button.textContent = "载入当前工作区";
+      button.textContent = "现在创建工作区";
       button.addEventListener("click", async function () {
         var session = getActiveSession();
         if (!session) return;
@@ -1761,7 +1908,7 @@
     if (fileUpButton) fileUpButton.disabled = !fileRelativePath;
     if (!session) { showFilePanelMessage("打开会话后查看工作区文件。", false); return; }
     if (session.id.indexOf("conv_") === 0) {
-      showFilePanelMessage("需要先载入这个新任务的工作区。", true);
+      showFilePanelMessage("这个新任务还没有工作区，发送第一条消息时会自动创建。", true);
       return;
     }
     showFilePanelMessage("正在读取文件…", false);
@@ -1903,6 +2050,9 @@
     if (managerEmbedding || isManagerSession(session) || globalAssistantLaunch && getSessionMessageCount(session) === 0) { renderWorkspaceSummary(session); return; }
     renderWorkspaceSummary(session);
     if (session.workspace) return;
+    // An untouched task creates its directory on first send, file panel use or
+    // attachment preparation; merely opening a window must not leave folders behind.
+    if (getSessionMessageCount(session) === 0) return;
     try {
       await ensureSessionWorkspace(session);
       if (activeSessionId === session.id) setRunStatus("已创建此会话的工作区");
@@ -1987,11 +2137,21 @@
       sessionList.appendChild(empty);
     }
 
+    var lastGroup = "";
     ordered.forEach(function (session) {
       if (!session.summary_only) applySessionTitle(session);
+      var group = searchTerm ? "" : sessionGroupLabel(session.updated_at);
+      if (group && group !== lastGroup) {
+        var groupLabel = document.createElement("p");
+        groupLabel.className = "session-group-label";
+        groupLabel.textContent = group;
+        sessionList.appendChild(groupLabel);
+        lastGroup = group;
+      }
 
       var item = document.createElement("article");
-      item.className = "session-item" + (session.id === activeSessionId ? " active" : "");
+      var runState = sessionRunState(session);
+      item.className = "session-item" + (session.id === activeSessionId ? " active" : "") + (runState ? " is-" + runState : "");
       item.dataset.sessionId = session.id;
 
       var row = document.createElement("div");
@@ -2058,6 +2218,10 @@
         title.className = "session-title";
         title.textContent = session.title || "新会话";
         openButton.appendChild(title);
+        var time = document.createElement("span");
+        time.className = "session-time";
+        time.textContent = runState === "running" ? "进行中" : runState === "waiting" ? "待确认" : runState === "paused" ? "已暂停" : formatTimestamp(session.updated_at);
+        openButton.appendChild(time);
 
         var actions = document.createElement("div");
         actions.className = "session-actions";
@@ -2095,7 +2259,8 @@
 
       var meta = document.createElement("span");
       meta.className = "session-meta";
-      meta.textContent = formatTimestamp(session.updated_at) + (session.summary_only ? " · 点击载入" : " · " + getSessionMessageCount(session) + " 条消息");
+      var folder = safeText(session.workspace).replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+      meta.textContent = sessionPreviewText(session) || (session.summary_only ? (folder && !/^(conv|session)[-_]/.test(folder) ? folder + " · 点击载入" : "点击载入") : "尚未开始");
 
       item.appendChild(row);
       item.appendChild(meta);
@@ -2707,7 +2872,11 @@
     var title = session && session.pauseRequested ? "正在暂停，等待当前步骤结束" : session && session.resumePending ? "正在继续任务" :
       action === "pause" ? "暂停任务，当前步骤结束后生效" : action === "resume" ? "从暂停的位置继续" :
       status === "paused" ? "发送新指令，打断并替换暂停的任务" : running ? "任务运行中，可先写好下一条消息" : "发送任务";
-    if (continuous && action === "send") { label = "发送消息"; title = activeRun ? "发送后排队，当前任务结束后自动处理" : "发送消息"; }
+    if (continuous && action === "send") {
+      var replacingPaused = !!pausedInputReplacement(session);
+      label = replacingPaused ? "替换暂停任务" : "发送消息";
+      title = replacingPaused ? "用新指令替换暂停的任务并开始执行；保留其他排队消息" : activeRun ? "发送后排队，当前任务结束后自动处理" : "发送消息";
+    }
     if (resumeInputs) { label = "继续处理消息"; title = "继续处理未完成的消息"; }
     if (sendButton.title !== title) sendButton.title = title;
     if (sendButton.getAttribute("aria-label") !== label) sendButton.setAttribute("aria-label", label);
@@ -2777,7 +2946,8 @@
       if (!detail || activeAgentTurnGeneration !== generation || session.multiAgentRunId !== replacementId
           || expectedMessages !== sessionMessageSnapshot(session.id)) return;
       var remote = sessionFromBackendDetail(detail);
-      if (remote && (remote.backendHistoryFiltered || remote.messages.length >= session.messages.length)) { session.messages = remote.messages; if (activeSessionId === session.id) renderActiveMessages(); persistSessions(); }
+      var historyReset = remote ? reconcileHistoryReset(session, remote) : -1;
+      if (historyReset >= 0 && (historyReset > 0 || remote.backendHistoryFiltered || remote.messages.length >= session.messages.length)) { session.messages = remote.messages; if (activeSessionId === session.id) renderActiveMessages(); persistSessions(); }
     }).catch(function () {});
     reconnectSavedRun(session, { answer: "", events: [], session: session, generation: generation, terminal: false });
   }
@@ -2886,12 +3056,13 @@
         return;
       }
       var role = normalizeBackendRole(entry);
-      var content = safeText(entry.content || entry.text).trim();
+      var instruction = backendManagerInstruction(entry);
+      var content = instruction || safeText(entry.content || entry.text).trim();
       if (!content && entry.payload && Array.isArray(entry.payload.attachment_ids) && entry.payload.attachment_ids.length) content = "[File input]";
       if (!role || !content) {
         return;
       }
-      var details = entry.payload && typeof entry.payload === "object" ? buildAgentRunDetails(entry.payload) : {};
+      var details = !instruction && entry.payload && typeof entry.payload === "object" ? buildAgentRunDetails(entry.payload) : {};
       normalized.push({
         messageId: safeText(entry.message_id),
         clientId: safeText(entry.payload && entry.payload.client_message_id),
@@ -2902,6 +3073,7 @@
         logPath: details.logPath || "",
         selectedPackage: details.selectedPackage || "",
         role: role,
+        messageKind: instruction ? "manager_instruction" : "",
         text: content,
         isError: false,
         attachments: window.LkaImageComposer.fromIds(entry.payload && entry.payload.attachment_ids)
@@ -3850,16 +4022,44 @@
     return safeText(data && (data.message || payload.message || payload.delta || payload.content_snapshot)).trim();
   }
 
+  // Display names for registered tools; the raw id stays visible as secondary text.
+  var toolPackageLabels = { matter: "事项", mail: "邮件", filesystem: "文件", bash: "命令", web: "网页", memory: "记忆",
+    observation: "工具结果", knowledge: "知识库", instructions: "指引", context: "上下文", vision: "图片", runtime: "运行环境",
+    messages: "消息", projects: "项目", management: "管理", management_delegates: "委托" };
+  var toolNameLabels = { "bash.run": "运行命令", "bash.python_environment": "查看 Python 环境", "runtime.now": "查看当前时间",
+    "web.open": "打开网页", "web.find": "在网页中查找", "vision.inspect_image": "查看图片", "mail.sync": "同步邮件",
+    "mail.snapshot": "读取邮件快照", "mail.persist_matters": "从邮件写入事项", "matter.link_source": "关联事项来源",
+    "memory.remember": "保存记忆", "filesystem.list_directory": "查看目录", "context.source": "读取上下文来源" };
+  var toolVerbLabels = { list: "查看", get: "读取", read: "读取", search: "搜索", create: "创建", create_many: "批量创建",
+    update: "更新", delete: "删除", load: "读取", load_messages: "读取", load_document: "读取", load_chunks: "读取",
+    batch_load: "批量读取", group: "整理", list_sources: "查看", read_project: "读取项目", search_project: "搜索项目",
+    read_file: "读取", edit_file: "编辑", create_file: "创建", read_session: "读取", write_session: "写入",
+    list_sessions: "查看", interrupt_session: "中断", terminate_session: "结束" };
+  function friendlyToolName(name) {
+    var raw = safeText(name).trim();
+    if (toolNameLabels[raw]) return toolNameLabels[raw];
+    var match = /^([a-z_]+)\.([a-z_]+)$/.exec(raw);
+    if (!match || !toolPackageLabels[match[1]]) return raw;
+    var object = toolPackageLabels[match[1]] + (/_session/.test(match[2]) ? "会话" : /_file$/.test(match[2]) ? "" : /_sources$/.test(match[2]) ? "来源" : "");
+    return toolVerbLabels[match[2]] ? toolVerbLabels[match[2]] + object : object + " · " + match[2];
+  }
+  // Skip-mode approvals are a configured pass-through, not information worth a timeline row.
+  function reviewIsAutomatic(review) {
+    return !!review && review.status === "approved" && (review.decided_by === "system.skip" || review.mode === "skip" ||
+      /automatically approved/i.test(safeText(review.decision_reason || review.reason)));
+  }
+
   function timelineText(eventName, data) {
     if (eventName === "run_pause_requested") return "正在暂停，等待当前步骤结束";
     if (eventName === "run_paused") return "任务已暂停";
     if (eventName === "run_resumed") return "继续处理任务";
     if (eventName === "run_started") return "开始处理任务";
     if (eventName === "llm_started") return "正在分析任务";
-    if (eventName === "tool_started") return "调用工具：" + safeText(data && (data.tool_name || data.payload && data.payload.tool_name) || "处理中");
+    if (eventName === "tool_started") return "调用工具：" + friendlyToolName(safeText(data && (data.tool_name || data.payload && data.payload.tool_name) || "处理中"));
     if (eventName === "safety_review_required") return "等待安全审查";
     if (eventName === "safety_review_decided") {
       var review = data && data.payload && data.payload.review || {};
+      if (reviewIsAutomatic(review)) return "";
       var result = review.status === "approved" ? "安全审批通过" : "安全审批未通过";
       return result + "：" + safeText(review.tool_name || "工具调用")
         + "；原因：" + safeText(review.decision_reason || review.reason || "未提供具体理由");
@@ -3953,7 +4153,10 @@
       entry.message = (entry.status === "running" ? "调用工具：" : entry.status === "completed" ? "工具完成：" :
         entry.status === "failed" || entry.status === "error" ? "工具失败：" : "工具已结束：") + toolName;
     } else if (eventName === "safety_review_decided") {
-      entries.push({ key: ++process.serial, type: eventName, kind: "review",
+      var decided = payload.review || {};
+      if (reviewIsAutomatic(decided)) return false;
+      entries.push({ key: ++process.serial, type: eventName, kind: "review", reviewStatus: safeText(decided.status),
+        toolName: safeText(decided.tool_name), reason: truncateText(safeText(decided.decision_reason || decided.reason), 4000),
         message: truncateText(timelineText(eventName, data), 4000), at: processEventTime(data) });
     } else if (["run_started", "llm_started", "safety_review_required"].indexOf(eventName) >= 0) {
       var message = truncateText(timelineText(eventName, data), 180);
@@ -4025,12 +4228,30 @@
         label.className = "run-process-label"; badge.className = "run-process-state";
         heading.appendChild(label); heading.appendChild(badge); item.appendChild(heading);
       }
-      heading.querySelector(".run-process-label").textContent = entry.toolName;
+      var friendly = friendlyToolName(entry.toolName);
+      heading.querySelector(".run-process-label").textContent = friendly;
+      var rawId = heading.querySelector(".run-process-tool-id");
+      if (friendly !== entry.toolName) {
+        if (!rawId) { rawId = document.createElement("code"); rawId.className = "run-process-tool-id"; heading.insertBefore(rawId, heading.querySelector(".run-process-state")); }
+        rawId.textContent = entry.toolName;
+      } else if (rawId) rawId.remove();
       var badge = heading.querySelector(".run-process-state");
       badge.textContent = { failed: "失败", error: "失败", completed: "完成", rejected: "未执行", blocked: "受阻",
         cancelled: "已取消", timed_out: "超时", timeout: "超时" }[entry.status] ||
         (entry.status === "running" ? "调用中" : "已结束");
       badge.setAttribute("data-status", entry.status);
+    } else if (entry.kind === "review" && entry.reviewStatus) {
+      // Approved reviews collapse to one line; a rejection keeps its full reason visible.
+      item.textContent = "";
+      var approved = entry.reviewStatus === "approved";
+      var line = document.createElement("span");
+      line.className = "run-process-review-line" + (approved ? "" : " is-rejected");
+      line.textContent = (approved ? "已通过安全审查" : "安全审查未通过") + (entry.toolName ? "：" + friendlyToolName(entry.toolName) : "");
+      item.appendChild(line);
+      if (entry.reason && (!approved || entry.reason.length < 80)) {
+        var reason = document.createElement("span"); reason.className = "run-process-review-reason"; reason.textContent = entry.reason;
+        item.appendChild(reason);
+      } else if (entry.reason) item.title = entry.reason;
     } else item.textContent = entry.message || entry.type || "步骤已完成";
   }
 
@@ -4113,7 +4334,7 @@
     else if (eventName === "run_started" || eventName === "llm_started" || eventName === "tool_started") live.timelineState = "running";
     if (activeSessionId === live.id) {
       renderRunTimeline(live);
-      if (eventName === "safety_review_decided") {
+      if (eventName === "safety_review_decided" && !reviewIsAutomatic(data && data.payload && data.payload.review)) {
         var review = data && data.payload && data.payload.review || {};
         setRunStatus(message + (review.status === "rejected" ? "。可在下一条消息中明确授权这项操作后重试。" : ""),
           review.status === "rejected" ? "error" : "");
@@ -4367,7 +4588,47 @@
     if (!response.ok) { var error = new Error(typeof value.detail === "string" ? value.detail : "HTTP " + response.status); error.status = response.status; error.detail = value.detail; throw error; }
     return value;
   }
-  function mergeQueuedMessages(session, remote) {
+  // Reset markers are monotonic: a GET issued before a reset cannot restore
+  // deleted history, even when it finishes after a newer GET.
+  function reconcileHistoryReset(session, remote) {
+    var previous = Date.parse(session.historyResetAt || "") || 0;
+    var incoming = Date.parse(remote.historyResetAt || "") || 0;
+    if (previous > incoming) return -1;
+    if (incoming <= previous) return 0;
+    session.historyResetAt = remote.historyResetAt;
+    (session.messages || []).forEach(function (message) {
+      if (message.queueRequest) clearAcknowledgedQueueDraft(session, message);
+    });
+    // Replacing the state invalidates outstanding probes, uploads and POSTs;
+    // unknown submissions must not be reconstructed or automatically retried.
+    delete managerInputQueues[session.id];
+    if (activeSessionId === session.id) {
+      activeAgentTurnGeneration += 1;
+      abortActiveAgentEventStream();
+      if (pendingState && pendingState.conversationId === session.id) pendingState = null;
+    } else {
+      var subscription = managerStreams[session.id];
+      if (subscription) subscription.controller.abort();
+      delete managerStreams[session.id];
+      delete managerPendingTurns[session.id];
+    }
+    session.multiAgentRunId = ""; session.multiAgentSequence = 0;
+    session.multiAgentSnapshot = null; delete session.multiAgentSnapshotRequest;
+    multiAgentSnapshotRequestIds[session.id] = (multiAgentSnapshotRequestIds[session.id] || 0) + 1;
+    session.timelineEvents = []; session.timelineState = ""; session.runControlStatus = "";
+    session.pauseRequested = false; session.resumePending = false; session.pausedAnswer = "";
+    try { localStorage.removeItem(runCursorKeyPrefix + encodeURIComponent(session.id)); } catch (ignored) {}
+    delete liveAnswers[session.id];
+    delete runProcesses[session.id];
+    session.messages = remote.messages;
+    session.backendHistoryVersion = remote.backendHistoryVersion;
+    return 1;
+  }
+  function mergeQueuedMessages(session, remoteSession) {
+    var reset = reconcileHistoryReset(session, remoteSession);
+    if (reset < 0) return session.messages;
+    if (reset > 0) return remoteSession.messages;
+    var remote = remoteSession.messages;
     var local = session.messages || [], state = queueState(session);
     var merged = remote.map(function (message) {
       var prior = local.find(function (item) { return message.messageId && item.messageId === message.messageId || message.clientId && item.clientId === message.clientId; });
@@ -4389,7 +4650,7 @@
       if (!response.ok) return false;
       var remote = sessionFromBackendDetail(await response.json()), current = getSessionById(session.id);
       if (!current || !isManagerSession(remote) || remote.id !== current.id || state.historyEpoch !== historyEpoch || managerInputQueues[session.id] !== state) return false;
-      current.messages = mergeQueuedMessages(current, remote.messages);
+      current.messages = mergeQueuedMessages(current, remote);
       current.backendHistoryVersion = remote.backendHistoryVersion;
       // A terminal run's final answer is now represented by durable history.
       if (current.multiAgentRunId === runId && isTerminalRunStatus(current.runControlStatus)) { delete liveAnswers[current.id]; delete runProcesses[current.id]; }
@@ -4512,10 +4773,23 @@
   function sameQueuedAttachments(left, right) {
     return JSON.stringify((left || []).map(function (item) { return item.local_id || item.attachment_id; })) === JSON.stringify((right || []).map(function (item) { return item.local_id || item.attachment_id; }));
   }
+  function pausedInputReplacement(session) {
+    if (!session || session.runControlStatus !== "paused" || !session.multiAgentRunId) return "";
+    // Reserve the paused task for the first explicit replacement, including an
+    // uncertain request restored after reload. Later messages stay in FIFO order.
+    var pending = (session.messages || []).some(function (message) {
+      return message.queueRequest && message.queueRequest.replace_run_id === session.multiAgentRunId;
+    });
+    return pending ? "" : session.multiAgentRunId;
+  }
   function enqueueManagerInput(session, question) {
     var text = safeText(question).trim(), selected = window.LkaImageComposer.capture(session.id);
     var failed = session.messages.find(function (item) { return item.inputStatus === "submission_failed" && item.queueRequest && item.queueRequest.user_input === text && sameQueuedAttachments(item.attachments, selected); });
     var body = failed ? failed.queueRequest : { client_message_id: "input-" + Date.now() + "-" + Math.random().toString(36).slice(2), user_input: text, attachment_ids: [], llm: { response_mode: runSettings.stream ? "stream" : "text" } };
+    if (!failed) {
+      var pausedRunId = pausedInputReplacement(session);
+      if (pausedRunId) body.replace_run_id = pausedRunId;
+    }
     if (!failed && ["skip", "llm", "manual"].indexOf(runSettings.safetyMode) >= 0) body.safety_review_mode = runSettings.safetyMode;
     if (!failed) addMessageToSession(session, "user", text || "[File input]", false, { clientId: body.client_message_id, attachments: selected, inputStatus: "submitting", queueRequest: body });
     // Capture/clear synchronously, before uploads or requests yield to a new draft.
@@ -4858,6 +5132,10 @@
       });
       if (!response.ok) return false;
       var remote = sessionFromBackendDetail(await response.json());
+      var current = getSessionById(sessionId);
+      var historyReset = current && remote ? reconcileHistoryReset(current, remote) : -1;
+      if (historyReset < 0) return false;
+      if (historyReset > 0) { if (activeSessionId === sessionId) renderActiveMessages(); persistSessions(); return true; }
       if (!remote || !remote.messages.length || !remote.backendHistoryFiltered
           && (remote.messages[remote.messages.length - 1].role !== "assistant"
           || remote.messages[remote.messages.length - 1].text === defaultGreetingMessage().text)) return false;
@@ -5374,11 +5652,18 @@
         var detail = await quickAssistantRequest("/sessions/" + encodeURIComponent(raw.session_id));
         var loaded = sessionFromBackendDetail(detail);
         if (!isManagerSession(loaded) || loaded.id !== raw.session_id) throw new Error("真理会话类型不匹配，请重试。");
+        var cached = getSessionById(loaded.id);
+        var resetBeforeRecovery = cached ? reconcileHistoryReset(cached, loaded) : 0;
+        if (resetBeforeRecovery < 0) loaded = cached;
         await recoverManagerRun(loaded);
         if (scope !== assistantCacheEpoch) throw quickAssistantCancelled();
         preparedAssistantId = loaded.id;
         var latest = getSessionById(loaded.id);
-        if (latest && latest.messages.some(function (item) { return item.queueRequest; })) loaded.messages = mergeQueuedMessages(latest, loaded.messages);
+        var historyReset = latest ? reconcileHistoryReset(latest, loaded) : 0;
+        if (historyReset >= 0 && resetBeforeRecovery > 0) { Object.assign(latest, loaded); loaded = latest; }
+        if (historyReset < 0) loaded = latest;
+        else if (historyReset > 0) { latest.messages = loaded.messages; loaded = latest; }
+        else if (latest && latest.messages.some(function (item) { return item.queueRequest; })) loaded.messages = mergeQueuedMessages(latest, loaded);
         // A live conversation can start while default identity/history is loading.
         // Keep that exact object and its cursor rather than replacing it with an older snapshot.
         if (isManagerSession(latest) && (managerPendingTurns[latest.id] || managerStreams[latest.id] || latest.updated_at > startedAt)) loaded = latest;
@@ -5531,7 +5816,7 @@
     var other = panelSize(side === "sidebar" ? "rail" : "sidebar");
     var min = side === "sidebar" ? 210 : 250;
     var max = side === "sidebar" ? 380 : 520;
-    var otherVisible = !desktopPanels || (side === "sidebar" ? railDocked() && panelVisibility.rail : sidebarDocked() && panelVisibility.sidebar);
+    var otherVisible = !desktopPanels || (side === "sidebar" ? railDocked() && panelVisibility[railVisibilityKey()] : sidebarDocked() && panelVisibility.sidebar);
     var centerReserve = window.innerWidth > 1180 && otherVisible ? other + 420 : 420;
     var value = Math.max(min, Math.min(max, window.innerWidth - centerReserve, Math.round(requested)));
     document.body.style.setProperty(side === "sidebar" ? "--sidebar-width" : "--rail-width", value + "px");
@@ -5581,8 +5866,10 @@
   }
   if (desktopPanels) {
     try {
-      var savedVisibility = JSON.parse(localStorage.getItem(panelVisibilityKey) || "{}");
-      ["sidebar", "rail"].forEach(function (side) { if (typeof savedVisibility[side] === "boolean") panelVisibility[side] = savedVisibility[side]; });
+      var savedVisibility = JSON.parse(localStorage.getItem(panelVisibilityKey) || "null");
+      // v1 only carried a list preference worth keeping; the rail adopts the new collapsed default.
+      if (!savedVisibility) savedVisibility = { sidebar: (JSON.parse(localStorage.getItem(legacyPanelVisibilityKey) || "{}") || {}).sidebar };
+      ["sidebar", "rail", "followup"].forEach(function (side) { if (typeof savedVisibility[side] === "boolean") panelVisibility[side] = savedVisibility[side]; });
     } catch (ignored) {}
     function panelIcon(right) {
       return '<svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M' + (right ? '15' : '9') + ' 4v16"/></svg>';
@@ -5890,6 +6177,8 @@
     if (event.key !== sessionsKey && event.key !== deletedSessionsKey
         && event.key !== deletedSnapshotsKey) return;
     if (pendingState) return;
+    var refreshHistory = event.key !== sessionsKey
+      || historyIndexSignature(event.oldValue) !== historyIndexSignature(event.newValue);
     var activeBefore = getActiveSession();
     var before = activeBefore ? JSON.stringify({ title: activeBefore.title,
       workspace: activeBefore.workspace, messages: activeBefore.messages }) : "";
@@ -5904,7 +6193,7 @@
       renderActiveMessages();
       renderWorkspaceSummary(activeAfter);
     }
-    loadHistoryPage(true);
+    if (refreshHistory) loadHistoryPage(true);
     refreshActiveRunState();
   });
   document.addEventListener("visibilitychange", function () {

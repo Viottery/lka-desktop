@@ -99,10 +99,21 @@
     } catch (error) { if (request === state.listRequest && isOpen()) { el("projectList").textContent = "项目列表暂不可用"; status(explain(error), true); } }
     finally { if (request === state.listRequest) el("projectMore").disabled = false; }
   }
+  // Per-task folders are named after their conversation id; they are not projects anyone chose.
+  function automaticName(name) { return /^(conv|session)[-_][0-9a-f-]{8,}$/i.test(String(name || "")); }
+  function displayName(p) { return automaticName(p.name) ? "任务工作区 · " + String(p.name).slice(-6) : p.name; }
+  function displayPath(path) {
+    var match = /^\/mnt\/([a-z])(\/.*)?$/i.exec(String(path || ""));
+    return match ? match[1].toUpperCase() + ":" + (match[2] || "/") : path;
+  }
   function paintProjects() {
-    el("projectList").innerHTML = state.rows.map(function (p) {
-      return '<button class="memory-entry project-entry" data-project-id="' + esc(p.project_id) + '" aria-pressed="' + Boolean(state.selected && state.selected.project_id === p.project_id) + '"><strong>' + esc(p.name) + '</strong><p>' + esc(p.workspace_path || "目录未绑定") + '</p><small>' + esc(p.session_count) + ' 个会话' + (chat.get().projectId === p.project_id ? ' · 当前项目' : '') + '</small></button>';
-    }).join("") || '<p class="memory-note">暂无匹配项目。登记现有目录后可在其中建立多个会话。</p>';
+    var hidden = state.rows.filter(function (p) { return automaticName(p.name) && !Number(p.session_count); });
+    var rows = state.showUnusedAutomatic ? state.rows : state.rows.filter(function (p) { return hidden.indexOf(p) < 0; });
+    el("projectList").innerHTML = rows.map(function (p) {
+      return '<button class="memory-entry project-entry" data-project-id="' + esc(p.project_id) + '" aria-pressed="' + Boolean(state.selected && state.selected.project_id === p.project_id) + '"><strong>' + esc(displayName(p)) + '</strong><p>' + esc(displayPath(p.workspace_path) || "目录未绑定") + '</p><small>' + esc(p.session_count) + ' 个会话' + (chat.get().projectId === p.project_id ? ' · 当前项目' : '') + '</small></button>';
+    }).join("") + (hidden.length ? '<button type="button" class="project-unused-toggle" id="projectUnusedToggle">' + (state.showUnusedAutomatic ? "隐藏" : "显示") + ' ' + hidden.length + ' 个未使用的任务工作区</button>' : "")
+      || '<p class="memory-note">暂无匹配项目。登记现有目录后可在其中建立多个会话。</p>';
+    if (el("projectUnusedToggle")) el("projectUnusedToggle").onclick = function () { state.showUnusedAutomatic = !state.showUnusedAutomatic; paintProjects(); };
     Array.prototype.forEach.call(el("projectList").querySelectorAll("[data-project-id]"), function (button) {
       button.onclick = function () { selectProject(button.dataset.projectId); };
     });
@@ -119,7 +130,7 @@
     } catch (error) { if (request === state.detailRequest && isOpen()) { el("projectDetail").textContent = "项目详情暂不可用"; status(explain(error), true); } }
   }
   function renderDetail(project) {
-    el("projectDetail").innerHTML = '<h3>' + esc(project.name) + '</h3><p class="project-path">' + esc(project.workspace_path || "目录未绑定") + '</p><p class="memory-note">' + esc(project.session_count) + ' 个会话。会话各自保留消息，共用这个目录和项目记忆。</p>' +
+    el("projectDetail").innerHTML = '<h3>' + esc(displayName(project)) + '</h3><p class="project-path">' + esc(displayPath(project.workspace_path) || "目录未绑定") + '</p><p class="memory-note">' + esc(project.session_count) + ' 个会话。会话各自保留消息，共用这个目录和项目记忆。</p>' +
       '<form id="projectRenameForm"><label>显示名称<input id="projectRenameName" required maxlength="120" value="' + esc(project.name) + '"></label><div class="memory-actions"><button type="submit">保存名称</button><button type="button" id="projectRenameReload" hidden>重新载入版本</button></div><p class="memory-note" id="projectRenameStatus" role="status">只修改显示名称，不修改文件夹。</p></form>' +
       '<div class="memory-actions"><button id="projectNewSession" class="memory-primary">在此项目新建会话</button><button id="projectMemory">项目记忆</button><button id="projectMatters">待办与规划</button></div>' +
       '<h3 class="project-sessions-heading">项目会话</h3><input id="projectSessionSearch" type="search" maxlength="500" aria-label="搜索项目会话" placeholder="搜索会话标题和消息"><div id="projectSessions" class="project-sessions"></div><button id="projectSessionMore" hidden>加载更多会话</button>';

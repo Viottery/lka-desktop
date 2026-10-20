@@ -64,7 +64,8 @@
       files: 'M4 4h7v7H4V4Z M15 4h5v7h-5V4Z M4 15h7v5H4v-5Z M15 15h5v5h-5v-5Z',
       menu: 'M4 6h16 M4 12h16 M4 18h16',
       plus: 'M12 4v16 M4 12h16',
-      settings: 'M12 3v3 M12 18v3 M3 12h3 M18 12h3 M5.6 5.6l2.1 2.1 M16.3 16.3l2.1 2.1 M5.6 18.4l2.1-2.1 M16.3 7.7l2.1-2.1 M16 12a4 4 0 1 1-8 0 4 4 0 0 1 8 0',
+      followup: 'M12 3a9 9 0 1 0 9 9 M12 7.5a4.5 4.5 0 1 0 4.5 4.5 M12 12l7-7 M16 4.5h3.5V8',
+      settings: 'M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4',
       close: 'M6 6l12 12 M18 6 6 18',
       send: 'M3 11L21 3L13 21L10 13Z M10 13L21 3'
     };
@@ -73,7 +74,16 @@
     toggle.setAttribute('aria-controls', 'sessionSidebar');
     document.getElementById('newQuickSessionButton').innerHTML = icon('plus');
     document.getElementById('newQuickSessionButton').setAttribute('aria-label', '新建会话');
-    document.getElementById('toggleSettingsButton').innerHTML = icon('settings');
+    // The same button opens the workspace panel or, in 真理's conversation, the follow-up sheet.
+    var panelButton = document.getElementById('toggleSettingsButton'), panelIconKind = '';
+    function syncPanelIcon() {
+      var kind = document.body.classList.contains('manager-conversation') ? 'followup' : 'settings';
+      if (kind === panelIconKind) return;
+      panelIconKind = kind; panelButton.innerHTML = icon(kind);
+      panelButton.setAttribute('aria-label', kind === 'followup' ? '打开跟进' : '工作区与设置'); panelButton.title = kind === 'followup' ? '跟进' : '工作区与设置';
+    }
+    syncPanelIcon();
+    new MutationObserver(syncPanelIcon).observe(document.body, { attributes: true, attributeFilter: ['class'] });
     document.getElementById('closeSettingsButton').innerHTML = icon('close');
     var attachmentMenu = document.getElementById('attachmentMenu');
     var uploadButton = document.getElementById('uploadAttachmentButton');

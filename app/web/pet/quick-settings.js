@@ -146,7 +146,7 @@
   function syncEntry() { if (!quick) button.hidden = context().kind !== 'manager'; }
   syncEntry();
   if (button) {
-    button.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m9 3-.7 2.6-2 .9L4 6l-2 3 2 2v2l-2 2 2 3 2.3-.5 2 .9L9 21h6l.7-2.6 2-.9 2.3.5 2-3-2-2v-2l2-2-2-3-2.3.5-2-.9L15 3Z"/><circle cx="12" cy="12" r="3"/></svg>';
+    button.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 4h-7M10 4H3M21 12h-9M8 12H3M21 20h-5M12 20H3M14 2v4M8 10v4M16 18v4"/></svg>';
     button.setAttribute('aria-label', quick ? '对话设置' : '真理设置'); button.setAttribute('aria-controls', 'quickSettings');
     button.setAttribute('aria-expanded', 'false'); button.title = quick ? '对话设置' : '真理设置';
     button.addEventListener('click', function (event) { event.stopImmediatePropagation(); opened ? close(true) : open(); }, true);

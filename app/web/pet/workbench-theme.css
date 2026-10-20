@@ -1,0 +1,593 @@
+/* Workbench theme: one token set and the final word on desktop workbench layout.
+   Loaded last. Desktop-only rules use W = body.work-mode:not(.mobile-workbench). */
+:root {
+  --wb-paper: #f6f8f7;
+  --wb-surface: #ffffff;
+  --wb-sunken: #eef3f2;
+  --wb-line: #dfe7e6;
+  --wb-line-strong: #c9d8d6;
+  --wb-ink: #1c3238;
+  --wb-ink-2: #3c5459;
+  --wb-muted: #647a7f;
+  --wb-accent: #23767b;
+  --wb-accent-strong: #195c61;
+  --wb-accent-soft: #e3f0ee;
+  --wb-warn: #8a6420;
+  --wb-warn-soft: #fbf3e2;
+  --wb-danger: #a8453e;
+  --wb-side: #17333b;
+  --wb-side-raised: #ffffff14;
+  --wb-side-active: #ffffff1f;
+  --wb-side-ink: #e9f3f2;
+  --wb-side-muted: #9cb8ba;
+  --wb-radius: 12px;
+  /* Legacy names resolve to the same palette. */
+  --paper: var(--wb-paper);
+  --surface: var(--wb-surface);
+  --soft: var(--wb-sunken);
+  --ink: var(--wb-ink);
+  --muted: var(--wb-muted);
+  --line: var(--wb-line);
+  --teal: var(--wb-accent);
+  --teal-dark: var(--wb-accent-strong);
+  --danger: var(--wb-danger);
+}
+
+/* ---------- Shared message details (all modes) ---------- */
+.matter-ref {
+  display: inline-flex; align-items: center; gap: 4px; max-width: 100%; margin: 0 1px; padding: 0 8px;
+  min-height: 22px; border: 1px solid #c7ddd9; border-radius: 999px; background: var(--wb-accent-soft);
+  color: var(--wb-accent-strong); font: inherit; font-size: .9em; line-height: 1.6; vertical-align: baseline;
+  cursor: pointer; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.matter-ref::before { content: ""; flex: 0 0 6px; width: 6px; height: 6px; border-radius: 2px; background: currentColor; opacity: .55; }
+.matter-ref:hover { background: #d3e8e4; border-color: #9fc5be; }
+.matter-ref:focus-visible { outline: 2px solid var(--wb-accent); outline-offset: 1px; }
+
+.message.is-collapsed .message-content {
+  max-height: 7.2em; overflow: hidden;
+  -webkit-mask-image: linear-gradient(#000 60%, transparent); mask-image: linear-gradient(#000 60%, transparent);
+}
+.message-expand {
+  display: inline-block; margin: 6px 0 0; padding: 2px 0; border: 0; background: transparent;
+  color: var(--wb-accent-strong); font: inherit; font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.message-expand:hover { text-decoration: underline; }
+
+.run-process-tool-id {
+  margin-left: auto; padding: 0 5px; border-radius: 4px; background: transparent; color: #8b9c9f;
+  font: 11.5px/1.5 Consolas, "Cascadia Code", monospace; white-space: nowrap;
+}
+.run-process-heading .run-process-tool-id + .run-process-state { margin-left: 10px; }
+.run-process-review-line { color: #6f8a7c; font-size: 12px; }
+.run-process-review-line::before { content: "✓"; margin-right: 6px; color: #6f9f86; }
+.run-process-review-line.is-rejected { color: var(--wb-danger); font-weight: 600; }
+.run-process-review-line.is-rejected::before { content: "!"; color: var(--wb-danger); }
+.run-process-review-reason { display: block; margin-top: 2px; color: var(--wb-muted); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; }
+
+.run-status.is-idle { display: none !important; }
+
+/* ---------- Desktop workbench ---------- */
+body.work-mode:not(.mobile-workbench) { background: var(--wb-paper); color: var(--wb-ink); }
+body.work-mode:not(.mobile-workbench) .chat-shell,
+body.work-mode:not(.mobile-workbench) .chat-main { background: var(--wb-paper); }
+
+/* Header: title with the workspace line beneath it; one row instead of three. */
+body.work-mode:not(.mobile-workbench) .chat-topbar {
+  min-height: 58px; padding-block: 8px; gap: 10px; background: var(--wb-paper); border-bottom: 1px solid var(--wb-line);
+}
+body.work-mode:not(.mobile-workbench) .chat-session-meta { gap: 2px; min-width: 0; }
+body.work-mode:not(.mobile-workbench) .chat-session-meta strong {
+  font-size: 15px; font-weight: 650; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+body.workspace-in-header .chat-session-meta > span#activeSessionSubtitle { display: none; }
+body.workspace-in-header .chat-session-meta .context-strip {
+  display: flex; align-items: center; gap: 2px; min-height: 0; padding: 0 !important; margin: 0;
+  border: 0; background: transparent; min-width: 0;
+}
+body.workspace-in-header .context-strip .context-dot { width: 6px; height: 6px; flex-basis: 6px; margin-right: 5px; box-shadow: none; background: #7ea9a5; }
+body.workspace-in-header .context-strip .context-copy { flex: 0 1 auto; flex-direction: row; min-width: 0; }
+body.workspace-in-header .context-strip .context-copy span { display: none; }
+body.workspace-in-header .context-strip .context-copy strong { font-size: 12px; font-weight: 500; color: var(--wb-muted); }
+body.workspace-in-header .context-strip .text-action {
+  flex: none; min-height: 22px; padding: 1px 7px; border-radius: 6px; color: var(--wb-muted); font-size: 12px; font-weight: 500;
+}
+body.workspace-in-header .context-strip .text-action:hover:not(:disabled) { color: var(--wb-accent-strong); background: var(--wb-sunken); }
+body.workspace-in-header .context-strip .text-action:disabled { display: none; }
+body.workspace-in-header .context-strip #changeWorkspaceButton::before { content: "·"; margin-right: 6px; color: #b3c2c3; }
+body.work-mode:not(.mobile-workbench) .chat-topbar .icon-button {
+  width: 34px; min-width: 34px; height: 34px; border: 1px solid transparent; background: transparent; color: var(--wb-ink-2);
+}
+body.work-mode:not(.mobile-workbench) .chat-topbar .icon-button:hover { background: var(--wb-sunken); color: var(--wb-accent-strong); }
+/* Matters and messages live in the sidebar navigation on the desktop workbench. */
+body.work-mode:not(.mobile-workbench) #openMattersButton { display: none; }
+
+/* Status line appears only while it says something. */
+body.work-mode:not(.mobile-workbench) .run-status:not(:empty) {
+  padding: 6px max(30px, calc((100% - 780px) / 2)); border-bottom: 1px solid var(--wb-line);
+  background: var(--wb-accent-soft); color: var(--wb-accent-strong); font-size: 12.5px;
+}
+body.work-mode:not(.mobile-workbench) .run-status.error { background: #fbeeea; color: var(--wb-danger); }
+body.work-mode:not(.mobile-workbench) .run-status.review { background: var(--wb-warn-soft); color: var(--wb-warn); }
+
+/* Sidebar: navigation first, then recent work. */
+body.work-mode:not(.mobile-workbench) .session-sidebar { background: var(--wb-side); color: var(--wb-side-ink); border-right: 0; }
+body.work-mode .sidebar-header { min-height: 64px; padding: 12px 14px; border-bottom: 0; }
+body.work-mode .brand-mark { flex-basis: 38px; width: 38px; height: 38px; }
+body.work-mode .brand-lockup strong { font-size: 16px; }
+.wb-nav { display: flex; flex-direction: column; gap: 2px; padding: 2px 10px 12px; border-bottom: 1px solid #ffffff14; }
+.wb-nav .wb-nav-item {
+  position: relative; display: flex; align-items: center; gap: 11px; width: 100%; min-height: 36px; margin: 0; padding: 7px 10px;
+  border: 0; border-radius: 9px; background: transparent; color: var(--wb-side-ink); font: inherit; font-size: 13.5px; font-weight: 500;
+  text-align: left; cursor: pointer;
+}
+.wb-nav .wb-nav-item svg { flex: 0 0 18px; width: 18px; height: 18px; color: var(--wb-side-muted); }
+.wb-nav .wb-nav-item:hover { background: var(--wb-side-raised); }
+.wb-nav .wb-nav-item:hover svg { color: var(--wb-side-ink); }
+.wb-nav .wb-nav-item[aria-current="page"] { background: var(--wb-side-active); color: #fff; }
+.wb-nav .wb-nav-item[aria-current="page"]::before {
+  content: ""; position: absolute; left: -10px; top: 8px; bottom: 8px; width: 3px; border-radius: 0 3px 3px 0; background: #8ccfc6;
+}
+.wb-nav .wb-nav-item[aria-current="page"] svg { color: #bfe3dd; }
+.wb-nav .wb-nav-item:focus-visible { outline: 2px solid #8ccfc6; outline-offset: -2px; }
+/* 真理 is the first destination, a little more present than the others. */
+.wb-nav .ga-entry { margin-bottom: 4px; padding: 9px 10px; border: 1px solid #ffffff1f; background: #ffffff0d; }
+.wb-nav .ga-entry .ga-emblem { flex: 0 0 18px; width: 18px; font-size: 18px; text-align: center; color: #9ad0c4; }
+.wb-nav .ga-entry > span:nth-child(2) { display: flex; align-items: baseline; gap: 8px; }
+.wb-nav .ga-entry strong { font-size: 13.5px; font-weight: 600; }
+.wb-nav .ga-entry small { font-size: 12px; color: var(--wb-side-muted); }
+.wb-nav .ga-entry[aria-current="page"] { background: var(--wb-side-active); color: #fff; border-color: #8ccfc655; }
+.wb-nav .ga-entry[aria-current="page"] small { color: #b9d6d6; }
+.wb-nav .ga-entry.is-shadowed[aria-current="page"] { background: #ffffff0d; border-color: #ffffff1f; }
+.wb-nav .ga-entry.is-shadowed[aria-current="page"]::before { display: none; }
+
+body.work-mode .sidebar-tools { padding: 12px 12px 6px; }
+body.work-mode .sidebar-tools-heading { margin: 0 2px 8px; }
+body.work-mode .sidebar-caption { margin: 0; color: var(--wb-side-muted); font-size: 12px; font-weight: 600; letter-spacing: .04em; }
+body.work-mode #toggleDeletedSessionsButton {
+  min-height: 24px; padding: 2px 8px; border: 0; border-radius: 6px; background: transparent; color: var(--wb-side-muted); font-size: 12px;
+}
+body.work-mode #toggleDeletedSessionsButton:hover { background: var(--wb-side-raised); color: var(--wb-side-ink); }
+body.work-mode .sidebar-tools input { height: 32px; border-color: #ffffff22; background: #ffffff0e; font-size: 13px; }
+
+/* Session list: grouped by day, a preview line, actions on demand. */
+.session-group-label { margin: 12px 8px 4px; color: #86a6a9; font-size: 12px; font-weight: 600; letter-spacing: .03em; }
+.session-group-label:first-child { margin-top: 2px; }
+body.work-mode .session-list { gap: 1px; padding: 0 8px 12px; }
+body.work-mode .session-item {
+  position: relative; display: block; padding: 8px 10px; border: 0; border-radius: 9px; background: transparent; color: var(--wb-side-ink);
+}
+body.work-mode .session-item:hover { background: var(--wb-side-raised); }
+body.work-mode .session-item.active { background: var(--wb-side-active); box-shadow: inset 3px 0 #8ccfc6; }
+body.work-mode .session-row { display: flex; align-items: center; gap: 6px; min-height: 22px; }
+body.work-mode .session-open { display: flex; align-items: baseline; gap: 8px; flex: 1; min-width: 0; padding: 0; text-align: left; }
+body.work-mode .session-title { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13.5px; font-weight: 550; }
+.session-time { flex: none; color: var(--wb-side-muted); font-size: 12px; font-variant-numeric: tabular-nums; }
+body.work-mode .session-meta {
+  display: block; margin-top: 2px; color: var(--wb-side-muted); font-size: 12px; line-height: 1.5;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+body.work-mode .session-item .session-actions {
+  position: absolute; top: 5px; right: 6px; display: flex; gap: 2px; padding-left: 14px;
+  background: linear-gradient(90deg, transparent, var(--wb-side) 14px); border-radius: 0 9px 9px 0;
+}
+/* Pointer devices reveal row actions on hover; touch screens keep them visible. */
+@media (hover: hover) {
+  body.work-mode .session-item .session-actions { opacity: 0; transition: opacity .12s; }
+  body.work-mode .session-item:hover .session-actions,
+  body.work-mode .session-item:focus-within .session-actions { opacity: 1; }
+  body.work-mode .session-item:hover .session-time,
+  body.work-mode .session-item:focus-within .session-time { visibility: hidden; }
+}
+@media (hover: none) { body.work-mode .session-item .session-time { display: none; } }
+body.work-mode .session-item .session-mini.session-icon-action { flex-basis: 28px; width: 28px; min-width: 28px; height: 28px; }
+body.work-mode .session-item .session-mini svg { width: 16px; height: 16px; }
+/* The rename editor keeps its buttons in the flow. */
+body.work-mode .session-item:has(.session-rename-input) .session-actions { position: static; opacity: 1; background: none; padding: 0; }
+.session-item.is-running .session-time, .session-item.is-running .session-title::before { color: #8fd2c6; }
+.session-item.is-waiting .session-time { color: #e8c27d; }
+.session-item.is-paused .session-time { color: #c3cfd0; }
+.session-item.is-running .session-title::before, .session-item.is-waiting .session-title::before {
+  content: ""; display: inline-block; width: 7px; height: 7px; margin-right: 7px; border-radius: 50%;
+  vertical-align: 1px; background: #6fc3b5;
+}
+.session-item.is-waiting .session-title::before { background: #e3b45c; }
+@media (prefers-reduced-motion: no-preference) {
+  .session-item.is-running .session-title::before { animation: wb-pulse 1.4s ease-in-out infinite; }
+  @keyframes wb-pulse { 50% { opacity: .35; } }
+}
+body.work-mode #sessionListStatus { color: #86a6a9; font-size: 12px; }
+
+/* Transcript. */
+body.work-mode:not(.mobile-workbench) .messages { gap: 18px; padding-top: 22px; }
+body.work-mode:not(.mobile-workbench) .bubble {
+  padding: 12px 16px; border: 1px solid var(--wb-line); border-radius: 14px; font-size: 14.5px; line-height: 1.75; color: var(--wb-ink);
+}
+body.work-mode:not(.mobile-workbench) .assistant .bubble { border-top-left-radius: 5px; background: var(--wb-surface); }
+body.work-mode:not(.mobile-workbench) .user .bubble { border-color: #cfe2df; border-top-right-radius: 5px; background: var(--wb-accent-soft); }
+body.work-mode:not(.mobile-workbench) .bubble > strong {
+  display: block; margin-bottom: 3px; color: var(--wb-accent-strong); font-size: 12px; font-weight: 650;
+}
+/* "你" says nothing the alignment does not already say. */
+body.work-mode:not(.mobile-workbench) .message.user:not([data-message-kind]) .bubble > strong { display: none; }
+body.work-mode:not(.mobile-workbench) .message[data-message-kind="manager_instruction"] .bubble { background: #f1f5f4; border-style: dashed; }
+body.work-mode:not(.mobile-workbench) .markdown-body { font-size: 14.5px; line-height: 1.75; }
+/* Per-message actions appear with the pointer. */
+body.work-mode:not(.mobile-workbench) .memory-message-action { opacity: 0; transition: opacity .12s; font-size: 12px; }
+body.work-mode:not(.mobile-workbench) .message:hover .memory-message-action,
+body.work-mode:not(.mobile-workbench) .memory-message-action:focus-visible { opacity: 1; }
+
+/* Completed-run details: a quiet disclosure, not a second card. */
+body.work-mode:not(.mobile-workbench) .agent-run-details {
+  margin-top: 8px; padding: 0; border: 0; border-radius: 0; background: transparent;
+}
+body.work-mode:not(.mobile-workbench) .agent-run-details > summary {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 8px 3px 6px; margin-left: -6px; border-radius: 7px;
+  color: var(--wb-muted); font-size: 12px; font-weight: 500; list-style: none; cursor: pointer;
+}
+body.work-mode:not(.mobile-workbench) .agent-run-details > summary::-webkit-details-marker { display: none; }
+body.work-mode:not(.mobile-workbench) .agent-run-details > summary::before { content: "▸"; font-size: 11px; transition: transform .12s; }
+body.work-mode:not(.mobile-workbench) .agent-run-details[open] > summary::before { transform: rotate(90deg); }
+body.work-mode:not(.mobile-workbench) .agent-run-details > summary:hover { background: var(--wb-sunken); color: var(--wb-accent-strong); }
+body.work-mode:not(.mobile-workbench) .agent-run-details[open] .run-history-content {
+  margin-top: 6px; padding: 4px 0 2px 14px; border-left: 2px solid var(--wb-line);
+}
+body.work-mode:not(.mobile-workbench) .agent-run-details .run-history-list { margin-top: 2px; padding-left: 0; border-left: 0; }
+body.work-mode:not(.mobile-workbench) .run-process-label { color: var(--wb-ink-2); font-size: 13px; }
+body.work-mode:not(.mobile-workbench) .run-process-text { color: var(--wb-ink-2); font-size: 13.5px; }
+body.work-mode:not(.mobile-workbench) .run-process-state { font-size: 12px; }
+
+/* Composer surface matches the paper. */
+body.work-mode:not(.mobile-workbench) .composer { border-color: var(--wb-line-strong); box-shadow: 0 2px 10px #19313a0a; }
+
+/* Right rail shares the page surface. */
+body.work-mode:not(.mobile-workbench) .context-rail { background: var(--wb-paper); border-left: 1px solid var(--wb-line); }
+body.work-mode:not(.mobile-workbench) .context-rail-header { padding: 14px 16px 12px; border-color: var(--wb-line); }
+body.work-mode:not(.mobile-workbench) .context-rail-header span { font-size: 12px; }
+body.work-mode:not(.mobile-workbench) .rail-tabs button[aria-selected="true"] { background: transparent; }
+body.work-mode:not(.mobile-workbench) .ga-workspace { background: var(--wb-paper); }
+/* View shortcuts in settings duplicate the sidebar navigation. */
+body.work-mode:not(.mobile-workbench) :is(#openMatterCenterButton, #openProjectCenterButton, #openMessageCenterButton, #openMemoryCenterButton),
+body.work-mode:not(.mobile-workbench) #openMemoryCenterButton + small,
+body.work-mode:not(.mobile-workbench) .control-divider:has(+ #openMatterCenterButton) { display: none; }
+body.work-mode:not(.mobile-workbench) .run-controls { gap: 15px; }
+body.work-mode:not(.mobile-workbench) .run-control small,
+body.work-mode:not(.mobile-workbench) .defaults-save-status,
+body.work-mode:not(.mobile-workbench) .model-catalog-row small { color: var(--wb-muted); font-size: 12px; }
+
+/* ---------- Views dock beside the sidebar instead of floating over it ---------- */
+body.work-mode:not(.mobile-workbench) { --wb-view-left: var(--visible-sidebar-width, var(--sidebar-width, 250px)); }
+body.work-mode:not(.mobile-workbench).work-sidebar-hidden { --wb-view-left: 0px; }
+@media (max-width: 700px) { body.work-mode:not(.mobile-workbench) { --wb-view-left: 0px; } }
+
+body.work-mode:not(.mobile-workbench) :is(#projectsOverlay, #memoryOverlay, #messageCenter) {
+  inset: 0 0 0 var(--wb-view-left); padding: 0; background: var(--wb-paper); backdrop-filter: none; align-items: stretch; justify-content: stretch;
+}
+body.work-mode:not(.mobile-workbench) :is(#projectsOverlay, #memoryOverlay) > .memory-center,
+body.work-mode:not(.mobile-workbench) #messageCenter > .message-center {
+  width: 100%; max-width: none; height: 100%; max-height: none; border: 0; border-radius: 0; box-shadow: none; background: var(--wb-paper);
+}
+body.work-mode:not(.mobile-workbench) :is(#projectsOverlay, #memoryOverlay) .memory-header,
+body.work-mode:not(.mobile-workbench) #messageCenter .mc-header { min-height: 58px; padding: 12px 28px; background: var(--wb-paper); }
+body.work-mode:not(.mobile-workbench) :is(#projectsOverlay, #memoryOverlay) .memory-header h2,
+body.work-mode:not(.mobile-workbench) #messageCenter .mc-header h2 { font-size: 18px; }
+/* Token settings only matter after an authorization failure, which opens them automatically. */
+body.work-mode:not(.mobile-workbench) :is(#projectConnection, #memoryConnection):not([open]) { display: none; }
+
+body.work-mode:not(.mobile-workbench) #matterWorkspace { left: var(--wb-view-left); }
+/* Width comes from the matters grid (--mw-nav-width), so its icon-rail mode keeps working. */
+body.work-mode:not(.mobile-workbench) #matterWorkspace .mw-sidebar {
+  padding: 18px 10px 16px; background: var(--wb-sunken); color: var(--wb-ink-2); border-right: 1px solid var(--wb-line);
+}
+body.work-mode:not(.mobile-workbench) #matterWorkspace[data-nav=rail] .mw-sidebar { padding: 18px 7px 12px; }
+body.work-mode:not(.mobile-workbench) #matterWorkspace[data-nav=rail] #matterNav button span { color: var(--wb-muted); }
+body.work-mode:not(.mobile-workbench) #matterWorkspace[data-nav=rail] #matterNav button[aria-current=page] span { color: var(--wb-accent-strong); }
+body.work-mode:not(.mobile-workbench) #matterWorkspace[data-nav=rail] #matterBack { justify-content: center; padding: 6px 0; font-size: 12px; }
+body.work-mode:not(.mobile-workbench) #matterWorkspace[data-nav=rail] #matterBack::before { content: none; }
+body.work-mode:not(.mobile-workbench) #matterWorkspace .mw-brand { display: none; }
+/* Matters has no close button of its own; keep an explicit way back to the conversation. */
+body.work-mode:not(.mobile-workbench) #matterWorkspace #matterBack {
+  justify-content: flex-start; gap: 6px; padding: 6px 8px; border-radius: 7px; color: var(--wb-accent-strong); font-size: 13px;
+}
+body.work-mode:not(.mobile-workbench) #matterWorkspace #matterBack::before { content: "←"; }
+body.work-mode:not(.mobile-workbench) #matterWorkspace #matterBack:hover { background: #e2ebea; color: var(--wb-ink); }
+body.work-mode:not(.mobile-workbench) #matterWorkspace .mw-sidebar .mw-new-task {
+  margin: 0 2px 16px; background: var(--wb-accent); border-color: var(--wb-accent); color: #fff;
+}
+body.work-mode:not(.mobile-workbench) #matterWorkspace .mw-sidebar .mw-new-task:hover { background: var(--wb-accent-strong); }
+body.work-mode:not(.mobile-workbench) #matterWorkspace .mw-new-task kbd { border-color: #ffffff66; color: #e6f3f1; }
+body.work-mode:not(.mobile-workbench) #matterWorkspace #matterNav button { color: var(--wb-ink-2); padding: 8px 10px; }
+body.work-mode:not(.mobile-workbench) #matterWorkspace #matterNav button:hover { background: #e2ebea; color: var(--wb-ink); }
+body.work-mode:not(.mobile-workbench) #matterWorkspace #matterNav button[aria-current=page] { background: var(--wb-surface); color: var(--wb-accent-strong); box-shadow: 0 1px 2px #19313a14; }
+body.work-mode:not(.mobile-workbench) #matterWorkspace #matterNav small { background: #19313a0d; color: var(--wb-muted); }
+body.work-mode:not(.mobile-workbench) #matterWorkspace .mw-sidebar-foot { color: var(--wb-muted); padding-top: 24px; }
+body.work-mode:not(.mobile-workbench) #matterWorkspace .mw-sidebar-foot #matterDate { color: var(--wb-muted); }
+body.work-mode:not(.mobile-workbench) #matterWorkspace #matterConnection:not([open]) { display: none; }
+
+/* Docked views use the full height; matters keeps the session sidebar visible. */
+body.work-mode:not(.mobile-workbench).matter-workspace-open > .chat-shell { visibility: visible; }
+body.work-mode:not(.mobile-workbench) #projectsOverlay .memory-list,
+body.work-mode:not(.mobile-workbench) #memoryOverlay .memory-list { max-height: calc(100vh - 240px); }
+.project-unused-toggle {
+  margin: 10px 4px; padding: 6px 10px !important; border: 1px dashed var(--wb-line-strong) !important; border-radius: 8px;
+  background: transparent !important; color: var(--wb-muted) !important; font-size: 12px; text-align: left;
+}
+.project-unused-toggle:hover { color: var(--wb-accent-strong) !important; border-color: var(--wb-accent) !important; }
+
+/* ---------- Quick window beside the pet ---------- */
+/* Toolbar: larger, evenly spaced targets in one quiet colour; navigation left, actions right. */
+body.quick-mode .chat-topbar { flex-basis: 36px; min-height: 36px; padding-top: 5px; gap: 2px; }
+body.quick-mode .topbar-actions { gap: 2px; }
+body.quick-mode .chat-topbar button { width: 30px; min-width: 30px; height: 30px; min-height: 30px; border-radius: 8px; color: #6f877c; }
+body.quick-mode .chat-topbar button svg { width: 18px; height: 18px; }
+body.quick-mode .chat-topbar button:hover, body.quick-mode .chat-topbar button:focus-visible { background: #e9eee4; color: #2f6455; }
+body.quick-mode #openWorkbenchButton { background: transparent; }
+body.quick-mode #openWorkbenchButton svg { display: block; }
+body.quick-mode .topbar-actions > #openWorkbenchButton { margin-left: 6px; position: relative; }
+body.quick-mode .topbar-actions > #openWorkbenchButton::before {
+  content: ""; position: absolute; left: -5px; top: 7px; bottom: 7px; width: 1px; background: #dfe3d6;
+}
+/* Reading: slightly larger text, clearer separation between question and answer. */
+body.quick-mode .bubble, body.quick-mode .markdown-body { font-size: 13.5px; line-height: 1.75; }
+body.quick-mode .message.user .message-content { color: #5f7365; font-size: 13px; }
+body.quick-mode .message.user .bubble { padding-bottom: 8px; }
+body.quick-mode .message { margin-bottom: 14px; }
+body.quick-mode #questionInput { font-size: 13.5px; }
+body.quick-mode #questionInput::placeholder { color: #8d998e; }
+body.quick-mode .run-status:not(:empty) { margin: 0 8px 4px; padding: 4px 9px; border-radius: 7px; background: #eef2e8; color: #4f6a5a; font-size: 12px; }
+body.quick-mode .run-status.error { background: #fbeee8; color: #9a5543; }
+
+/* ---------- Mobile workbench ---------- */
+body.mobile-workbench .chat-topbar { border-bottom: 1px solid var(--wb-line); }
+body.mobile-workbench .chat-session-meta strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+body.mobile-workbench .context-strip { min-height: 38px; border-bottom: 1px solid var(--wb-line); background: var(--wb-paper); }
+body.mobile-workbench .context-copy strong { font-size: 12.5px; color: var(--wb-muted); }
+body.mobile-workbench .bubble { font-size: 15px; line-height: 1.75; }
+body.mobile-workbench .markdown-body { font-size: 15px; }
+body.mobile-workbench .message.user:not([data-message-kind]) .bubble > strong { display: none; }
+body.mobile-workbench .bubble > strong { font-size: 12px; }
+body.mobile-workbench .welcome h1 { font-size: 24px; }
+body.mobile-workbench .welcome-suggestions button { min-height: 44px; font-size: 14px; text-align: left; }
+body.mobile-workbench .mobile-nav button span { font-size: 12px; }
+body.mobile-workbench .agent-run-details > summary { font-size: 12.5px; }
+/* Completed-run details stay a quiet disclosure on phones and in the quick window too. */
+:is(body.mobile-workbench, body.quick-mode) .agent-run-details { margin-top: 6px; padding: 0; border: 0; border-radius: 0; background: transparent; }
+:is(body.mobile-workbench, body.quick-mode) .agent-run-details > summary {
+  display: inline-flex; align-items: center; gap: 6px; min-height: 32px; padding: 2px 6px 2px 0;
+  color: var(--wb-muted); font-size: 12.5px; font-weight: 500; list-style: none; cursor: pointer;
+}
+:is(body.mobile-workbench, body.quick-mode) .agent-run-details > summary::-webkit-details-marker { display: none; }
+:is(body.mobile-workbench, body.quick-mode) .agent-run-details > summary::before { content: "▸"; font-size: 11px; }
+:is(body.mobile-workbench, body.quick-mode) .agent-run-details[open] > summary::before { content: "▾"; }
+:is(body.mobile-workbench, body.quick-mode) .agent-run-details[open] .run-history-content { padding-left: 12px; border-left: 2px solid var(--wb-line); }
+body.quick-mode .agent-run-details { border-top: 0; }
+body.mobile-workbench .memory-message-action { color: #8a9a9d; }
+
+/* ---------- Quick window: 真理 speaking ---------- */
+body.quick-mode { --qp-paper: #faf8f2; --qp-ink: #2f463b; --qp-muted: #849386; --qp-accent: #3f7a66; --qp-bubble: #ffffff; --qp-user: #e7efe6; --qp-line: #e4e6db; }
+body.quick-mode:not(.native-composer) .chat-main { padding: 6px 10px 6px; }
+
+/* Header: a round emblem that breathes while she works, and one line saying what she is doing. */
+body.quick-mode .qa-bar { margin: 0 4px; padding: 6px 0 8px; border-bottom: 0; }
+body.quick-mode .qa-identity { gap: 8px; min-width: 0; max-width: 100%; }
+body.quick-mode .qa-identity .qa-star {
+  position: relative; display: grid; place-items: center; flex: 0 0 26px; width: 26px; height: 26px; border-radius: 50%;
+  background: radial-gradient(circle at 35% 30%, #fff, #e3eee6 70%); box-shadow: 0 0 0 1px #d3e0d6, 0 2px 6px #3f7a661f;
+  color: var(--qp-accent); font-size: 14px;
+}
+body.quick-mode .qa-identity strong { font-size: 13px; color: var(--qp-ink); }
+body.quick-mode.qa-busy #qaMode { display: none; }
+.qa-activity { display: inline-flex; align-items: center; gap: 6px; min-width: 0; color: var(--qp-accent); font-size: 12px; }
+.qa-activity[hidden] { display: none; }
+.qa-activity-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.qa-typing { display: inline-flex; gap: 3px; }
+.qa-typing i { width: 4px; height: 4px; border-radius: 50%; background: currentColor; opacity: .35; }
+
+/* Conversation: her replies are bubbles pointing at the emblem, yours are compact pills. */
+body.quick-mode .messages { padding: 4px 4px 10px; }
+body.quick-mode .message { margin: 0 0 10px; }
+body.quick-mode .message.user { display: flex; justify-content: flex-end; }
+body.quick-mode .message.user .bubble {
+  width: auto; max-width: 86%; padding: 6px 12px; border: 0; border-radius: 14px 14px 4px 14px; background: var(--qp-user);
+}
+body.quick-mode .message.user .message-content { color: #3f5a4b; font-size: 13px; line-height: 1.6; }
+body.quick-mode .message.assistant .bubble {
+  position: relative; width: auto; max-width: 100%; padding: 10px 13px 9px; border-radius: 4px 14px 14px 14px;
+  background: var(--qp-bubble); box-shadow: 0 1px 2px #2f463b0f, 0 4px 14px #2f463b0d; color: var(--qp-ink);
+}
+body.quick-mode .message.assistant .bubble::before {
+  content: ""; position: absolute; top: -5px; left: 9px; width: 10px; height: 10px; background: var(--qp-bubble);
+  transform: rotate(45deg); border-radius: 2px; box-shadow: -1px -1px 1px #2f463b08;
+}
+body.quick-mode .message.assistant .markdown-body { color: var(--qp-ink); }
+body.quick-mode .message.error .bubble { box-shadow: none; }
+body.quick-mode .agent-run-details { margin-top: 4px; }
+body.quick-mode .message .run-timeline { margin-bottom: 4px; }
+body.quick-mode .message .run-timeline > summary { color: var(--qp-muted); font-size: 12px; }
+
+/* While a reply streams, a soft caret trails the text. */
+body.quick-mode .agent-live-output .message-content:not([hidden]) > :last-child::after {
+  content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px;
+  border-radius: 1px; background: var(--qp-accent);
+}
+
+/* Composer: one floating pill. */
+body.quick-mode:not(.native-composer) .composer {
+  margin: 2px 0 4px; padding: 4px 4px 4px 6px; border: 1px solid #dfe4d8; border-radius: 22px; background: #fffefa;
+  box-shadow: 0 2px 8px #2f463b0d; align-items: center;
+}
+body.quick-mode:not(.native-composer) .composer:focus-within { border-color: #a9c4b2; box-shadow: 0 0 0 3px #3f7a6614; }
+body.quick-mode #questionInput { min-height: 34px; padding: 7px 2px; }
+body.quick-mode .composer-upload, body.quick-mode #sendButton { align-self: center; margin-top: 0; }
+body.quick-mode .chat-topbar { border-top: 0; }
+
+@media (prefers-reduced-motion: no-preference) {
+  /* A thin halo hugging the emblem, not a ring around the whole header. */
+  body.quick-mode.qa-busy .qa-identity .qa-star { animation: qp-breathe 1.8s ease-in-out infinite; }
+  @keyframes qp-breathe { 0%, 100% { box-shadow: 0 0 0 1px #d3e0d6, 0 0 0 0 #3f7a6600; } 50% { box-shadow: 0 0 0 1px #9fc0ad, 0 0 0 3px #3f7a6624; } }
+  .qa-typing i { animation: qp-dot 1.1s ease-in-out infinite; }
+  .qa-typing i:nth-child(2) { animation-delay: .15s; }
+  .qa-typing i:nth-child(3) { animation-delay: .3s; }
+  @keyframes qp-dot { 0%, 80%, 100% { opacity: .25; transform: translateY(0); } 40% { opacity: .9; transform: translateY(-3px); } }
+  body.quick-mode .message.is-new { animation: qp-pop 220ms cubic-bezier(.2, .9, .3, 1.2) both; }
+  body.quick-mode .message.user { transform-origin: right bottom; }
+  body.quick-mode .message.assistant { transform-origin: left top; }
+  @keyframes qp-pop { from { opacity: 0; transform: translateY(4px) scale(.97); } to { opacity: 1; transform: none; } }
+  body.quick-mode .agent-live-output .message-content:not([hidden]) > :last-child::after { animation: qp-caret 1s steps(2, start) infinite; }
+  @keyframes qp-caret { to { visibility: hidden; } }
+}
+body.quick-mode:not(.native-composer) #questionInput { height: 36px; min-height: 36px; max-height: 96px; padding: 8px 2px; line-height: 20px; }
+
+/* ---------- Management switch (真理 follow-up panel and quick window) ---------- */
+:is(#gaToggle, #qaManage)[role=switch] {
+  position: relative; flex: none; width: 36px; min-width: 36px; height: 20px; min-height: 20px; padding: 0 !important;
+  border: 0 !important; border-radius: 999px; background: #c8d2cc !important; font-size: 0 !important; color: transparent !important;
+  cursor: pointer; transition: background .16s; text-decoration: none !important;
+}
+:is(#gaToggle, #qaManage)[role=switch]::after {
+  content: ""; position: absolute; top: 2px; left: 2px; width: 16px; height: 16px; border-radius: 50%; background: #fff;
+  box-shadow: 0 1px 2px #1c32382e; transition: transform .16s;
+}
+:is(#gaToggle, #qaManage)[role=switch][aria-checked=true] { background: #3f7a66 !important; }
+:is(#gaToggle, #qaManage)[role=switch][aria-checked=true]::after { transform: translateX(16px); }
+:is(#gaToggle, #qaManage)[role=switch]:disabled { opacity: .5; cursor: default; }
+:is(#gaToggle, #qaManage)[role=switch]:focus-visible { outline: 2px solid #3f7a66; outline-offset: 2px; }
+.ga-controller { gap: 10px; }
+.qa-actions { gap: 8px; }
+@media (prefers-reduced-motion: reduce) { :is(#gaToggle, #qaManage)[role=switch], :is(#gaToggle, #qaManage)[role=switch]::after { transition: none; } }
+
+/* ---------- 真理 conversation in the workbench and on phones: bubbles and presence ---------- */
+body.work-mode.manager-conversation { --qp-accent: #3f7a66; --qp-ink: #22393f; --qp-user: #e4efea; }
+body.work-mode.manager-conversation .chat-session-meta { flex-direction: row; flex-wrap: wrap; align-items: center; column-gap: 10px; }
+body.work-mode.manager-conversation #activeSessionTitle::before {
+  content: "✦"; display: inline-grid; place-items: center; width: 24px; height: 24px; margin-right: 8px; border-radius: 50%;
+  vertical-align: -5px; background: radial-gradient(circle at 35% 30%, #fff, #e3eee6 70%); box-shadow: 0 0 0 1px #d3e0d6;
+  color: var(--qp-accent); font-size: 13px;
+}
+body.work-mode.manager-conversation .qa-activity { font-size: 12.5px; }
+body.workspace-in-header.manager-conversation .chat-session-meta .context-strip { flex-basis: 100%; }
+body.work-mode.manager-conversation .message.assistant .bubble {
+  position: relative; border: 0; border-radius: 5px 16px 16px 16px; background: #fff;
+  box-shadow: 0 1px 2px #22393f0f, 0 6px 18px #22393f0d;
+}
+body.work-mode.manager-conversation .message.assistant .bubble::before {
+  content: ""; position: absolute; top: -5px; left: 12px; width: 11px; height: 11px; background: #fff; transform: rotate(45deg);
+  border-radius: 2px; box-shadow: -1px -1px 1px #22393f08;
+}
+body.work-mode.manager-conversation .message.assistant .bubble > strong { display: none; }
+body.work-mode.manager-conversation .message.user:not([data-message-kind]) .bubble {
+  border: 0; border-radius: 16px 16px 5px 16px; background: var(--qp-user); padding-block: 8px;
+}
+body.work-mode.manager-conversation .agent-live-output .message-content:not([hidden]) > :last-child::after {
+  content: ""; display: inline-block; width: 2px; height: 1em; margin-left: 3px; vertical-align: -2px; border-radius: 1px; background: var(--qp-accent);
+}
+@media (prefers-reduced-motion: no-preference) {
+  body.work-mode.manager-conversation.qa-busy #activeSessionTitle::before { animation: qp-breathe 1.8s ease-in-out infinite; }
+  body.work-mode.manager-conversation .message.is-new { animation: qp-pop 220ms cubic-bezier(.2, .9, .3, 1.2) both; }
+  body.work-mode.manager-conversation .message.user { transform-origin: right bottom; }
+  body.work-mode.manager-conversation .message.assistant { transform-origin: left top; }
+  body.work-mode.manager-conversation .agent-live-output .message-content:not([hidden]) > :last-child::after { animation: qp-caret 1s steps(2, start) infinite; }
+}
+
+/* ---------- Phone: the follow-up ledger is a bottom sheet above the dimmed page ---------- */
+body.mobile-workbench #mobilePanelBackdrop { background: #1b382f33; }
+body.mobile-workbench .ga-workspace {
+  position: fixed; z-index: 150; top: auto; right: 0; bottom: 0; left: 0; width: 100%; height: min(78dvh, 640px);
+  border: 0; border-radius: 18px 18px 0 0; background: var(--wb-paper, #f6f8f7); box-shadow: 0 -10px 30px #1b382f26;
+  transform: translateY(105%); visibility: hidden; transition: transform .22s ease, visibility .22s;
+  padding-bottom: env(safe-area-inset-bottom, 0px);
+}
+body.mobile-workbench .chat-shell.settings-open .ga-workspace { transform: translateY(0); visibility: visible; }
+body.mobile-workbench .ga-workspace::before {
+  content: ""; display: block; flex: 0 0 auto; width: 38px; height: 4px; margin: 8px auto 0; border-radius: 2px; background: #c9d4d0;
+}
+body.mobile-workbench .ga-followup-heading { min-height: 0; padding: 10px 18px 6px; }
+body.mobile-workbench .ga-followup-heading h2 { font-size: 17px; }
+body.mobile-workbench .ga-followup-heading p { font-size: 12.5px; }
+body.mobile-workbench .ga-followup-heading button { width: 44px; height: 44px; }
+body.mobile-workbench .ga-controller { padding: 4px 18px 12px; font-size: 13px; }
+body.mobile-workbench .ga-tabs { gap: 22px; }
+body.mobile-workbench .ga-tabs button { min-height: 40px; font-size: 14px; }
+body.mobile-workbench .ga-records { padding: 0 18px; }
+body.mobile-workbench .ga-record-heading strong { font-size: 14px; }
+body.mobile-workbench .ga-record-detail, body.mobile-workbench .ga-empty p { font-size: 13px; }
+body.mobile-workbench .ga-followup-foot { padding: 10px 18px 14px; }
+body.mobile-workbench .ga-followup-foot p { display: none; }
+body.mobile-workbench .ga-followup-foot button { min-height: 44px; font-size: 14px; }
+@media (prefers-reduced-motion: reduce) { body.mobile-workbench .ga-workspace { transition: none; } }
+/* Phone header: every action button shares one size and stroke. */
+body.mobile-workbench #assistantSettingsButton { width: 44px; min-width: 44px; height: 44px; border: 0; border-radius: 12px; background: transparent; color: #42695f; display: inline-grid; place-items: center; }
+body.mobile-workbench #assistantSettingsButton[hidden] { display: none; }
+body.mobile-workbench .chat-topbar .topbar-actions svg { width: 20px; height: 20px; }
+/* Centre the ✦ badge on the title text instead of nudging it with vertical-align. */
+body.work-mode.manager-conversation #activeSessionTitle { display: inline-flex; align-items: center; line-height: 1.3; }
+body.work-mode.manager-conversation #activeSessionTitle::before { vertical-align: 0; flex: 0 0 24px; }
+body.work-mode.manager-conversation .chat-session-meta { align-items: center; }
+body.work-mode.manager-conversation .qa-activity { align-self: center; }
+/* The title clips overflow for ellipsis; give the badge and its breathing halo room inside that box. */
+body.work-mode.manager-conversation #activeSessionTitle { padding: 4px 4px 4px 4px; margin: -4px 0 -4px -4px; overflow: hidden; }
+
+
+/* Re-rendered history must stay still; only rows marked new animate. */
+body.quick-mode .message:not(.is-new) { animation: none !important; }
+
+/* ---------- Pet bubble mode: speech bubbles floating above the pet ---------- */
+/* Geometry shared with the Java input bubble: 16px right inset, 288px max width,
+   15px text, 11px 15px padding, 18/18/6/18 radius, #e3eee6 fill. */
+html:has(body.quick-bubble), body.quick-bubble, body.quick-bubble .chat-shell, body.quick-bubble .chat-main { background: transparent !important; }
+body.quick-bubble { --quick-paper: transparent; --bb-ink: #243a32; --bb-user: #e3eee6; --bb-accent: #3f7a66; }
+body.quick-bubble:not(.native-composer) .chat-main, body.quick-bubble .chat-main { padding: 0 !important; }
+/* Presence floats over the history instead of pushing it down. */
+body.quick-bubble .qa-bar { position: absolute; z-index: 3; top: 4px; left: 12px; right: 12px; margin: 0; padding: 0; border: 0; pointer-events: none; }
+body.quick-bubble .qa-bar #qaMode, body.quick-bubble .qa-actions, body.quick-bubble .qa-attention, body.quick-bubble #qaNotice { display: none !important; }
+body.quick-bubble:not(.qa-busy) .qa-bar { opacity: 0; }
+body.quick-bubble .qa-bar { transition: opacity .25s ease; }
+body.quick-bubble .qa-identity { padding: 3px 10px 3px 3px; border-radius: 999px; background: #fffffff0; box-shadow: 0 2px 10px #243a321f; }
+body.quick-bubble .messages {
+  display: flex; flex-direction: column; gap: 10px; padding: 44px 16px 10px 10px; margin: 0;
+  overflow-y: auto; overflow-x: hidden; scroll-behavior: auto; scrollbar-width: none; overscroll-behavior: contain;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 64px, #000 calc(100% - 6px), transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0, #000 64px, #000 calc(100% - 6px), transparent 100%);
+}
+body.quick-bubble .messages::-webkit-scrollbar { width: 0 !important; height: 0 !important; display: none; }
+body.quick-bubble .messages::after { display: none; }
+body.quick-bubble .message { display: flex; width: 100%; margin: 0 !important; }
+body.quick-bubble .message.user { justify-content: flex-end; }
+body.quick-bubble .message.assistant { justify-content: flex-start; }
+body.quick-bubble .message .bubble {
+  position: relative; width: auto; padding: 11px 15px; border: 0; box-shadow: 0 4px 16px #243a321f, 0 1px 2px #243a3214;
+  font-size: 15px; line-height: 1.65; color: var(--bb-ink);
+}
+body.quick-bubble .message .bubble::before { display: none; }
+body.quick-bubble .message .bubble > strong { display: none !important; }
+body.quick-bubble .message.assistant .bubble { max-width: 88%; border-radius: 18px 18px 18px 6px; background: #ffffffF5; }
+body.quick-bubble .message.user .bubble { max-width: 288px; padding: 11px 15px; border-radius: 18px 18px 6px 18px; background: var(--bb-user); }
+body.quick-bubble .message.user .message-content { margin: 0; color: var(--bb-ink); font-size: 15px; line-height: 1.65; }
+body.quick-bubble .message.error .bubble { background: #fff1ea; color: #8f4f3d; }
+body.quick-bubble .markdown-body { font-size: 15px; line-height: 1.65; color: var(--bb-ink); }
+body.quick-bubble .markdown-body p { margin: 0 0 6px; }
+body.quick-bubble .markdown-body > :last-child { margin-bottom: 0; }
+body.quick-bubble .markdown-body :is(h1, h2, h3, h4) { font-size: 15px; margin: 8px 0 4px; }
+body.quick-bubble .markdown-body :is(ul, ol) { margin: 2px 0 6px; padding-left: 20px; }
+body.quick-bubble .markdown-body pre { max-height: 140px; font-size: 12px; }
+body.quick-bubble .agent-run-details, body.quick-bubble .memory-message-action, body.quick-bubble .message .run-timeline,
+body.quick-bubble .message-retry { display: none !important; }
+body.quick-bubble .agent-live-output .message-content:not([hidden]) > :last-child::after { background: var(--bb-accent); }
+/* Thinking with no text yet: three dots inside the bubble. */
+body.quick-bubble .agent-live-output .bubble:has(.message-content[hidden])::after {
+  content: "• • •"; letter-spacing: 2px; color: #8aa496;
+}
+body.quick-bubble .run-status:not(:empty) { margin: 0 16px 6px auto; max-width: 288px; border-radius: 12px; box-shadow: 0 2px 8px #243a3214; }
+body.quick-bubble.bubble-dragging .messages { cursor: grabbing; user-select: none; }
+/* While the pointer is away, history recedes; the latest exchange stays readable. */
+body.quick-bubble .message { transition: opacity .6s ease; }
+body.quick-bubble.bubble-idle .message:not(:nth-last-child(-n+2)) { opacity: .3; }
+/* Bubble mode: nothing but the bubbles is painted; dimmed history fades out rather than greying. */
+body.quick-bubble .messages { -webkit-mask-image: linear-gradient(to bottom, transparent 0, #000 64px); mask-image: linear-gradient(to bottom, transparent 0, #000 64px); }
+body.quick-bubble.bubble-idle .message:not(:nth-last-child(-n+2)) { opacity: 0; }
+body.quick-bubble :is(.sidebar-backdrop, .backend-offline, .approval-queue, .composer-attachments, .attachment-notice) { background: transparent; }
+/* Closed off-canvas drawers (session list on the left, settings rail on the right) still cast
+   their shadows into the quick window, tinting its left and right edges grey. */
+body.quick-mode .chat-shell:not(.sidebar-open) .session-sidebar,
+body.quick-mode .chat-shell:not(.settings-open) .context-rail { box-shadow: none !important; }
+body.quick-bubble .session-sidebar, body.quick-bubble .context-rail { box-shadow: none !important; }

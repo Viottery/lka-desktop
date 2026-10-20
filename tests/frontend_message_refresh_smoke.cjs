@@ -52,7 +52,7 @@ const server=http.createServer((req,res)=>{
   const page=await browser.newPage({viewport:{width:1440,height:900}}),errors=[];
   page.on('pageerror',e=>errors.push(e.message));await page.route('**/*',route=>new URL(route.request().url()).origin===origin?route.continue():route.abort());
   await page.clock.install();await page.goto(origin+'/chat.html?mode=work');
-  await page.locator('#openMessagesButton').click();
+  await page.locator('#openMessagesButton').evaluate(n=>{n.focus();n.click();});
   await page.locator('#mcTimeline').getByText('合成原文',{exact:true}).waitFor();
   await page.waitForFunction(()=>window.freshFixture.delayed.length===3);
   // One stuck metadata request cannot block other names or the reading view.

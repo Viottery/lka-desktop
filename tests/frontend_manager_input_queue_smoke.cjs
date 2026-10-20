@@ -44,7 +44,11 @@ const server = http.createServer(async(req,res)=>{
   if(failNext){failNext=false;return json(res,409,{detail:'manager_delivery_disabled'});}
   const accept=()=>{
    let receipt=receipts.find(r=>r.client_message_id===body.client_message_id);
-   if(!receipt){receipt={input_id:'i'+receipts.length,client_message_id:body.client_message_id,message_id:'m'+receipts.length,sequence:receipts.length+1,status:'queued',run_id:null};receipts.push(receipt);history.push({message_id:receipt.message_id,role:'user',content:body.user_input,payload:{client_message_id:receipt.client_message_id,attachment_ids:body.attachment_ids}});}
+   if(!receipt){
+    if(body.replace_run_id && (body.replace_run_id!==activeRun || runStatuses.get(activeRun)!=='paused'))return json(res,409,{detail:'paused_run_changed'});
+    receipt={input_id:'i'+receipts.length,client_message_id:body.client_message_id,message_id:'m'+receipts.length,sequence:receipts.length+1,status:'queued',run_id:null};receipts.push(receipt);history.push({message_id:receipt.message_id,role:'user',content:body.user_input,payload:{client_message_id:receipt.client_message_id,attachment_ids:body.attachment_ids}});
+    if(body.replace_run_id){runStatuses.set(activeRun,'cancelled');receipts.find(r=>r.run_id===activeRun).status='cancelled';activeRun='root-replacement';runStatuses.set(activeRun,'running');receipt.status='running';receipt.run_id=activeRun;paused=false;}
+   }
    if(dropNext){dropNext=false;res.destroy();return;}
    json(res,202,{input:receipt,queue:{paused,pending_count:snapshot().pending_count,active_run_id:activeRun}});
   };
@@ -62,6 +66,7 @@ const server = http.createServer(async(req,res)=>{
  if(route.endsWith('/files'))return json(res,200,{entries:[]});
  if(/^\/agent\/runs\//.test(route)){
   const id=route.split('/')[3];
+  if(route.endsWith('/resume')&&req.method==='POST'){runStatuses.set(id,'running');return json(res,202,{run_id:id,status:'running',pause_requested:false});}
   if(route.endsWith('/stream')){res.writeHead(200,{'content-type':'text/event-stream'});res.write(': connected\n\n');streams.set(id,res);req.on('close',()=>{if(streams.get(id)===res)streams.delete(id);});return;}
   return json(res,200,{run_id:id,status:runStatuses.get(id)||(id===activeRun?'running':receipts.some(r=>r.run_id===id&&r.status==='failed')?'failed':'completed')});
  }
@@ -171,6 +176,29 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await page.locator('#sendButton[data-action=resume]').waitFor();
   assert.equal(await page.locator('#sendButton').getAttribute('aria-label'),'继续任务');
   assert.equal(requests.filter(r=>r.route==='/agent/runs/root-5/stream').length,0,'returning to paused root still does not subscribe');
+  // Empty resume preserves the original instruction/run. A new instruction
+  // after another pause supersedes only that task, ahead of the saved backlog.
+  const beforeResumePosts=requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').length;
+  await page.locator('#sendButton').click();await wait(()=>streams.has('root-5'));
+  assert(requests.some(r=>r.route==='/agent/runs/root-5/resume'&&r.method==='POST'));
+  assert.equal(requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').length,beforeResumePosts);
+  runStatuses.set('root-5','paused');event('root-5','run_paused');streams.get('root-5').end();streams.delete('root-5');
+  await page.locator('#sendButton[data-action=resume]').waitFor();
+  const backlog=receipts.filter(r=>r.status==='queued').map(r=>r.input_id);
+  holdPost={};await page.locator('#questionInput').fill('改成先给我设计方案');
+  assert.equal(await page.locator('#sendButton').getAttribute('aria-label'),'替换暂停任务');
+  await page.locator('#sendButton').click();await wait(()=>holdPost.release);
+  const replacementPost=requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').at(-1);
+  assert.equal(replacementPost.body.replace_run_id,'root-5');
+  await page.locator('#questionInput').fill('然后补充实现细节');await page.locator('#sendButton').click();
+  const releaseReplacement=holdPost.release;holdPost=null;releaseReplacement();
+  await wait(()=>streams.has('root-replacement'));
+  await wait(()=>history.some(m=>m.content==='然后补充实现细节'));
+  const followupPost=requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').at(-1);
+  assert.equal(followupPost.body.user_input,'然后补充实现细节');assert.equal(followupPost.body.replace_run_id,undefined,'only first paused input replaces');
+  assert.equal(runStatuses.get('root-5'),'cancelled');assert.equal(paused,false);
+  assert.deepEqual(receipts.filter(r=>backlog.includes(r.input_id)).map(r=>r.input_id),backlog,'existing FIFO backlog retained');
+  assert(history.some(m=>m.content==='暂停中的新任务'),'original instruction history retained');
   const ordinary=await context.newPage();await ordinary.goto(origin+'/chat.html?mode=work&session_id=ordinary&backend='+encodeURIComponent(origin));await ordinary.waitForFunction(()=>window.LkaChatContext?.get().sessionId==='ordinary');
   assert.equal(await ordinary.locator('#inputQueueControls').count(),0);assert(!requests.some(r=>r.route==='/sessions/ordinary/inputs'));
   // The native quick composer's generic bridge uses the same queued path.
@@ -238,6 +266,38 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
    if(await quiet.evaluate(()=>document.getElementById('chatShell').classList.contains('sidebar-open')))await quiet.locator('#toggleSidebarButton').click();
    await quiet.screenshot({path:path.join(screenshots,'mobile.png')});
   }
-  assert.deepEqual(errors,[]);console.log('PASS manager input queue: attachment FIFO, continuous sending, unchanged SSE, optimistic/durable reconciliation, next-root recovery, paused resume, stable retry, held failed sends, lost receipts, reload and ordinary gate');
+  // Several durable receipts may share one execution. Keep individual user
+  // messages, one subscription/answer, and leave later arrivals in the FIFO.
+  await wait(()=>streams.has(activeRun));
+  const priorQuietRun=activeRun;
+  for(const text of ['合并请求一','合并请求二']){
+   await quiet.locator('#questionInput').fill(text);await quiet.locator('#sendButton').click();
+  }
+  await wait(()=>history.some(m=>m.content==='合并请求二'));
+  const batch=receipts.filter(r=>history.some(m=>m.message_id===r.message_id&&['合并请求一','合并请求二'].includes(m.content)));
+  assert.equal(batch.length,2);assert.notEqual(batch[0].message_id,batch[1].message_id);
+  receipts.find(r=>r.run_id===priorQuietRun).status='completed';runStatuses.set(priorQuietRun,'completed');
+  activeRun='shared-batch';runStatuses.set(activeRun,'running');
+  batch.forEach(r=>{r.run_id=activeRun;r.status='running';});finish(priorQuietRun,'completed','前一轮结束');
+  await wait(()=>streams.has('shared-batch'));
+  await quiet.waitForFunction(()=>['合并请求一','合并请求二'].every(text=>Array.from(document.querySelectorAll('.message.user')).some(m=>m.textContent.includes(text)&&m.dataset.inputStatus==='running')));
+  assert.equal(requests.filter(r=>r.route==='/agent/runs/shared-batch/stream').length,1,'shared receipts open a single SSE');
+  await quiet.locator('#questionInput').fill('运行中晚到的补充');await quiet.locator('#sendButton').click();
+  await wait(()=>history.some(m=>m.content==='运行中晚到的补充'));
+  const late=receipts.find(r=>history.some(m=>m.message_id===r.message_id&&m.content==='运行中晚到的补充'));
+  assert.equal(late.run_id,null);assert.equal(late.status,'queued');
+  batch.forEach(r=>{r.status='completed';});activeRun=null;runStatuses.set('shared-batch','completed');
+  finish('shared-batch','completed','合并后的统一答复');
+  await quiet.waitForFunction(()=>['合并请求一','合并请求二'].every(text=>Array.from(document.querySelectorAll('.message.user')).some(m=>m.textContent.includes(text)&&m.dataset.inputStatus==='completed')));
+  await quiet.evaluate(()=>LkaChatContext.refreshConversation());
+  assert.equal(await quiet.locator('.message.assistant').filter({hasText:'合并后的统一答复'}).count(),1);
+  await quietContext.close();
+  const batchContext=await browser.newContext(),batchPage=await batchContext.newPage();batchPage.on('pageerror',e=>errors.push(e.message));
+  await batchPage.goto(origin+'/chat.html?mode=work&assistant=global&backend='+encodeURIComponent(origin));
+  await batchPage.locator('#chatForm[data-input-mode=continuous]').waitFor();
+  for(const text of ['合并请求一','合并请求二','运行中晚到的补充'])assert.equal(await batchPage.locator('.message.user').filter({hasText:text}).count(),1,'fresh history retains each original input');
+  assert.equal(await batchPage.locator('.message.assistant').filter({hasText:'合并后的统一答复'}).count(),1,'fresh history keeps one batch answer');
+  assert.equal(requests.filter(r=>r.route==='/agent/runs/shared-batch/stream').length,1,'completed batch does not reconnect from another cache');
+  assert.deepEqual(errors,[]);console.log('PASS shared input batch + paused replacement + manager input queue: attachment FIFO, continuous sending, unchanged SSE, optimistic/durable reconciliation, next-root recovery, paused resume, stable retry, held failed sends, lost receipts, reload and ordinary gate');
  } finally { if(browser)await browser.close();for(const res of streams.values())res.destroy();await new Promise(r=>server.close(r)); }
 })().catch(error=>{console.error(error);process.exitCode=1;});

@@ -57,7 +57,33 @@
       var match = /(?:^|\s)language-([^\s]+)/.exec(code.className || "");
       if (match) code.parentNode.setAttribute("data-language", match[1]);
     });
+    decorateMatterReferences(element);
   }
+
+  // Inline `matter_<hex>` ids become compact, clickable references instead of raw identifiers.
+  function decorateMatterReferences(element) {
+    Array.prototype.forEach.call(element.querySelectorAll(":not(pre) > code"), function (code) {
+      var id = (code.textContent || "").trim();
+      if (!/^matter_[0-9a-f]{6,}$/i.test(id)) return;
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "matter-ref";
+      button.setAttribute("data-matter-id", id);
+      var title = global.LkaMatters && typeof global.LkaMatters.titleOf === "function" ? global.LkaMatters.titleOf(id) : "";
+      button.textContent = title || "事项 " + id.slice(-6);
+      button.title = (title ? title + " · " : "") + "打开事项 " + id;
+      code.parentNode.replaceChild(button, code);
+    });
+  }
+
+  document.addEventListener("click", function (event) {
+    var ref = event.target && event.target.closest ? event.target.closest(".matter-ref") : null;
+    if (!ref) return;
+    event.preventDefault();
+    var id = ref.getAttribute("data-matter-id");
+    if (global.LkaMatters && typeof global.LkaMatters.openMatter === "function") global.LkaMatters.openMatter(id);
+    else if (global.navigator.clipboard) global.navigator.clipboard.writeText(id).catch(function () {});
+  });
 
   function schedule(element, source) {
     if (!element) return;

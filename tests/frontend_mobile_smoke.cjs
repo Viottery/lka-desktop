@@ -234,6 +234,9 @@ async function composer(page) {
     await remotePage.locator('#sessionList .session-open[data-session-id="mobile-existing"]').click();
     await remotePage.locator('#messages').getByText('合成历史回复', { exact: true }).waitFor();
     await remotePage.locator('#newQuickSessionButton').click();
+    await remotePage.waitForTimeout(200);
+    assert.equal(await remotePage.evaluate(() => window.LkaChatContext.get().workspace), '', 'an untouched remote task defers its workspace');
+    await remotePage.evaluate(() => window.LkaChatContext.prepareWorkspace(window.LkaChatContext.get().sessionId));
     await remotePage.waitForFunction(() => window.LkaChatContext.get().workspace === 'C:/synthetic/workspace');
     assert.equal((await remotePage.locator('#runStatus').innerText()).includes('创建失败'), false);
     assert(remoteCalls.some(url => url.pathname === '/workbench/sessions'));
