@@ -46,9 +46,11 @@ const server = http.createServer(async (req, res) => {
     const aid = 'att_' + (uploads.length.toString(16)).padStart(32, '0');
     images.set(aid, raw);
     const filename = decodeURIComponent(req.headers['x-filename']);
-    const document = !req.headers['content-type'].startsWith('image/');
-    const metadata = { attachment_id: aid, kind: document ? 'document' : 'image', filename, media_type: document ? 'text/plain' : req.headers['content-type'], size_bytes: raw.length,
-      ...(document ? { total_chars: raw.length, extraction: { warnings: filename.endsWith('.pdf') ? ['Text layer only; no OCR'] : [] } } : { width: 1, height: 1 }) };
+    const audio = req.headers['content-type'].startsWith('audio/');
+    const document = !audio && !req.headers['content-type'].startsWith('image/');
+    const metadata = { attachment_id: aid, kind: audio ? 'audio' : document ? 'document' : 'image', filename, media_type: document ? 'text/plain' : req.headers['content-type'], size_bytes: raw.length,
+      ...(document ? { total_chars: raw.length, extraction: { warnings: filename.endsWith('.pdf') ? ['Text layer only; no OCR'] : [] } } : audio ? { audio_format: req.headers['content-type'] === 'audio/mp4' ? 'wav' : filename.endsWith('.m4a') ? 'm4a' : 'wav', ...(filename.endsWith('.m4a') ? { source_format: 'm4a' } : {}), duration_ms: 1200, input_size_bytes: raw.length, sample_rate: 44100, channels: 2 } : { width: 1, height: 1 }) };
+    if (filename === '长录音.wav') Object.assign(metadata, { size_bytes: 148000000, audio_format: 'mp3', source_format: 'wav', duration_ms: 510000, input_size_bytes: 8160000 });
     attachmentMetadata.set(aid, metadata);
     return json(res, 200, metadata);
   }
@@ -107,6 +109,71 @@ async function paste(page, name = '合成截图.png') {
       await page.evaluate(() => window.__petChatSubmitText('接下来的纯文本'));
       await page.waitForFunction(() => !document.getElementById('sendButton').disabled);
       assert.deepEqual(turns.at(-1).attachment_ids, [], 'text-only turn explicitly clears stale image selection');
+      const beforeLongAudio = turns.length;
+      await page.evaluate(() => {
+        const input = document.getElementById('cachedFileInput'), selection = new DataTransfer();
+        const file = new File(['synthetic long audio'], '长录音.wav', { type: 'audio/wav' });
+        Object.defineProperty(file, 'size', { value: 148000000 });
+        selection.items.add(file); input.files = selection.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await page.waitForFunction(() => document.querySelector('#composerAttachments').innerText.includes('长录音.wav') && document.querySelector('#composerAttachments').innerText.includes('8:30'));
+      await page.evaluate(() => window.__petChatSubmitText('分析完整的八分半音频'));
+      await page.waitForFunction(() => !document.getElementById('sendButton').disabled);
+      assert.equal(turns.length, beforeLongAudio + 1, '148MB long recording accepted on ' + surface);
+      const longAudioMeta = attachmentMetadata.get(turns.at(-1).attachment_ids[0]);
+      assert.equal(longAudioMeta.size_bytes, 148000000);
+      assert.equal(longAudioMeta.input_size_bytes, 8160000);
+      assert.equal(longAudioMeta.duration_ms, 510000);
+      // Exercise picker size checks without allocating 256 MiB browser fixtures.
+      const beforeBoundary = uploads.length;
+      await page.evaluate(() => {
+        const input = document.getElementById('cachedFileInput'), selection = new DataTransfer();
+        for (const [name, type] of [['边界文档.txt', 'text/plain'], ['边界音频.m4a', 'audio/mp4']]) {
+          const file = new File(['synthetic'], name, { type });
+          Object.defineProperty(file, 'size', { value: 256 * 1024 * 1024 });
+          selection.items.add(file);
+        }
+        input.files = selection.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await page.waitForFunction(() => document.querySelector('#composerAttachments').innerText.includes('边界音频.m4a') && document.querySelectorAll('#composerAttachments .attachment-card').length === 2);
+      await page.evaluate(() => window.__petChatSubmitText('边界合成附件'));
+      await page.waitForFunction(() => !document.getElementById('sendButton').disabled);
+      assert.equal(uploads.length, beforeBoundary + 2, '256 MiB document and M4A source accepted on ' + surface);
+      await page.evaluate(() => {
+        const input = document.getElementById('cachedFileInput'), selection = new DataTransfer();
+        const file = new File(['synthetic'], '超限.txt', { type: 'text/plain' });
+        Object.defineProperty(file, 'size', { value: 256 * 1024 * 1024 + 1 });
+        selection.items.add(file); input.files = selection.files; input.dispatchEvent(new Event('change', { bubbles: true }));
+      });
+      await page.locator('#attachmentNotice').getByText('单个文档需不超过 256 MiB。', { exact: true }).waitFor();
+      assert.equal(uploads.length, beforeBoundary + 2, 'oversize rejected before HTTP upload');
+      await page.locator('#cachedFileInput').setInputFiles({ name: '录音.wav', mimeType: 'audio/wav', buffer: Buffer.from('RIFFsynthetic-audio') });
+      await page.waitForFunction(() => document.querySelector('#composerAttachments').innerText.includes('录音.wav') && document.querySelector('#composerAttachments').innerText.includes('44100 Hz'));
+      const beforeAudio = turns.length;
+      await page.evaluate(() => window.__petChatSubmitText(''));
+      await page.waitForFunction(() => !document.getElementById('sendButton').disabled);
+      const audioId = turns.at(-1).attachment_ids[0], audioMeta = attachmentMetadata.get(audioId);
+      assert.equal(turns.length, beforeAudio + 1);
+      assert.equal(uploads.at(-1).type, 'audio/wav'); assert(uploads.at(-1).raw.equals(Buffer.from('RIFFsynthetic-audio')));
+      assert.equal(audioMeta.kind, 'audio'); assert.equal(audioMeta.audio_format, 'wav');
+      assert.equal(audioMeta.duration_ms, 1200); assert.equal(audioMeta.sample_rate, 44100); assert.equal(audioMeta.channels, 2);
+      assert.equal(await page.locator('#messages .message-document img').count(), 0, 'audio history remains a file card');
+      assert((await page.locator('#messages .message-document').last().innerText()).includes('录音.wav'));
+      assert((await page.locator('#messages .message-document').last().innerText()).includes('44100 Hz'), 'audio metadata appears in history');
+      assert.equal(await page.locator('#messages .message-document').last().getAttribute('download'), '录音.wav');
+      await page.locator('#cachedFileInput').setInputFiles({ name: '音乐.m4a', mimeType: 'audio/x-m4a', buffer: Buffer.from('M4Asynthetic-audio') });
+      await page.waitForFunction(() => document.querySelector('#composerAttachments').innerText.includes('音乐.m4a'));
+      await page.evaluate(() => window.__petChatSubmitText(''));
+      await page.waitForFunction(() => !document.getElementById('sendButton').disabled);
+      const m4aMeta = attachmentMetadata.get(turns.at(-1).attachment_ids[0]);
+      assert.equal(uploads.at(-1).type, 'audio/mp4'); assert(uploads.at(-1).raw.equals(Buffer.from('M4Asynthetic-audio')));
+      assert.equal(m4aMeta.kind, 'audio'); assert.equal(m4aMeta.source_format, 'm4a'); assert.equal(m4aMeta.audio_format, 'wav');
+      assert((await page.locator('#messages .message-document').last().innerText()).includes('音乐.m4a'));
+      assert.equal(await page.locator('#messages .message-document').last().getAttribute('download'), '音乐.m4a');
+      await page.evaluate(() => { const data = new DataTransfer(); data.items.add(new File(['MP3synthetic-audio'], 'clip.mp3', { type: 'audio/mp3' })); const event = new DragEvent('drop', { bubbles: true, cancelable: true, dataTransfer: data }); document.getElementById('questionInput').dispatchEvent(event); });
+      await page.waitForFunction(() => document.querySelector('#composerAttachments').innerText.includes('clip.mp3'));
+      await page.evaluate(() => window.__petChatSubmitText('')); await page.waitForFunction(() => !document.getElementById('sendButton').disabled);
+      assert.equal(uploads.at(-1).type, 'audio/mpeg'); assert(uploads.at(-1).raw.equals(Buffer.from('MP3synthetic-audio')));
       // Paste documents and images in one operation with a text caption on every surface.
       await page.evaluate(bytes => {
         const data = new DataTransfer();
@@ -150,6 +217,36 @@ async function paste(page, name = '合成截图.png') {
         await paste(page, '移除.png');
         await page.locator('#composerAttachments .attachment-remove').click();
         assert.equal(await page.evaluate(() => window.__petChatSubmitText('')), false);
+        // Match the backend's raw image + normalized audio byte limit; documents
+        // do not contribute, and exactly 12 MiB is allowed.
+        const mediaBoundary = await page.evaluate(async () => {
+          const composer = window.LkaImageComposer, sid = window.LkaChatContext.get().sessionId;
+          const MiB = 1024 * 1024;
+          const ref = (n, kind, size, inputSize) => ({ attachment_id: 'att_' + n.toString(16).padStart(32, '0'),
+            filename: kind + n, kind, size_bytes: size, ...(inputSize === undefined ? {} : { input_size_bytes: inputSize }) });
+          const exact = [ref(1001, 'image', 6 * MiB), ref(1002, 'image', 6 * MiB), ref(1003, 'document', 200 * MiB)];
+          const exactIds = await composer.prepare(exact, sid);
+          const normalized = [ref(1004, 'image', 4 * MiB), ref(1005, 'audio', 200 * MiB, 8 * MiB)];
+          const normalizedIds = await composer.prepare(normalized, sid);
+          let imageError = '', mixedError = '';
+          try { await composer.prepare([ref(1006, 'image', 12 * MiB + 1)], sid); } catch (error) { imageError = error.message; }
+          try { await composer.prepare([ref(1007, 'image', 4 * MiB + 1), ref(1008, 'audio', 200 * MiB, 8 * MiB)], sid); } catch (error) { mixedError = error.message; }
+          return { exactIds, normalizedIds, imageError, mixedError };
+        });
+        assert.equal(mediaBoundary.exactIds.length, 3, 'documents do not consume the media byte budget');
+        assert.equal(mediaBoundary.normalizedIds.length, 2, 'audio uses normalized input bytes rather than original size');
+        assert.match(mediaBoundary.imageError, /12 MiB/, 'pure images are bounded before creating a turn');
+        assert.equal(mediaBoundary.mixedError, mediaBoundary.imageError);
+        const oversizedRefs = [1010, 1011, 1012].map(n => ({ attachment_id: 'att_' + n.toString(16).padStart(32, '0'),
+          kind: 'image', filename: '合计超限' + n + '.png', media_type: 'image/png', size_bytes: 5 * 1024 * 1024 }));
+        oversizedRefs.forEach(ref => { images.set(ref.attachment_id, PNG); attachmentMetadata.set(ref.attachment_id, ref); });
+        await page.evaluate(refs => window.LkaImageComposer.queueRefs(window.LkaChatContext.get().sessionId, refs), oversizedRefs);
+        const beforeMediaLimit = turns.length;
+        await page.evaluate(() => window.__petChatSubmitText('合计大小检查'));
+        await page.waitForFunction(() => !document.getElementById('sendButton').disabled && document.getElementById('messages').innerText.includes('图片与转换后的音频合计不能超过 12 MiB'));
+        assert.equal(turns.length, beforeMediaLimit, 'oversized pure-image selection never reaches Agent turn');
+        assert.equal(await page.locator('#composerAttachments .attachment-card').count(), 3, 'preflight failure restores selected attachments');
+        while (await page.locator('#composerAttachments .attachment-remove').count()) await page.locator('#composerAttachments .attachment-remove').first().click();
         // The source session owns its images even when another conversation is selected.
         await paste(page, '原会话.png');
         const original = await page.evaluate(() => window.LkaChatContext.get().sessionId);
@@ -210,7 +307,7 @@ async function paste(page, name = '合成截图.png') {
           window.uploadTestOriginalFetch = window.fetch;
           window.uploadTestOriginalTimeout = window.setTimeout;
           window.setTimeout = function (callback, delay, ...args) {
-            return window.uploadTestOriginalTimeout(callback, delay === 60000 ? 100 : delay, ...args);
+            return window.uploadTestOriginalTimeout(callback, delay === 600000 ? 100 : delay, ...args);
           };
           window.fetch = function (url, options) {
             if (options?.method === 'POST' && String(url).endsWith('/attachments')) {

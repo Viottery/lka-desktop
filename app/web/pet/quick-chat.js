@@ -62,11 +62,13 @@
   more.addEventListener("click", function () { loadProjects(true); });
   search.addEventListener("input", function () { requestId++; clearTimeout(timer); timer = setTimeout(function () { loadProjects(false); }, 180); });
   sidebarButton.addEventListener("click", function () { closePicker(false); if (shell.classList.contains("sidebar-open")) document.getElementById("sessionSearchInput").focus(); schedule(); });
-  newButton.addEventListener("click", function () { closePicker(false); status.classList.remove("error"); status.textContent = "就绪"; schedule(); });
-  newButton.textContent = "+"; newButton.setAttribute("aria-label", "开始新任务"); newButton.title = "开始新任务";
-  document.getElementById("sendButton").innerHTML = '<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 11L21 3L13 21L10 13Z M10 13L21 3"/></svg>';
-  document.getElementById("sendButton").setAttribute("aria-label", "发送任务");
-  document.getElementById("questionInput").placeholder = "写下问题，或交给我一件事…";
+  newButton.addEventListener("click", function () { closePicker(false); schedule(); });
+  newButton.setAttribute("aria-label", "新任务"); newButton.title = "新任务";
+  function updatePlaceholder() {
+    var context = window.LkaChatContext && window.LkaChatContext.get();
+    document.getElementById("questionInput").placeholder = context && context.kind === "manager" ? "交给真理，或聊聊接下来的安排…" : "写下问题，或交给我一件事…";
+  }
+  updatePlaceholder();
   document.addEventListener("keydown", function (event) { if (event.key === "Escape" && !picker.hidden) { closePicker(true); event.preventDefault(); } });
   document.addEventListener("pointerdown", function (event) { if (!picker.hidden && !picker.contains(event.target) && !projectButton.contains(event.target)) closePicker(false); });
   var viewSession = "", lastQuestion = "", lastQuestionIndex = -1, readingOffset = 0, restoringScroll = false, focusLatest = false;
@@ -106,9 +108,18 @@
     });
   }
   function visibleHeight(node) { return node && !node.hidden && node.getClientRects().length ? node.getBoundingClientRect().height : 0; }
+  function layoutTop(node) {
+    // offsetTop follows layout coordinates; the message entrance animation must
+    // not become a saved reading offset.
+    var top = 0;
+    for (; node; node = node.offsetParent) top += node.offsetTop || 0;
+    return top;
+  }
   function updateLayout() {
     scheduled = false;
-    var busy = document.getElementById("sendButton").disabled && document.getElementById("backendOfflinePanel").hidden;
+    var context = window.LkaChatContext && window.LkaChatContext.get();
+    updatePlaceholder();
+    var busy = !!(context && context.busy) && document.getElementById("backendOfflinePanel").hidden;
     var error = status.classList.contains("error");
     if (status.hidden !== !error) status.hidden = !error;
     var waiting = !document.getElementById("approvalQueueStatus").hidden;
@@ -143,16 +154,21 @@
     }
     var tailText = tail + "px";
     if (transcript.style.getPropertyValue("--quick-tail-space") !== tailText) transcript.style.setProperty("--quick-tail-space", tailText);
+    if (window.LkaConversationReading) {
+      focusLatest = false;
+      window.LkaConversationReading.afterRender();
+    } else {
     if (focusLatest) {
-      readingOffset = latest ? Math.max(0, latest.getBoundingClientRect().top - transcript.getBoundingClientRect().top + transcript.scrollTop - parseFloat(style.paddingTop)) : 0;
+      readingOffset = latest ? Math.max(0, layoutTop(latest) - layoutTop(transcript) - parseFloat(style.paddingTop)) : 0;
       focusLatest = false;
     }
     // Start at the latest question; leave the reader in control while its reply grows.
     if (Math.abs(transcript.scrollTop - readingOffset) > 1) transcript.scrollTop = readingOffset;
     readingOffset = transcript.scrollTop;
+    }
     restoringScroll = false;
     var toolbarHeight = document.body.classList.contains("native-composer") ? 0 : 28;
-    var desired = toolbarHeight + conversationHeight + visibleHeight(document.getElementById("composerAttachments")) + visibleHeight(document.getElementById("attachmentNotice")) + visibleHeight(status) + visibleHeight(document.getElementById("backendOfflinePanel"));
+    var desired = toolbarHeight + conversationHeight + visibleHeight(document.getElementById("quickAssistantBar")) + visibleHeight(document.getElementById("quickAssistantAttention")) + visibleHeight(document.getElementById("inputQueueControls")) + visibleHeight(document.getElementById("composerAttachments")) + visibleHeight(document.getElementById("attachmentNotice")) + visibleHeight(status) + visibleHeight(document.getElementById("backendOfflinePanel"));
     if (!picker.hidden || shell.classList.contains("sidebar-open")) desired = Math.max(desired, 310);
     if (document.body.classList.contains("workspace-picker-open")) desired = Math.max(desired, 510);
     if (waiting) desired = Math.max(310, toolbarHeight + conversationHeight + visibleHeight(document.getElementById("approvalQueueStatus")) + 12);
@@ -211,10 +227,19 @@
   if (window.ResizeObserver) { new ResizeObserver(schedule).observe(transcript); }
   window.addEventListener("resize", schedule);
   window.addEventListener("lka-session-context", schedule);
+  window.addEventListener("lka-quick-assistant-state", function (event) {
+    if (event.detail && (event.detail.loading || event.detail.manager)) {
+      closePicker(false);
+      shell.classList.remove("sidebar-open");
+      document.getElementById("sidebarBackdrop").hidden = true;
+    }
+    schedule();
+  });
+  window.addEventListener("lka-quick-assistant-layout", schedule);
   window.addEventListener("lka-workspace-picker", schedule);
   var bridgeReady = window.__petChatBridgeReady;
   window.__petChatBridgeReady = function () { bridgeReady(); schedule(); };
   var fresh = window.__petChatOpenFreshTask;
-  window.__petChatOpenFreshTask = function () { closePicker(false); shell.classList.remove("sidebar-open"); document.getElementById("sidebarBackdrop").hidden = true; status.classList.remove("error"); status.textContent = "就绪"; fresh(); schedule(); };
+  window.__petChatOpenFreshTask = function () { closePicker(false); shell.classList.remove("sidebar-open"); document.getElementById("sidebarBackdrop").hidden = true; fresh(); schedule(); };
   schedule();
 })();

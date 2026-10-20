@@ -873,7 +873,6 @@ body.quick-mode { --quick-paper: #faf8f2; background: var(--quick-paper); font-f
 body.quick-mode .chat-shell { display: block; height: 100%; min-height: 0; }
 body.quick-mode .chat-main { position: relative; height: 100%; min-height: 0; background: var(--quick-paper); }
 body.quick-mode:not(.native-composer) .chat-main { padding: 9px 13px; }
-body.quick-mode:not(.native-composer) .chat-main::before { content: ""; position: absolute; top: 20px; left: 1px; width: 3px; height: 28px; border-radius: 3px; background: #527a66; }
 body.quick-mode .chat-topbar { order: 4; flex: 0 0 29px; min-height: 29px; margin: 0 5px; padding: 3px 0 0; gap: 3px; background: transparent; border-top: 1px solid #e5e7dc; border-bottom: 0; }
 body.quick-mode .chat-session-meta { display: none; }
 body.quick-mode .topbar-actions { margin-left: auto; }
@@ -1115,3 +1114,66 @@ body.mobile-workbench .attachment-remove { width: 30px; height: 30px; }
 .message-document span { font-size: 12px; color: #405a45; padding: 5px 0 0; }
 .message-document:hover { background: #edf3e6; border-color: #a8c2a6; }
 .attachment-extraction-hint { margin-top: 4px; color: #9d7a42 !important; }
+
+/* The composer action shares the quick window paper-plane silhouette. */
+#sendButton { display: grid; place-items: center; width: 50px; min-width: 50px; padding: 0; }
+#sendButton svg { display: block; width: 21px; height: 21px; pointer-events: none; }
+#sendButton:focus-visible { outline: 2px solid #527f6d; outline-offset: 2px; }
+body.quick-mode #sendButton { min-width: 32px; width: 32px; }
+body.quick-mode #sendButton svg { width: 17px; height: 17px; }
+body.mobile-workbench #sendButton { width: 48px; min-width: 48px; }
+
+/* A compact desktop composer: one surface, expanding only with the draft. */
+body.work-mode:not(.mobile-workbench) .composer {
+  grid-template-columns: 36px minmax(0, 1fr) 36px; align-items: end; gap: 8px;
+  margin: 12px max(30px, calc((100% - 780px) / 2)) 16px; padding: 8px;
+  border: 1px solid #d3e1e1; border-radius: 27px; background: #fff;
+  box-shadow: 0 2px 8px #19313a05;
+}
+body.work-mode:not(.mobile-workbench) .composer:focus-within { border-color: #86b5b4; box-shadow: 0 0 0 2px #237b800d; }
+body.work-mode:not(.mobile-workbench) .composer textarea {
+  height: 36px; min-height: 36px; max-height: 156px; padding: 8px 6px;
+  border: 0; border-radius: 0; background: transparent; font-size: 14px; line-height: 20px;
+}
+body.work-mode:not(.mobile-workbench) .composer textarea:focus { outline: none; box-shadow: none; }
+body.work-mode:not(.mobile-workbench) .composer-upload { align-self: end; }
+body.work-mode:not(.mobile-workbench) #uploadAttachmentButton {
+  width: 36px; min-width: 36px; height: 36px; border: 0; border-radius: 50%; background: transparent;
+}
+body.work-mode:not(.mobile-workbench) #uploadAttachmentButton:hover { background: #edf4f1; }
+body.work-mode:not(.mobile-workbench) #sendButton {
+  align-self: end; width: 36px; min-width: 36px; height: 36px; border-radius: 50%;
+}
+body.work-mode:not(.mobile-workbench) #sendButton svg { width: 19px; height: 19px; }
+body.work-mode:not(.mobile-workbench) .composer-hint { display: none; }
+@media (max-width: 760px) {
+  body.work-mode:not(.mobile-workbench) .composer { margin: 8px 15px 12px; }
+}
+
+/* Quick HTML fallback uses the same centered action sizes as the native row. */
+body.quick-mode .composer { align-items: start; grid-template-columns: 32px minmax(0, 1fr) 32px; }
+body.quick-mode .composer-upload { align-self: start; margin-top: 4px; }
+body.quick-mode #uploadAttachmentButton { width: 32px; min-width: 32px; height: 32px; border: 0; border-radius: 50%; background: transparent; }
+body.quick-mode #uploadAttachmentButton:hover { background: #eaf0e8; }
+body.quick-mode #sendButton { align-self: start; margin-top: 4px; }
+
+/* Conversation actions share centered icons across the workbench and drawers. */
+.session-mini.session-icon-action, .sidebar-header #newSessionButton {
+  display: inline-grid; place-items: center; flex: 0 0 30px;
+  width: 30px; min-width: 30px; height: 30px; padding: 0;
+  border: 0; border-radius: 8px; background: transparent; color: #bed4ce;
+}
+.session-icon-action svg { display: block; flex-shrink: 0; pointer-events: none; }
+.session-mini.session-icon-action:hover, .sidebar-header #newSessionButton:hover { background: #ffffff18; color: #fff; }
+.session-mini.session-icon-action.danger { color: #dab0a8; }
+.session-mini.session-icon-action.danger:hover { background: #efad9e1c; color: #ffddd5; }
+.sidebar-header #newSessionButton { flex-basis: 36px; width: 36px; height: 36px; border-radius: 10px; }
+body.mobile-workbench .session-mini.session-icon-action, body.mobile-workbench .sidebar-header #newSessionButton {
+  flex-basis: 44px; width: 44px; min-width: 44px; height: 44px; min-height: 44px; padding: 0;
+}
+
+.input-queue-controls { display: flex; align-items: center; gap: 8px; padding: 2px 16px; font-size: 12px; color: var(--muted, #76787c); }
+.input-queue-controls[hidden] { display: none; }
+.input-queue-status { margin: 6px 0 0; font-size: 12px; opacity: .75; }
+.input-queue-status[data-input-status="submission_failed"], .input-queue-status[data-input-status="failed"] { color: #ae4037; }
+body.quick-mode .input-queue-controls { order: 1; flex: 0 0 auto; padding: 3px 8px; }

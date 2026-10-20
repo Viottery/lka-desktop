@@ -58,6 +58,18 @@ tasks.register('verifyPetMemoryBridge', JavaExec) {
     mainClass = 'com.agenticrag.pet.PetMemoryBridgeCheck'
 }
 
+tasks.register('verifyPetQuickAssistant', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.agenticrag.pet.PetQuickAssistantCheck'
+}
+
+tasks.register('verifyPetRunStream', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.agenticrag.pet.PetRunStreamCheck'
+}
+
 tasks.register('previewQuickConversation', JavaExec) {
     dependsOn testClasses
     classpath = sourceSets.test.runtimeClasspath
@@ -74,5 +86,25 @@ tasks.register('previewQuickConversation', JavaExec) {
         if (providers.gradleProperty('binaryUploadBackend').isPresent()) {
             systemProperty 'lka.preview.uploadBackend', providers.gradleProperty('binaryUploadBackend').get()
         }
+    }
+}
+
+tasks.register('verifyPetMatterWindow', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.agenticrag.pet.PetMatterWindowCheck'
+}
+
+tasks.register('verifyPetMatterPage', JavaExec) {
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'com.agenticrag.pet.PetMatterPageCheck'
+    def frontendRoot = providers.gradleProperty('frontendRoot')
+            .orElse(providers.environmentVariable('LKA_FRONTEND_ROOT'))
+    doFirst {
+        if (!frontendRoot.isPresent()) {
+            throw new GradleException('Pass -PfrontendRoot=<path to app/web/pet> or set LKA_FRONTEND_ROOT')
+        }
+        systemProperty 'lka.matter.frontendRoot', frontendRoot.get()
     }
 }

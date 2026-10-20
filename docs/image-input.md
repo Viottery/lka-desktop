@@ -18,13 +18,14 @@
 每轮最多 4 个附件，图片与文档合计。支持的文档类型读取后端
 `GET /knowledge/file-types` 中的 `index_supported: true` 项。
 目前包括 TXT/TEXT、Markdown、PDF、DOCX、PPTX、XLSX/XLS、HTML/HTM、EPUB、CSV、
-JSON、XML 和 MSG。DOC/PPT、压缩包、音视频等不在本次文档附件范围内。
+JSON、XML 和 MSG。另支持 WAV、MP3、M4A 音频输入；M4A 由后端转换为 WAV 或 MP3 后交给音频模型处理，
+不按文档提取文字；DOC/PPT、压缩包及其他音视频格式暂不支持。
 
-单个文档最多 64 MiB；加密、损坏、无可提取文字等解析失败会明确报错。
+单个文档最多 256 MiB；提取文本仍限 200 万字符；加密、损坏、无可提取文字等解析失败会明确报错。
 PDF 依赖文字层，扫描件需要先 OCR 或改为图片上传。Office、PDF 等格式可能遗漏布局、
 图片、公式或部分页面；前端显示解析提示，不能把“上传完成”视作全文视觉理解。
 
-图片支持 PNG、JPEG、WebP；原始图片最多 20 MiB，上传结果最多 10 MiB、400 万像素。
+图片支持 PNG、JPEG、WebP；原始图片和上传结果最多 256 MiB、400 万像素。
 超限的静态 PNG/JPEG 会压缩后上传，并显示说明；WebP 超限请自行缩小。
 GIF、HEIC 等格式未适配。包含图片时，所选模型需有后端声明的视觉能力；
 纯文档不要求视觉模型。前端不自动切换模型或降级丢弃附件。
@@ -36,22 +37,24 @@ GIF、HEIC 等格式未适配。包含图片时，所选模型需有后端声明
 
 所有新附件统一上传到 `/sessions/{session_id}/attachments`，先创建/绑定会话与工作区。
 请求是原始二进制字节，文件名放入 percent-encoded `X-Filename`；图片使用实际
-`image/png/jpeg/webp` MIME，文档使用 `application/octet-stream`。
-成功返回 `attachment_id` 和 `kind`（image/document），文档还返回解析元数据。
+`image/png/jpeg/webp` MIME，WAV/MP3/M4A 分别使用 `audio/wav`、`audio/mpeg`、`audio/mp4`，文档使用
+`application/octet-stream`。成功返回 `attachment_id` 和 `kind`（image/document/audio）；
+文档返回解析元数据；音频返回 `audio_format`、`source_format`、`duration_ms`、`sample_rate`、`channels`，不进入文档解析。M4A 音频记录来源格式，供附件卡片显示。音频原文件最多 256 MiB；送入模型的实际音频与图片合计最多 12 MiB，最终内联请求最多 20 MiB。大音频由后端自动生成压缩的完整 MP3 输入，原文件保留供下载，不要求手动切分。
 JavaFX 21 快速窗口上传时用 FileReader 把内存 File 转为 ArrayBuffer 请求体，
 避免打开 File 请求体失败后抛空指针、上传 Promise 永不结束。WebKit 初始化前选择
 HTTP/1.1 URLConnection 加载器：默认 HTTP2Loader 的 h2c 升级上传在 Uvicorn 下
 会出现空请求体和随后 HTTP 400；只转换 ArrayBuffer 并不足以保证 Uvicorn 兼容。
 默认本机 8765 后端的快速窗口、工作台请求统一走既有同源 `/workbench` 网关，
 避免兼容加载器的跨端口 CORS 预检差异影响历史、设置和上传；显式其他后端地址不改写。
-普通浏览器继续直接传 File。图片上传等待最多 60 秒，文档上传与解析最多 240 秒；
+普通浏览器继续直接传 File。所有附件上传与处理最多等待 10 分钟；
 超时会中止网络请求、显示错误，保留附件并恢复发送按钮以便重试。
 两种 Agent turn、浏览器 SSE 和 Java 桥都传递同一 `attachment_ids` 数组。
-纯图片/文档可不带文字，历史占位分别为 `[Image input]`/`[File input]`；界面显示附件卡片。
+纯图片、文档或音频可不带文字，历史占位分别为 `[Image input]`、`[File input]`、
+`[Audio input]`；界面显示对应附件卡片。
 只发文字时显式发送 `attachment_ids: []`，不自动重复选择上轮附件。
 
 远程页面通过已有 `/workbench` 本机网关上传和下载，沿用来源限制与固定后端地址。
-文档请求与下载单独允许 64 MiB，图片保留 10 MiB，普通 JSON 请求额度保持原值。
+图片、文档和音频上传与原文件下载均允许 256 MiB，普通 JSON 请求额度保持原值。
 文档下载保留 `Content-Disposition: attachment`，HTML 等文档不会作为页面内联执行。
 显式自定义后端仍使用该地址，不把会话发送到另一台服务；前端不处理 NapCat 凭据。
 
@@ -68,7 +71,7 @@ HTTP/1.1 URLConnection 加载器：默认 HTTP2Loader 的 h2c 升级上传在 Uv
 `npm run test:images` 覆盖工作台、移动端、快速页面和原生输入模式：混合粘贴、
 立即发送、文件单独发送、原始二进制传输、合计数量、会话隔离、失败与重试、
 历史元数据恢复和安全文档卡片。`test:chat`、`test:mobile` 验证既有交互。
-Python `tests.test_workbench_proxy` 用假上游检查 10/64 MiB 边界、下载响应头、
+Python `tests.test_workbench_proxy` 用假上游检查 256 MiB 上下限、下载响应头、
 来源限制、类型目录与错误信息；旧缓存测试继续保障原数据兼容。
 Java `previewQuickConversation` 检查真实剪贴板、混合 TXT/PDF 文件、PNG 像素、
 普通文字和异步会话隔离。回归使用合成数据，不启动真实模型或发送 QQ 消息。

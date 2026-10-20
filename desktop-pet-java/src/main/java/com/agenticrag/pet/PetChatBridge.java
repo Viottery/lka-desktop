@@ -8,9 +8,13 @@ import java.util.function.Supplier;
 
 public final class PetChatBridge {
     private Consumer<String> memoryRequestHandler;
+    private Consumer<String> openMattersHandler;
     private Consumer<String> qqReaderStatusRequestHandler;
+    private Consumer<String> savedRunStreamRequestHandler;
+    private Consumer<String> savedRunStreamCancelHandler;
     private Consumer<Double> quickPanelHeightHandler;
     private Consumer<String> quickContextLabelHandler;
+    private Consumer<String> quickSettingsStateHandler;
     private final Consumer<String> payloadConsumer;
     private final Consumer<String> streamPayloadConsumer;
     private final BiFunction<String, String, String> safetyDecisionConsumer;
@@ -26,6 +30,7 @@ public final class PetChatBridge {
     private final Supplier<String> shutdownAllHandler;
     private final Consumer<Boolean> composerBusyHandler;
     private final Consumer<String> composerDraftHandler;
+    private Consumer<String> composerActionHandler;
     private final Runnable composerFocusHandler;
     private final Consumer<String> externalUrlHandler;
 
@@ -71,8 +76,20 @@ public final class PetChatBridge {
         if (composerBusyHandler != null) composerBusyHandler.accept(busy);
     }
 
+    public void setComposerAction(String action) {
+        if (composerActionHandler != null) composerActionHandler.accept(action);
+    }
+
     public void setQuickPanelHeight(double contentHeight) {
         if (quickPanelHeightHandler != null) quickPanelHeightHandler.accept(contentHeight);
+    }
+
+    public void setQuickSettingsState(String json) {
+        if (quickSettingsStateHandler != null) quickSettingsStateHandler.accept(json);
+    }
+
+    void setQuickSettingsStateHandler(Consumer<String> handler) {
+        quickSettingsStateHandler = handler;
     }
 
     public void setQuickContextLabel(String label) {
@@ -89,6 +106,14 @@ public final class PetChatBridge {
 
     void setMemoryRequestHandler(Consumer<String> handler) {
         memoryRequestHandler = handler;
+    }
+
+    void setOpenMattersHandler(Consumer<String> handler) {
+        openMattersHandler = handler;
+    }
+
+    public void openMatters(String optionsJson) {
+        if (openMattersHandler != null) openMattersHandler.accept(optionsJson);
     }
 
     public void requestMemory(String payloadJson) {
@@ -123,6 +148,26 @@ public final class PetChatBridge {
         if (streamPayloadConsumer != null) {
             streamPayloadConsumer.accept(payloadJson);
         }
+    }
+
+    void setSavedRunStreamRequestHandler(Consumer<String> handler) {
+        savedRunStreamRequestHandler = handler;
+    }
+
+    void setSavedRunStreamCancelHandler(Consumer<String> handler) {
+        savedRunStreamCancelHandler = handler;
+    }
+
+    void setComposerActionHandler(Consumer<String> handler) {
+        composerActionHandler = handler;
+    }
+
+    public void streamSavedRun(String payloadJson) {
+        if (savedRunStreamRequestHandler != null) savedRunStreamRequestHandler.accept(payloadJson);
+    }
+
+    public void cancelSavedRunStream(String requestId) {
+        if (savedRunStreamCancelHandler != null) savedRunStreamCancelHandler.accept(requestId);
     }
 
     public String decideSafetyReview(String reviewId, String decision) {

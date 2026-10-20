@@ -167,7 +167,10 @@ The transcript fills the available space above the native IME composer. Earlier
 messages stay in the same scrollable transcript, with no context heading or history
 toggle. A new turn starts at its question; reply updates preserve the reading
 position. Session and project icons remain available. Buttons expose hover help;
-native footer icons share centered 24 × 24 hit areas.
+native footer icons share centered 24 × 24 hit areas. The attachment action sits
+before the input with a 32 × 32 target, aligned with the send/pause/resume action.
+The former accent line at the window's top left has been removed in both native
+and HTML quick layouts.
 
 The workbench button continues the currently selected conversation using its
 backend session ID, including a turn still running. It waits for initial workspace

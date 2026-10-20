@@ -24,6 +24,7 @@ const server = http.createServer(async (req, res) => {
     res.writeHead(200, { 'content-type': ({ '.html': 'text/html; charset=utf-8', '.js': 'text/javascript', '.css': 'text/css', '.svg': 'image/svg+xml', '.woff2': 'font/woff2' })[path.extname(file)] || 'application/octet-stream' });
     return fs.createReadStream(file).pipe(res);
   }
+  if (p === '/managers/default' && req.method === 'POST') return json(res, { detail: 'Synthetic backend has no manager support' }, 404);
   if (p === '/agent/models') return json(res, { clients: [], default_client: '' });
   if (p === '/agent/ui-defaults') return json(res, { defaults: {} });
   if (p === '/agent/safety-reviews') return json(res, { reviews: [] });
@@ -141,10 +142,10 @@ const within = async (page, selector) => {
     await page.waitForFunction(() => document.querySelector('#workspacePicker').hidden);
     assert.equal(workspace, 'C:/synthetic/chosen');
     await page.locator('#fileWorkspaceLabel').getByText(workspace, { exact: true }).waitFor();
-    const oversized = path.join(OUT, 'oversized-fixture.bin'), fd = fs.openSync(oversized, 'w'); fs.ftruncateSync(fd, 64 * 1024 * 1024 + 1); fs.closeSync(fd);
+    const oversized = path.join(OUT, 'oversized-fixture.bin'), fd = fs.openSync(oversized, 'w'); fs.ftruncateSync(fd, 256 * 1024 * 1024 + 1); fs.closeSync(fd);
     const before = requests.filter(r => r.path.endsWith('/upload')).length;
     await page.locator('#workspaceUploadInput').setInputFiles(oversized);
-    await page.locator('#workspaceTransferStatus').getByText('超过 64 MiB', { exact: false }).waitFor();
+    await page.locator('#workspaceTransferStatus').getByText('超过 256 MiB', { exact: false }).waitFor();
     assert.equal(requests.filter(r => r.path.endsWith('/upload')).length, before, 'oversize rejected before transfer'); fs.unlinkSync(oversized);
     await page.locator('#closeSettingsButton').click();
     await page.locator('#newQuickSessionButton').click();

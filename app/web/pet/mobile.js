@@ -33,12 +33,14 @@
     var input = document.getElementById('questionInput');
     if (input) {
       input.style.height = 'auto';
-      input.style.height = Math.min(Math.max(50, input.scrollHeight), Math.max(64, Math.min(144, height * .26))) + 'px';
+      var maxInputHeight = Math.max(56, Math.min(132, height * .3));
+      input.style.height = Math.min(Math.max(44, input.scrollHeight), maxInputHeight) + 'px';
     }
   }
   function scheduleViewport() {
     if (!scheduled) { scheduled = true; window.requestAnimationFrame(sizeViewport); }
   }
+  window.LkaMobileResizeComposer = scheduleViewport;
   window.addEventListener('resize', scheduleViewport);
   if (viewport) {
     viewport.addEventListener('resize', scheduleViewport);
@@ -46,6 +48,7 @@
   }
   document.addEventListener('focusin', scheduleViewport);
   document.addEventListener('focusout', scheduleViewport);
+  window.addEventListener('lka-session-context', scheduleViewport);
   sizeViewport();
 
   function init() {
@@ -72,8 +75,37 @@
     document.getElementById('newQuickSessionButton').setAttribute('aria-label', '新建会话');
     document.getElementById('toggleSettingsButton').innerHTML = icon('settings');
     document.getElementById('closeSettingsButton').innerHTML = icon('close');
-    document.getElementById('sendButton').innerHTML = icon('send');
-    document.getElementById('sendButton').setAttribute('aria-label', '发送任务');
+    var attachmentMenu = document.getElementById('attachmentMenu');
+    var uploadButton = document.getElementById('uploadAttachmentButton');
+    var imageInput = document.getElementById('imageFileInput');
+    var normalImageTypes = 'image/png,image/jpeg,image/webp';
+    var normalImageMultiple = imageInput.multiple;
+    var cameraPickerPending = false;
+    function resetCameraPicker() {
+      if (!cameraPickerPending) return;
+      cameraPickerPending = false;
+      imageInput.accept = normalImageTypes;
+      imageInput.multiple = normalImageMultiple;
+      imageInput.removeAttribute('capture');
+    }
+    var cameraButton = document.createElement('button');
+    cameraButton.id = 'mobileCaptureImageButton'; cameraButton.type = 'button';
+    cameraButton.textContent = '拍照';
+    attachmentMenu.insertBefore(cameraButton, attachmentMenu.firstChild);
+    cameraButton.addEventListener('click', function () {
+      attachmentMenu.hidden = true;
+      uploadButton.setAttribute('aria-expanded', 'false');
+      imageInput.accept = 'image/*';
+      imageInput.multiple = false;
+      imageInput.setAttribute('capture', 'environment');
+      cameraPickerPending = true;
+      imageInput.click();
+    });
+    imageInput.addEventListener('change', resetCameraPicker);
+    imageInput.addEventListener('cancel', resetCameraPicker);
+    window.addEventListener('focus', function () { window.setTimeout(resetCameraPicker, 350); });
+    document.getElementById('chooseImageButton').addEventListener('click', resetCameraPicker, true);
+    document.getElementById('chooseFileButton').addEventListener('click', resetCameraPicker, true);
     input.rows = 1;
     input.placeholder = 'Привет, Doctor.';
     input.addEventListener('input', scheduleViewport);

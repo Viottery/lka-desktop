@@ -67,8 +67,8 @@ class QQMessagingConfig:
     action_token: str = field(default="", repr=False)
     db_path: Path = Path("data/qq/messaging.db")
     media_dir: Path = Path("data/qq/messaging-media")
-    image_max: int = 20 * 1024 * 1024
-    video_max: int = 200 * 1024 * 1024
+    image_max: int = 256 * 1024 * 1024
+    video_max: int = 256 * 1024 * 1024
     media_max: int = 2 * 1024 * 1024 * 1024
     message_max: int = 100000
     timeout: float = 60
@@ -84,8 +84,8 @@ class QQMessagingConfig:
                    action_token=os.getenv("QQ_ACTION_TOKEN", ""),
                    db_path=Path(os.getenv("QQ_MESSAGING_DB_PATH", "data/qq/messaging.db")),
                    media_dir=Path(os.getenv("QQ_MESSAGING_MEDIA_DIR", "data/qq/messaging-media")),
-                   image_max=int(os.getenv("QQ_MESSAGING_IMAGE_MAX_BYTES", str(20*1024*1024))),
-                   video_max=int(os.getenv("QQ_MESSAGING_VIDEO_MAX_BYTES", str(200*1024*1024))),
+                   image_max=int(os.getenv("QQ_MESSAGING_IMAGE_MAX_BYTES", str(256*1024*1024))),
+                   video_max=int(os.getenv("QQ_MESSAGING_VIDEO_MAX_BYTES", str(256*1024*1024))),
                    media_max=int(os.getenv("QQ_MESSAGING_MEDIA_MAX_BYTES", str(2*1024*1024*1024))),
                    message_max=int(os.getenv("QQ_MESSAGING_MESSAGE_MAX", "100000")),
                    timeout=float(os.getenv("QQ_ACTION_TIMEOUT_SECONDS", "60")))
@@ -126,7 +126,7 @@ class QQMessaging:
             if (p.scheme != "ws" or not local or p.username is not None or p.password is not None
                     or p.query or p.fragment or p.path not in {"/event", "/event/"} or p.port == 0):
                 raise ValueError()
-            if not (0 < c.image_max <= 20*1024*1024 and 0 < c.video_max <= 200*1024*1024
+            if not (0 < c.image_max <= 256*1024*1024 and 0 < c.video_max <= 256*1024*1024
                     and max(c.image_max, c.video_max) <= c.media_max <= 10*1024*1024*1024
                     and 1 <= c.message_max <= 1000000 and 0 < c.timeout <= 120):
                 raise ValueError()

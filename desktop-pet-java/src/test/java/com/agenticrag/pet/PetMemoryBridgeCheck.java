@@ -5,6 +5,7 @@ import com.sun.net.httpserver.HttpHandler;
 import javafx.application.Platform;
 import javafx.scene.web.WebView;
 import javafx.scene.control.TextArea;
+import javafx.scene.control.Button;
 import javafx.stage.Screen;
 import javafx.stage.Stage;
 import java.lang.reflect.Field;
@@ -12,6 +13,12 @@ import java.net.InetSocketAddress;
 import java.nio.charset.StandardCharsets;
 import java.util.List;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import com.google.gson.JsonObject;
+import com.google.gson.JsonParser;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
@@ -22,9 +29,42 @@ public final class PetMemoryBridgeCheck {
         check(PetControlWindow.allowedMemoryRequest("PATCH", "/memories/m1?workspace_path=D%3A%5CWork"), "valid edit");
         check(PetControlWindow.allowedMemoryRequest("GET", "/sessions/s1/context-status"), "valid context");
         check(PetControlWindow.allowedMemoryRequest("GET", "/projects/p1/sessions?limit=50&offset=0&q=%E4%B8%AD%E6%96%87"), "project sessions query");
+        check(PetControlWindow.allowedMemoryRequest("GET", "/matters?kind=task&status=active&offset=0&unscheduled=true"), "matter list");
+        check(PetControlWindow.allowedMemoryRequest("GET", "/matters/m1"), "matter detail");
+        check(PetControlWindow.allowedMemoryRequest("POST", "/matters"), "create matter");
+        check(PetControlWindow.allowedMemoryRequest("PATCH", "/matters/m1"), "update matter");
+        check(!PetControlWindow.allowedMemoryRequest("DELETE", "/matters/m1"), "reject matter delete");
+        check(!PetControlWindow.allowedMemoryRequest("GET", "/matters?token=secret"), "reject matter query token");
+        check(!PetControlWindow.allowedMemoryRequest("PATCH", "/matters/m1?kind=plan"), "reject mutation query");
         check(PetControlWindow.allowedMemoryRequest("POST", "/projects"), "register project");
         check(PetControlWindow.allowedMemoryRequest("PATCH", "/projects/p1"), "rename project");
         check(PetControlWindow.allowedMemoryRequest("POST", "/sessions"), "create project session");
+        check(PetControlWindow.allowedMemoryRequest("POST", "/managers/default"), "default manager");
+        check(PetControlWindow.allowedMemoryRequest("PATCH", "/managers/s1"), "manager controller");
+        check(!PetControlWindow.allowedMemoryRequest("POST", "/managers"), "reject extra manager create");
+        check(PetControlWindow.allowedMemoryRequest("GET", "/managers/s1/goals?limit=20&offset=40"), "manager goals pagination");
+        for (String feed : List.of("events", "executions", "deliveries")) {
+            check(PetControlWindow.allowedMemoryRequest("GET", "/managers/s1/" + feed + "?after=7&limit=20"), "manager feed pagination");
+            check(!PetControlWindow.allowedMemoryRequest("GET", "/managers/s1/" + feed + "?offset=1"), "reject wrong feed cursor");
+            check(!PetControlWindow.allowedMemoryRequest("POST", "/managers/s1/" + feed), "reject feed write");
+        }
+        check(PetControlWindow.allowedMemoryRequest("GET", "/sessions/s1/runs?limit=20&offset=40"), "session runs pagination");
+        check(PetControlWindow.allowedMemoryRequest("GET", "/sessions/s1/inputs"), "manager input receipts");
+        check(PetControlWindow.allowedMemoryRequest("POST", "/sessions/s1/inputs"), "enqueue manager input");
+        check(PetControlWindow.allowedMemoryRequest("POST", "/sessions/s1/inputs/resume"), "resume manager input queue");
+        check(!PetControlWindow.allowedMemoryRequest("GET", "/sessions/s1/inputs?token=secret"), "reject queue query");
+        check(!PetControlWindow.allowedMemoryRequest("GET", "/sessions/s1/inputs/resume"), "reject resume read");
+        check(!PetControlWindow.allowedMemoryRequest("DELETE", "/sessions/s1/inputs"), "reject queue delete");
+        check(!PetControlWindow.allowedMemoryRequest("POST", "/sessions/s1/inputs/unknown"), "reject unknown queue mutation");
+        for (String path : List.of("/managers/s1/goals?after=1", "/managers/s1/goals/g1", "/managers/s1/unknown", "/sessions/s1/runs?after=1", "/sessions/s1/runs?expected_revision=1")) {
+            check(!PetControlWindow.allowedMemoryRequest("GET", path), "reject unrequested manager route/query");
+        }
+        check(!PetControlWindow.allowedMemoryRequest("PATCH", "/managers/s1?expected_revision=1"), "controller revision belongs in body");
+        check(!PetControlWindow.allowedMemoryRequest("PATCH", "/sessions/s1/runs"), "session runs is read-only");
+        String globalPage = PetControlWindow.workbenchPageUrl("http://127.0.0.1:8780/desktop-pet/chat.html?mode=quick&backend=old", "http://127.0.0.1:8765", "ordinary-session", "ordinary-run", true);
+        check(globalPage.equals("http://127.0.0.1:8780/desktop-pet/chat.html?mode=work&backend=http%3A%2F%2F127.0.0.1%3A8765&assistant=global"), "global assistant uses existing backend without ordinary session identity");
+        check(PetControlWindow.workbenchPageUrl("http://127.0.0.1:8780/desktop-pet/chat.html?mode=quick", "http://127.0.0.1:8765", "session one", "run-one", false).endsWith("&session_id=session+one&run_id=run-one"), "ordinary workbench keeps session and run handoff");
+        check(!PetControlWindow.allowedMemoryRequest("POST", "/managers/default?token=secret"), "reject manager query");
         for (String path : List.of("https://example.com/memories", "//example.com/memories", "/memories?token=secret", "/memories/%2e%2e/agent", "/agent/turn")) {
             check(!PetControlWindow.allowedMemoryRequest("POST", path), "reject unsupported route");
         }
@@ -45,8 +85,29 @@ public final class PetMemoryBridgeCheck {
         AtomicReference<Integer> proxyPort = new AtomicReference<>();
         HttpServer backendServer = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
         HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        CountDownLatch streamPair = new CountDownLatch(2), releaseManagerStream = new CountDownLatch(1);
+        List<JsonObject> streamRequests = new CopyOnWriteArrayList<>();
+        ExecutorService backendWorkers = Executors.newCachedThreadPool(task -> { Thread worker = new Thread(task, "synthetic-native-http"); worker.setDaemon(true); return worker; });
+        backendServer.setExecutor(backendWorkers);
         HttpHandler handler = exchange -> {
-            boolean memory = List.of("/memories", "/projects/p1", "/sessions").contains(exchange.getRequestURI().getPath());
+            if ("/agent/turn/stream".equals(exchange.getRequestURI().getPath())) {
+                JsonObject body = JsonParser.parseString(new String(exchange.getRequestBody().readAllBytes(), StandardCharsets.UTF_8)).getAsJsonObject();
+                streamRequests.add(body);
+                String sessionId = body.get("session_id").getAsString();
+                if (sessionId.equals("stream-break")) { exchange.close(); return; }
+                if (sessionId.equals("stream-error")) {
+                    byte[] failure = "{\"detail\":{\"code\":\"session_busy\",\"session_id\":\"stream-error\",\"run_id\":\"existing-run\"}}".getBytes(StandardCharsets.UTF_8);
+                    exchange.sendResponseHeaders(409, failure.length); exchange.getResponseBody().write(failure); exchange.close(); return;
+                }
+                if (sessionId.equals("stream-manager") || sessionId.equals("stream-ordinary")) { streamPair.countDown(); awaitFixtureLatch(streamPair); }
+                exchange.getResponseHeaders().set("Content-Type", "text/event-stream; charset=utf-8"); exchange.sendResponseHeaders(200, 0);
+                String started = "event: run_started\ndata: {\"session_id\":\"" + sessionId + "\"}\n\n";
+                exchange.getResponseBody().write(started.getBytes(StandardCharsets.UTF_8)); exchange.getResponseBody().flush();
+                if (sessionId.equals("stream-manager")) awaitFixtureLatch(releaseManagerStream);
+                String completed = "event: run_completed\ndata: {\"session_id\":\"" + sessionId + "\"}\n\n";
+                exchange.getResponseBody().write(completed.getBytes(StandardCharsets.UTF_8)); exchange.close(); return;
+            }
+            boolean memory = List.of("/memories", "/projects/p1", "/sessions", "/managers/s1", "/managers/s1/goals", "/managers/s1/events", "/managers/s1/executions", "/managers/s1/deliveries", "/sessions/s1/runs").contains(exchange.getRequestURI().getPath());
             boolean qqStatus = "/plugins/qq-reader/status".equals(exchange.getRequestURI().getPath());
             boolean readingProxy = "/plugins/message-reading/messages/conversations".equals(exchange.getRequestURI().getPath());
             boolean sendProxy = "/plugins/qq-ui/messages/send".equals(exchange.getRequestURI().getPath());
@@ -115,6 +176,7 @@ public final class PetMemoryBridgeCheck {
             }
             check(Boolean.TRUE.equals(fx(() -> view.getEngine().executeScript("Boolean(window.petBridge && window.petBridge.requestMemory)"))), "bridge ready");
             check(Boolean.TRUE.equals(fx(() -> view.getEngine().executeScript("Boolean(window.petBridge && window.petBridge.requestQQReaderStatus)"))), "QQ status bridge ready");
+            checkConcurrentStreamCallbacks(streamRequests, releaseManagerStream);
             checkQuickPanelSizingAndDraft(window);
             fx(() -> view.getEngine().executeScript("petBridge.requestQQReaderStatus('qq-status-testnonce-1')"));
             while (System.nanoTime() < deadline && !Boolean.TRUE.equals(fx(() -> view.getEngine().executeScript("Boolean(window.qqStatusResult)")))) Thread.sleep(50);
@@ -161,8 +223,39 @@ public final class PetMemoryBridgeCheck {
             check("GET".equals(proxyMethod.get()) && "/plugins/qq-ui/groups/123?account_id=456".equals(proxyPath.get()), "QQ group name exact route and account query");
             check(proxyPort.get() == server.getAddress().getPort(), "QQ group name stays on frontend origin");
             check(proxyAuth.get() == null && proxyIntent.get() == null, "QQ group name read has no token or write intent");
+            String[] managerPaths = {"/managers/s1/goals?limit=20&offset=0", "/managers/s1/events?after=7&limit=20", "/managers/s1/executions?after=7&limit=20", "/managers/s1/deliveries?after=7&limit=20", "/sessions/s1/runs?limit=20&offset=0"};
+            for (int i = 0; i < managerPaths.length; i++) {
+                String id = "memory-managerprobe-" + (10 + i), path = managerPaths[i];
+                fx(() -> view.getEngine().executeScript("window.memoryResult='';petBridge.requestMemory(JSON.stringify({id:'" + id + "',method:'GET',path:'" + path + "',token:'isolated-test-token'}))"));
+                waitForScript("Boolean(window.memoryResult)");
+                check(String.valueOf(fx(() -> view.getEngine().executeScript("window.memoryResult"))).startsWith(id + "|200|"), "manager data async callback");
+                check("Bearer isolated-test-token".equals(auth.get()), "manager credential stays in header");
+            }
+            fx(() -> view.getEngine().executeScript("window.memoryResult='';petBridge.requestMemory(JSON.stringify({id:'memory-managerprobe-20',method:'PATCH',path:'/managers/s1',body:JSON.stringify({expected_revision:7,status:'paused'}),token:'isolated-test-token'}))"));
+            waitForScript("Boolean(window.memoryResult)");
+            check(received.get().contains("expected_revision") && received.get().contains("paused"), "manager controller CAS body preserved");
             System.out.println("PASS: route constraints and JavaFX memory plus QQ status bridges; status, reading proxy, automatic group name and synthetic QQ send origin/method/path/auth/intent/HTTP1.1/callback verified");
-        } finally { window.dispose(); server.stop(0); backendServer.stop(0); Platform.exit(); }
+        } finally { window.dispose(); server.stop(0); backendServer.stop(0); backendWorkers.shutdownNow(); Platform.exit(); }
+    }
+    private static void awaitFixtureLatch(CountDownLatch latch) throws java.io.IOException {
+        try { if (!latch.await(8, TimeUnit.SECONDS)) throw new java.io.IOException("Synthetic stream rendezvous timed out"); }
+        catch (InterruptedException error) { Thread.currentThread().interrupt(); throw new java.io.IOException(error); }
+    }
+    private static void checkConcurrentStreamCallbacks(List<JsonObject> requests, CountDownLatch releaseManager) throws Exception {
+        fx(() -> view.getEngine().executeScript("window.streamEvents=[];window.streamFailures=[];window.__petChatReceiveStream=function(event,data,id){streamEvents.push({event:event,session:data.session_id,id:id,args:arguments.length});};window.__petChatReceive=function(value){streamFailures.push(value);};petBridge.stream(JSON.stringify({question:'manager fixture',conversation_id:'stream-manager',request_id:'native.manager.1'}));petBridge.stream(JSON.stringify({question:'ordinary fixture',conversation_id:'stream-ordinary',request_id:'native.ordinary.2'}));"));
+        waitForScript("streamEvents.some(function(e){return e.event==='run_completed'&&e.id==='native.ordinary.2';})&&streamEvents.some(function(e){return e.event==='run_started'&&e.id==='native.manager.1';})");
+        check(Boolean.TRUE.equals(fx(() -> view.getEngine().executeScript("!streamEvents.some(function(e){return e.event==='run_completed'&&e.id==='native.manager.1';})"))), "manager stream remains active while ordinary completes");
+        releaseManager.countDown();
+        waitForScript("streamEvents.some(function(e){return e.event==='run_completed'&&e.id==='native.manager.1';})");
+        check(Boolean.TRUE.equals(fx(() -> view.getEngine().executeScript("streamEvents.every(function(e){return e.args===3&&e.id===(e.session==='stream-manager'?'native.manager.1':'native.ordinary.2');})"))), "interleaved native streams retain independent request identities");
+        fx(() -> view.getEngine().executeScript("petBridge.stream(JSON.stringify({question:'legacy fixture',conversation_id:'stream-legacy'}));"));
+        waitForScript("streamEvents.some(function(e){return e.event==='run_completed'&&e.session==='stream-legacy'&&e.args===2;})");
+        fx(() -> view.getEngine().executeScript("petBridge.stream(JSON.stringify({question:'HTTP failure fixture',conversation_id:'stream-error',request_id:'native.error.3'}));petBridge.stream(JSON.stringify({question:'transport failure fixture',conversation_id:'stream-break',request_id:'native.break.4'}));petBridge.stream(JSON.stringify({question:'parse failure fixture',conversation_id:'stream-invalid',request_id:'native.invalid.5',llm_response_mode:'invalid'}));"));
+        waitForScript("streamFailures.length===3");
+        check(Boolean.TRUE.equals(fx(() -> view.getEngine().executeScript("streamFailures.some(function(e){return e.session_id==='stream-error'&&e.request_id==='native.error.3'&&e.error.indexOf('HTTP 409')>=0;})&&streamFailures.some(function(e){return e.session_id==='stream-break'&&e.request_id==='native.break.4'&&e.error.indexOf('Desktop stream bridge failed')>=0;})&&streamFailures.some(function(e){return e.session_id==='stream-invalid'&&e.request_id==='native.invalid.5'&&e.error.indexOf('parse failed')>=0;})"))), "HTTP, transport and parse failures retain original session and request identity");
+        check(requests.stream().noneMatch(body -> body.has("request_id")), "native callback request_id never reaches backend Agent payload");
+        check(requests.stream().noneMatch(body -> body.get("session_id").getAsString().equals("stream-invalid")), "invalid stream settings rejected before HTTP");
+        System.out.println("PASS: concurrent native stream routing, legacy callback arity and scoped failure identities");
     }
     private static void waitForScript(String expression) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
@@ -176,6 +269,16 @@ public final class PetMemoryBridgeCheck {
         Field stageField = PetControlWindow.class.getDeclaredField("stage"); stageField.setAccessible(true);
         Field inputField = PetControlWindow.class.getDeclaredField("nativeInput"); inputField.setAccessible(true);
         TextArea input = (TextArea) fx(() -> inputField.get(window));
+        fx(() -> {
+            Stage current = (Stage) stageField.get(window);
+            Button global = (Button) current.getScene().lookup("#quickGlobalAssistantButton");
+            check(global != null && global.getText().isEmpty() && global.getGraphic() != null
+                    && "打开真理".equals(global.getAccessibleText()) && global.getTooltip() != null
+                    && "打开真理".equals(global.getTooltip().getText()), "quick window has accessible global assistant icon");
+            check(global.getOnAction() != null && Math.abs(global.getWidth() - 24) < 1 && global.isVisible(), "global assistant entry is visible and actionable");
+            check(global.localToScene(global.getBoundsInLocal()).getMaxX() <= current.getWidth(), "global assistant entry fits compact quick window");
+            return null;
+        });
         String draft = "保留这段原生输入草稿";
         fx(() -> { input.setText(draft); return null; });
         for (double contentHeight : new double[]{0, 310, 10000, 0}) {

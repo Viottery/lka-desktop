@@ -121,10 +121,11 @@
   function renderDetail(project) {
     el("projectDetail").innerHTML = '<h3>' + esc(project.name) + '</h3><p class="project-path">' + esc(project.workspace_path || "目录未绑定") + '</p><p class="memory-note">' + esc(project.session_count) + ' 个会话。会话各自保留消息，共用这个目录和项目记忆。</p>' +
       '<form id="projectRenameForm"><label>显示名称<input id="projectRenameName" required maxlength="120" value="' + esc(project.name) + '"></label><div class="memory-actions"><button type="submit">保存名称</button><button type="button" id="projectRenameReload" hidden>重新载入版本</button></div><p class="memory-note" id="projectRenameStatus" role="status">只修改显示名称，不修改文件夹。</p></form>' +
-      '<div class="memory-actions"><button id="projectNewSession" class="memory-primary">在此项目新建会话</button><button id="projectMemory">项目记忆</button></div>' +
+      '<div class="memory-actions"><button id="projectNewSession" class="memory-primary">在此项目新建会话</button><button id="projectMemory">项目记忆</button><button id="projectMatters">待办与规划</button></div>' +
       '<h3 class="project-sessions-heading">项目会话</h3><input id="projectSessionSearch" type="search" maxlength="500" aria-label="搜索项目会话" placeholder="搜索会话标题和消息"><div id="projectSessions" class="project-sessions"></div><button id="projectSessionMore" hidden>加载更多会话</button>';
     updateActions();
     el("projectNewSession").onclick = function () { createProjectSession(project); };
+    el("projectMatters").onclick = function () { close(); if (window.LkaMatters) window.LkaMatters.open({ projectId: project.project_id, projectName: project.name }); };
     el("projectMemory").onclick = function () { close(); transport.open("project"); };
     el("projectRenameForm").onsubmit = async function (event) {
       event.preventDefault(); var button = this.querySelector('[type="submit"]'), input = el("projectRenameName"), name = input.value.trim(), request = state.detailRequest;

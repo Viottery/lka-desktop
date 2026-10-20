@@ -303,3 +303,239 @@ body.mobile-workbench .memory-overlay, body.mobile-workbench .message-center-ove
     padding-left: env(safe-area-inset-left, 0px); padding-right: env(safe-area-inset-right, 0px);
   }
 }
+
+/* Mobile workbench refinement: one quiet paper surface, with the composer as
+   the most prominent touch target. */
+body.mobile-workbench {
+  --mobile-nav-height: 64px;
+  --mobile-line: #dce7dd;
+  --mobile-moss: #356d58;
+  --mobile-moss-dark: #285b48;
+  --mobile-mint: #edf4ec;
+  --mobile-ink: #263d34;
+}
+body.mobile-workbench :focus-visible {
+  outline: 2px solid #6c9b83;
+  outline-offset: 2px;
+}
+body.mobile-workbench .chat-topbar {
+  min-height: 60px;
+  padding-inline: max(12px, env(safe-area-inset-left, 0px));
+  border-bottom-color: var(--mobile-line);
+}
+body.mobile-workbench .chat-session-meta strong { color: var(--mobile-ink); font-weight: 600; }
+body.mobile-workbench .topbar-actions { gap: 4px; }
+body.mobile-workbench .icon-button,
+body.mobile-workbench .quiet-button {
+  border: 1px solid transparent;
+  color: #466c5b;
+  transition: background-color 120ms ease, border-color 120ms ease;
+}
+body.mobile-workbench .icon-button:hover,
+body.mobile-workbench .quiet-button:hover { border-color: #d6e4d7; background: #edf4ec; }
+body.mobile-workbench .context-strip {
+  min-height: 42px;
+  gap: 9px;
+  padding-inline: 17px;
+  background: #f0f5ef;
+  border-bottom: 1px solid #e3ebe2;
+}
+body.mobile-workbench .context-copy { min-width: 0; flex: 1 1 auto; overflow: hidden; }
+body.mobile-workbench .context-copy strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  color: #526a5d;
+}
+body.mobile-workbench #changeWorkspaceButton {
+  flex: 0 0 auto;
+  border-radius: 11px;
+  color: #356d58;
+  font-weight: 600;
+}
+body.mobile-workbench .messages {
+  padding-top: 18px;
+  scrollbar-color: #c5d5c9 transparent;
+  scrollbar-width: thin;
+}
+body.mobile-workbench .run-status:not(.error):not(.review) { display: none; }
+body.mobile-workbench .message.user .bubble {
+  border-color: #d6e5d7;
+  background: #eaf2e8;
+  color: #2c4336;
+}
+body.mobile-workbench .message.assistant .bubble > strong {
+  color: #527965;
+  font-weight: 600;
+}
+body.mobile-workbench .markdown-body a { color: #286c63; text-underline-offset: 2px; }
+body.mobile-workbench .welcome { max-width: 680px; margin-inline: auto; }
+body.mobile-workbench .welcome h1 { color: #263c32; letter-spacing: -.035em; }
+body.mobile-workbench .welcome-eyebrow {
+  border-color: #d7e4d5;
+  background: #edf4e9;
+  color: #52725c;
+}
+body.mobile-workbench .welcome-suggestions button {
+  border-color: #dce7dc;
+  border-radius: 13px;
+  background: #fff;
+  color: #3d6250;
+  font-weight: 500;
+}
+body.mobile-workbench .welcome-suggestions button:active { background: #eff5ed; }
+
+/* The upload, draft and existing shared send/pause/resume control sit in one
+   compact surface. The two icon targets remain at least 44px. */
+body.mobile-workbench .composer {
+  grid-template-columns: 44px minmax(0, 1fr) 44px;
+  align-items: end;
+  gap: 2px;
+  margin: 7px max(12px, calc((100% - 760px) / 2)) 8px;
+  padding: 4px;
+  border: 1px solid #d5e2d9;
+  border-radius: 24px;
+  background: #fff;
+  box-shadow: 0 2px 9px #234a3710;
+  transition: border-color 120ms ease, box-shadow 120ms ease;
+}
+body.mobile-workbench .composer:focus-within {
+  border-color: #86b3a0;
+  box-shadow: 0 0 0 3px #3f80631a;
+}
+body.mobile-workbench .composer-upload { width: 44px; align-self: end; }
+body.mobile-workbench #uploadAttachmentButton {
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  color: #557865;
+}
+body.mobile-workbench #uploadAttachmentButton:hover,
+body.mobile-workbench #uploadAttachmentButton[aria-expanded="true"] { background: #edf4ec; }
+body.mobile-workbench .attachment-menu { border-color: #d9e5d9; border-radius: 15px; }
+body.mobile-workbench .attachment-menu button { min-height: 44px; border-radius: 10px; }
+body.mobile-workbench .attachment-menu button span { line-height: 1.45; }
+body.mobile-workbench .composer textarea {
+  min-width: 0;
+  min-height: 44px;
+  max-height: 132px;
+  padding: 10px 4px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #293d34;
+  line-height: 1.55;
+}
+body.mobile-workbench .composer textarea:focus { border: 0; outline: 0; box-shadow: none; }
+body.mobile-workbench .composer textarea::placeholder { color: #85958a; }
+body.mobile-workbench #sendButton {
+  align-self: end;
+  width: 44px;
+  min-width: 44px;
+  height: 44px;
+  min-height: 44px;
+  border-radius: 50%;
+  padding: 0;
+  background: var(--mobile-moss);
+  box-shadow: none;
+}
+body.mobile-workbench #sendButton:hover:not(:disabled) { background: var(--mobile-moss-dark); }
+body.mobile-workbench #sendButton:disabled { background: #c2d0c5; opacity: 1; }
+body.mobile-workbench #sendButton[data-action="resume"]:not(:disabled),
+body.mobile-workbench #sendButton[data-action="pause"]:not(:disabled) { background: #466f59; }
+body.mobile-workbench #sendButton svg { width: 20px; height: 20px; }
+body.mobile-workbench .composer-hint { color: #7d9084; }
+body.mobile-workbench .composer-hint { display: none; }
+body.mobile-workbench .composer-attachments { padding-inline: 12px; }
+body.mobile-workbench .attachment-card {
+  border-color: #dce7d9;
+  background: #f5f8f1;
+}
+body.mobile-workbench .attachment-notice { color: #5c7864; }
+
+body.mobile-workbench .mobile-nav {
+  gap: 3px;
+  border-top-color: #dce7dd;
+  background: #fbfcfa;
+}
+body.mobile-workbench .mobile-nav button {
+  gap: 3px;
+  border-radius: 14px;
+  color: #708278;
+  font-size: 10px;
+  transition: background-color 120ms ease, color 120ms ease;
+}
+body.mobile-workbench .mobile-nav button svg { width: 20px; height: 20px; }
+body.mobile-workbench .mobile-nav button[aria-pressed="true"] {
+  background: #eaf2e8;
+  color: #32674f;
+  font-weight: 600;
+}
+body.mobile-workbench .session-sidebar {
+  background: #1b3a35;
+  border-color: #2d5148;
+}
+body.mobile-workbench .session-item { border-radius: 12px; }
+body.mobile-workbench .session-item.active { border-color: #668878; background: #ffffff20; }
+body.mobile-workbench .context-rail {
+  border-left-color: #d9e5dc;
+  box-shadow: -12px 0 32px #1c3c2d20;
+}
+body.mobile-workbench .context-rail-header { border-bottom-color: #e3ebe3; }
+body.mobile-workbench .rail-tabs { border-bottom-color: #e3ebe3; }
+body.mobile-workbench .rail-tabs button { border-radius: 10px 10px 0 0; }
+body.mobile-workbench .run-control input,
+body.mobile-workbench .run-control select {
+  border-color: #d5e2d8;
+  border-radius: 11px;
+  background-color: #fbfcfa;
+  color: #2e4739;
+}
+body.mobile-workbench .run-controls button,
+body.mobile-workbench .model-catalog-row button,
+body.mobile-workbench .file-toolbar button,
+body.mobile-workbench .file-panel-action,
+body.mobile-workbench .rail-tabs button {
+  border-radius: 11px;
+}
+body.mobile-workbench .file-item { border-radius: 10px; }
+body.mobile-workbench .mobile-project-session {
+  border-color: #d5e3d3;
+  border-radius: 12px;
+  background: #f0f5ed;
+  color: #3f684e;
+}
+body.mobile-workbench .undo-toast { border-color: #d7e3d8; border-radius: 14px; }
+body.mobile-workbench .mc-header,
+body.mobile-workbench .memory-header { border-bottom-color: #e2eae2; }
+body.mobile-workbench .mc-tabs button,
+body.mobile-workbench .reading-tabs button { border-radius: 11px; }
+body.mobile-workbench .mc-conversation { border-radius: 12px; }
+body.mobile-workbench .mc-composer textarea { border-radius: 11px; }
+
+@media (max-width: 759px) {
+  body.mobile-workbench .chat-topbar { gap: 5px; }
+  body.mobile-workbench .context-strip { padding-inline: 14px; }
+  body.mobile-workbench .messages { padding-inline: 16px; }
+  body.mobile-workbench .composer { margin: 6px 10px 7px; }
+  body.mobile-workbench .mobile-nav button { padding-inline: 2px; }
+  body.mobile-workbench .session-sidebar {
+    width: min(340px, 90vw);
+    box-shadow: 14px 0 34px #16372d38;
+  }
+}
+@media (max-width: 359px) {
+  body.mobile-workbench .topbar-actions { gap: 1px; }
+  body.mobile-workbench .icon-button { flex-basis: 44px; width: 44px; min-width: 44px; }
+  body.mobile-workbench .chat-session-meta strong { font-size: 15px; }
+  body.mobile-workbench .messages { padding-inline: 13px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  body.mobile-workbench .icon-button,
+  body.mobile-workbench .quiet-button,
+  body.mobile-workbench .mobile-nav button,
+  body.mobile-workbench .composer { transition: none; }
+}

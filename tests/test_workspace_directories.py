@@ -68,6 +68,27 @@ class WorkspaceDirectoryTests(unittest.IsolatedAsyncioTestCase):
                     rejected = await remote.get("/pet/workspace-directories", headers={"Origin": "http://evil.example"})
                     self.assertEqual(rejected.status_code, 403)
 
+    async def test_manager_parent_uses_same_default_without_allocating_session_folder(self):
+        with TemporaryDirectory() as temporary, patch.dict(os.environ, {"LKA_SESSION_WORKSPACE_BASE": str(Path(temporary) / "Workspaces")}):
+            result = await self.client.post("/pet/session-workspace-parent", json={})
+            self.assertEqual(result.status_code, 200)
+            root = Path(result.json()["path"])
+            self.assertTrue(root.is_dir())
+            self.assertEqual(root, Path(temporary) / "Workspaces")
+            self.assertEqual(list(root.iterdir()), [])
+            self.assertIn(result.json()["platform"], {"windows", "linux", "macos"})
+            ordinary = await self.client.post("/pet/session-workspace", json={"session_id": "ordinary"})
+            self.assertEqual(Path(ordinary.json()["path"]).parent, root)
+            self.assertEqual(list(root.iterdir()), [root / "ordinary"])
+
+    async def test_parent_reuses_workspace_source_authorization(self):
+        with TemporaryDirectory() as temporary:
+            forbidden = await self.client.post("/pet/session-workspace-parent", headers={"Origin": "http://evil.example"}, json={"base_path": temporary})
+            self.assertEqual(forbidden.status_code, 403)
+            relative = await self.client.post("/pet/session-workspace-parent", json={"base_path": "relative"})
+            self.assertEqual(relative.status_code, 422)
+            self.assertEqual(list(Path(temporary).iterdir()), [])
+
     async def test_filtering_and_offset_pagination_are_stable(self):
         with TemporaryDirectory() as temporary:
             parent = Path(temporary)

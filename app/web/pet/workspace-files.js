@@ -4,7 +4,7 @@
   if (!chat || !panel || typeof chat.getFileContext !== 'function' || !chat.get().workMode) return;
   var el = function (id) { return document.getElementById(id); };
   var queue = [], sequence = 0, uploadRunning = false, preparing = false;
-  var MAX_UPLOAD = 64 * 1024 * 1024, MAX_DOWNLOAD = 128 * 1024 * 1024;
+  var MAX_UPLOAD = 256 * 1024 * 1024, MAX_DOWNLOAD = 256 * 1024 * 1024;
   var downloadIcon = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4M5 16v4h14v-4" stroke-linecap="round" stroke-linejoin="round"/></svg>';
 
   function size(bytes) {
@@ -94,7 +94,7 @@
         xhr.setRequestHeader('Content-Type', 'application/octet-stream'); xhr.setRequestHeader('X-Filename', encodeURIComponent(item.filename));
         xhr.upload.onprogress = function (event) { item.percent = event.lengthComputable ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null; render(); };
       } else xhr.onprogress = function (event) {
-        if (event.loaded > MAX_DOWNLOAD) { done('failed', '文件超过 128 MiB 下载限制。'); xhr.abort(); return; }
+        if (event.loaded > MAX_DOWNLOAD) { done('failed', '文件超过 256 MiB 下载限制。'); xhr.abort(); return; }
         item.percent = event.lengthComputable ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null; render();
       };
       xhr.onload = function () {
@@ -136,7 +136,7 @@
     var view = chat.getFileContext();
     var oversized = files.filter(function (file) { return file.size > MAX_UPLOAD; });
     files = files.filter(function (file) { return file.size <= MAX_UPLOAD; });
-    if (oversized.length) notice('这些文件超过 64 MiB，未上传：' + oversized.map(function (file) { return file.name; }).join('、'), true);
+    if (oversized.length) notice('这些文件超过 256 MiB，未上传：' + oversized.map(function (file) { return file.name; }).join('、'), true);
     if (!files.length || preparing) return;
     preparing = true; sync();
     try {
@@ -157,7 +157,7 @@
       var button = document.createElement('button'); button.type = 'button'; button.className = 'file-download-button';
       button.innerHTML = downloadIcon; button.setAttribute('aria-label', '下载 ' + entry.name); button.title = '下载到这台设备';
       button.disabled = Number(entry.size_bytes) > MAX_DOWNLOAD;
-      if (button.disabled) button.title = '文件超过 128 MiB 下载限制';
+      if (button.disabled) button.title = '文件超过 256 MiB 下载限制';
       button.addEventListener('click', function () {
         notice('');
         var item = newItem('download', String(entry.name), Number(entry.size_bytes) || 0, view); item.filePath = entry.path;

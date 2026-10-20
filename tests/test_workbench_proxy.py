@@ -66,6 +66,41 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("origin", call.headers)
         self.assertNotIn("browser-secret", response.text)
 
+    async def test_manager_input_queue_routes_are_explicit_and_queryless(self):
+        for path, method in (("sessions/s1/inputs", "GET"), ("sessions/s1/inputs", "POST"),
+                             ("sessions/s1/inputs/resume", "POST")):
+            body = {"client_message_id": "stable-id", "user_input": "queued", "attachment_ids": []}
+            result = await self.request(path, method, payload=body if method == "POST" else None)
+            self.assertEqual(result.status_code, 200)
+            self.assertEqual(self.calls[-1].url.path, "/" + path)
+            if method == "POST":
+                self.assertEqual(__import__("json").loads(self.calls[-1].content), body)
+        for path, method in (("sessions/s1/inputs?token=secret", "GET"),
+                             ("sessions/s1/inputs?limit=20", "POST"),
+                             ("sessions/s1/inputs/resume", "GET"), ("sessions/s1/inputs", "DELETE"),
+                             ("sessions/s1/inputs/unknown", "POST")):
+            self.assertEqual((await self.request(path, method)).status_code, 404)
+
+    async def test_matter_routes_are_bounded_and_forward_cas_payload(self):
+        result = await self.request("matters?kind=task&status=active&unscheduled=true&offset=50")
+        self.assertEqual(result.status_code, 200)
+        result = await self.request("matters/sync?after=12&limit=200")
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(str(self.calls[-1].url), "http://127.0.0.1:8765/matters/sync?after=12&limit=200")
+        result = await self.request("matters?scheduled_on=2026-10-19&inbox=true&section=Draft")
+        self.assertEqual(result.status_code, 200)
+        for path in ("matters/sync?token=secret", "matters/sync?after=1&cursor=2"):
+            self.assertEqual((await self.request(path)).status_code, 404)
+        payload = {"title": "Draft", "expected_revision": 3, "due_at": None,
+                   "scheduled_on": "2026-10-19", "scheduled_start": None, "scheduled_end": None}
+        result = await self.request("matters/m1", "PATCH", payload=payload)
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(__import__("json").loads(self.calls[-1].content), payload)
+        for path, method in (("matters/m1", "DELETE"), ("matters?token=secret", "GET"),
+                             ("matters/m1/source-links", "POST")):
+            result = await self.request(path, method)
+            self.assertEqual(result.status_code, 404)
+
     async def test_remote_requires_exact_opt_in_origin_and_same_origin_headers(self):
         denied = await self.request(host="192.0.2.2:8780", peer="192.0.2.4")
         self.assertEqual(denied.status_code, 403)
@@ -109,11 +144,45 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(self.streams[0].closed)
         self.assertEqual(self.calls[0].content, b'{"user_input":"test"}')
 
+    async def test_memory_feedback_probe_and_exact_query_allowlist(self):
+        path = "memories/feedback"
+        query = "scope=project&workspace_path=C%3A%2Fsynthetic&limit=1&offset=0"
+        response = await self.request(path + "?" + query)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(str(self.calls[-1].url), "http://127.0.0.1:8765/" + path + "?" + query)
+        self.assertTrue(_route("GET", path, {"limit"}))
+        for name in ("include_candidates", "token", "unexpected"):
+            self.assertFalse(_route("GET", path, {name}))
+        self.assertFalse(_route("POST", path, set()))
+        before = len(self.calls)
+        response = await self.request(path + "?token=forbidden")
+        self.assertEqual(response.status_code, 404)
+        self.assertEqual(len(self.calls), before)
+
     async def test_explicit_route_allowlist(self):
         self.assertTrue(_route("GET", "sessions/s1/files", {"limit"}))
         self.assertTrue(_route("POST", "agent/turn", set()))
+        self.assertTrue(_route("POST", "agent/runs/run_1/interrupt", set()))
+        self.assertTrue(_route("POST", "agent/runs/run_1/replace", set()))
+        self.assertFalse(_route("POST", "agent/runs/run_1/interrupt", {"unexpected"}))
         self.assertFalse(_route("GET", "sessions/s1/files", {"arbitrary"}))
         self.assertFalse(_route("POST", "plugins/qq-ui/messages/send", set()))
+
+    async def test_run_interrupt_and_replace_are_forwarded_same_origin(self):
+        import json
+        for path, payload in (
+            ("agent/runs/run_1/interrupt", {}),
+            ("agent/runs/run_1/replace", {
+                "command_id": "replace-1",
+                "user_input": "Continue with a different approach",
+                "session_id": "session-1",
+            }),
+        ):
+            response = await self.request(
+                path, "POST", headers={"Origin": "http://127.0.0.1:8780"}, payload=payload)
+            self.assertEqual(response.status_code, 200)
+            self.assertEqual(self.calls[-1].url.path, "/" + path)
+            self.assertEqual(self.calls[-1].content, json.dumps(payload, separators=(",", ":")).encode())
 
     async def test_ipv4_peer_loopback_check_and_observed_memory_routes(self):
         from app.api.routes.workbench_proxy import _loopback
@@ -142,13 +211,14 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(meta.status_code, 200)
         raw = await self.request("sessions/s1/attachments/att_" + "a" * 32 + "/raw")
         self.assertEqual(raw.content, body)
-        too_large = await self.request("sessions/s1/attachments", "POST",
-            headers={"Content-Type": "image/png", "X-Filename": "x.png"}, content=b"x" * (10 * 1024 * 1024 + 1))
+        with patch("app.api.routes.workbench_proxy._MAX_IMAGE_UPLOAD", 16):
+            too_large = await self.request("sessions/s1/attachments", "POST",
+                headers={"Content-Type": "image/png", "X-Filename": "x.png"}, content=b"x" * 17)
         self.assertEqual(too_large.status_code, 413)
         self.assertEqual(len(self.calls), 3)
 
-    async def test_document_upload_accepts_over_10_mib_and_rejects_over_64_mib(self):
-        body = b"d" * (10 * 1024 * 1024 + 1)
+    async def test_document_upload_accepts_over_64_mib_and_rejects_over_limit(self):
+        body = b"d" * (64 * 1024 * 1024 + 1)
         async def upstream(request):
             self.calls.append(request)
             return httpx.Response(200, json={"attachment_id": "att_" + "b" * 32, "kind": "document"})
@@ -158,13 +228,14 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(uploaded.status_code, 200)
         self.assertEqual(self.calls[0].content, body)
         self.assertEqual(self.calls[0].headers["x-filename"], "report.pdf")
-        too_large = await self.request("sessions/s1/attachments", "POST",
-            headers={"Content-Type": "application/octet-stream", "X-Filename": "report.pdf"},
-            content=b"d" * (64 * 1024 * 1024 + 1))
+        with patch("app.api.routes.workbench_proxy._MAX_DOCUMENT_UPLOAD", 16):
+            too_large = await self.request("sessions/s1/attachments", "POST",
+                headers={"Content-Type": "application/octet-stream", "X-Filename": "report.pdf"},
+                content=b"d" * 17)
         self.assertEqual(too_large.status_code, 413)
         self.assertEqual(len(self.calls), 1)
 
-    async def test_document_raw_preserves_download_header_and_bounds_at_64_mib(self):
+    async def test_document_raw_preserves_download_header_and_bounds(self):
         filename = "report%20%E5%9B%BE.html"
         disposition = "attachment; filename*=UTF-8''" + filename
         body = b"<html><script>unsafe()</script></html>"
@@ -186,11 +257,12 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response.headers.get("content-disposition"), "attachment")
 
         async def oversized_document(_request):
-            return httpx.Response(200, content=b"x" * (64 * 1024 * 1024 + 1), headers={
+            return httpx.Response(200, content=b"x" * 17, headers={
                 "content-type": "application/pdf", "content-disposition": disposition,
             })
         self.transport = httpx.MockTransport(oversized_document)
-        response = await self.request("sessions/s1/attachments/att_" + "c" * 32 + "/raw")
+        with patch("app.api.routes.workbench_proxy._MAX_DOCUMENT_RESPONSE", 16):
+            response = await self.request("sessions/s1/attachments/att_" + "c" * 32 + "/raw")
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"], "Workbench response too large")
 
@@ -223,10 +295,11 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_image_raw_response_is_bounded(self):
         async def upstream(_request):
-            return httpx.Response(200, content=b"x" * (10 * 1024 * 1024 + 1),
+            return httpx.Response(200, content=b"x" * 17,
                                   headers={"content-type": "image/png"})
         self.transport = httpx.MockTransport(upstream)
-        response = await self.request("sessions/s1/attachments/att_" + "a" * 32 + "/raw")
+        with patch("app.api.routes.workbench_proxy._MAX_IMAGE_RESPONSE", 16):
+            response = await self.request("sessions/s1/attachments/att_" + "a" * 32 + "/raw")
         self.assertEqual(response.status_code, 502)
         self.assertEqual(response.json()["detail"], "Workbench response too large")
 
@@ -261,6 +334,114 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.transport = httpx.MockTransport(unrelated)
         response = await self.request("agent/turn", "POST", payload={"user_input": "x"})
         self.assertEqual(response.json()["detail"], "workbench_request_failed")
+
+    async def test_manager_allowlist_and_safe_disabled_contract(self):
+        self.assertTrue(_route("POST", "managers/default", set()))
+        self.assertTrue(_route("GET", "managers/s1", set()))
+        self.assertTrue(_route("PATCH", "managers/s1", set()))
+        self.assertFalse(_route("POST", "managers", set()))
+        self.assertFalse(_route("DELETE", "managers/s1", set()))
+        self.assertTrue(_route("GET", "managers/s1/goals", set()))
+        self.assertFalse(_route("POST", "managers/default", {"token"}))
+        self.assertTrue(_route("GET", "matters", {"visibility"}))
+        for status, detail, expected in [(409, "management_disabled", "management_disabled"),
+                                          (401, "private credential diagnostic", "workbench_request_failed"),
+                                          (409, {"private": "object"}, "workbench_request_failed")]:
+            async def manager_error(_request):
+                return httpx.Response(status, json={"detail": detail})
+            self.transport = httpx.MockTransport(manager_error)
+            response = await self.request("managers/default", "POST")
+            self.assertEqual(response.status_code, status)
+            self.assertEqual(response.json()["detail"], expected)
+
+    async def test_busy_session_turn_conflict_preserves_only_safe_run_identity(self):
+        busy = {"detail": "private provider diagnostic", "session_id": "session_1", "run_id": "run-2",
+                "prompt": "private prompt", "credential": "private token", "nested": {"private": True}}
+        async def busy_response(_request):
+            return httpx.Response(409, json=busy)
+        self.transport = httpx.MockTransport(busy_response)
+        for path in ("agent/turn", "agent/turn/stream"):
+            with self.subTest(path=path):
+                response = await self.request(path, "POST", payload={"session_id": "session_1", "user_input": "synthetic"})
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(response.json(), {"detail": "session_busy", "session_id": "session_1", "run_id": "run-2"})
+                self.assertNotIn("private", response.text)
+                self.assertEqual(response.headers["cache-control"], "no-store")
+        for path, method in (("managers/default", "POST"), ("sessions/s1", "PATCH")):
+            response = await self.request(path, method, payload={})
+            self.assertEqual(response.json(), {"detail": "workbench_request_failed"})
+
+    async def test_busy_session_ids_require_exact_bounded_strings_and_conflict_status(self):
+        cases = [
+            (409, {"session_id": "s1"}),
+            (409, {"session_id": "s1", "run_id": "r/secret"}),
+            (409, {"session_id": "s1", "run_id": "r" * 201}),
+            (409, {"session_id": 12, "run_id": "r1"}),
+            (409, {"session_id": "s1", "run_id": {"secret": True}}),
+            (409, {"session_id": "s1", "run_id": "r1\n"}),
+            (422, {"session_id": "s1", "run_id": "r1"}),
+        ]
+        for status, fields in cases:
+            with self.subTest(status=status, fields=fields):
+                async def unsafe_response(_request):
+                    return httpx.Response(status, json={"detail": "private", **fields})
+                self.transport = httpx.MockTransport(unsafe_response)
+                response = await self.request("agent/turn/stream", "POST", payload={"user_input": "synthetic"})
+                self.assertEqual(response.status_code, status)
+                self.assertEqual(response.json(), {"detail": "workbench_request_failed"})
+
+    async def test_deleted_default_manager_conflict_maps_to_safe_code(self):
+        async def deleted_response(_request):
+            return httpx.Response(409, json={
+                "detail": "Default management session is unavailable; restore or explicitly replace it",
+                "session_id": "private_deleted_session", "private": "private diagnostic"})
+        self.transport = httpx.MockTransport(deleted_response)
+        response = await self.request("managers/default", "POST")
+        self.assertEqual(response.status_code, 409)
+        self.assertEqual(response.json(), {"detail": "default_manager_deleted"})
+        response = await self.request("managers/s1")
+        self.assertEqual(response.json(), {"detail": "workbench_request_failed"})
+
+    async def test_global_assistant_read_routes_forward_only_exact_pagination(self):
+        routes = [
+            ("managers/s1/goals", "limit=20&offset=40"),
+            ("managers/s1/events", "after=7&limit=20"),
+            ("managers/s1/executions", "after=7&limit=20"),
+            ("managers/s1/deliveries", "after=7&limit=20"),
+            ("sessions/s1/runs", "limit=20&offset=40"),
+        ]
+        for path, query in routes:
+            with self.subTest(path=path):
+                response = await self.request(path + "?" + query, headers={"Authorization": "Bearer browser-secret"})
+                self.assertEqual(response.status_code, 200)
+                self.assertEqual(str(self.calls[-1].url), "http://127.0.0.1:8765/" + path + "?" + query)
+                self.assertNotIn("authorization", self.calls[-1].headers)
+                self.assertTrue(_route("GET", path, set()))
+                for method in ("POST", "PATCH", "PUT", "DELETE"):
+                    self.assertFalse(_route(method, path, set()))
+                self.assertFalse(_route("GET", path + "/private", set()))
+                self.assertFalse(_route("GET", path, {"token"}))
+        self.assertFalse(_route("GET", "managers/s1/goals", {"after"}))
+        self.assertFalse(_route("GET", "managers/s1/events", {"offset"}))
+        self.assertFalse(_route("GET", "managers/s1/executions", {"status"}))
+        self.assertFalse(_route("GET", "sessions/s1/runs", {"after"}))
+        self.assertFalse(_route("GET", "managers/s1/goals/g1", set()))
+        self.assertFalse(_route("GET", "managers/s1/unknown", set()))
+        before = len(self.calls)
+        for path in ("managers/s1/events?offset=1", "managers/s1/goals/g1", "sessions/s1/runs?token=private"):
+            response = await self.request(path)
+            self.assertEqual(response.status_code, 404)
+        self.assertEqual(len(self.calls), before, "rejected routes never reach the backend")
+
+    async def test_global_assistant_controller_patch_preserves_revision_and_body(self):
+        payload = {"expected_revision": 7, "status": "paused"}
+        response = await self.request("managers/s1", "PATCH", payload=payload)
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.calls[-1].method, "PATCH")
+        self.assertEqual(str(self.calls[-1].url), "http://127.0.0.1:8765/managers/s1")
+        import json
+        self.assertEqual(json.loads(self.calls[-1].content), payload)
+        self.assertFalse(_route("PATCH", "managers/s1", {"expected_revision"}))
 
     async def test_image_route_allowlist_is_narrow(self):
         self.assertTrue(_route("POST", "sessions/s1/attachments", set()))

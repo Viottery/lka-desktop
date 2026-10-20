@@ -18,7 +18,7 @@ router = APIRouter(prefix="/pet", tags=["composer-files"])
 
 _COMPOSER_CACHE_DIR = Path(__file__).resolve().parents[3] / ".runtime" / "pet-composer-cache"
 _FILENAME_MAX_BYTES = 240
-_MAX_COMPOSER_FILE = 10 * 1024 * 1024
+_MAX_COMPOSER_FILE = 256 * 1024 * 1024
 
 
 def _safe_cache_filename(encoded: str) -> str:
@@ -81,7 +81,7 @@ async def cache_composer_file(request: Request):
     raw = bytearray()
     async for chunk in request.stream():
         if len(raw) + len(chunk) > _MAX_COMPOSER_FILE:
-            raise HTTPException(413, "File exceeds the 10 MiB cache limit")
+            raise HTTPException(413, "File exceeds the 256 MiB cache limit")
         raw.extend(chunk)
     if not raw:
         raise HTTPException(422, "Empty files cannot be cached")

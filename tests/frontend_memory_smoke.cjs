@@ -12,8 +12,8 @@ const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Applic
 const OUT = process.env.SMOKE_ARTIFACT_DIR || '/tmp/frontend-memory-smoke';
 fs.mkdirSync(OUT, { recursive: true });
 const requests = [];
-const state = { memories: [], page: 0, jobs: [], revision: 3, lastPatch: null, tokenRequired: false, imports: 0,
-  policies: { global: true, project: false }, projectId: 'project-demo', exportedPages: 0, fileEdits: [], configConflict: false };
+const state = { memories: [], page: 0, jobs: [], revision: 3, lastPatch: null, lastDelete: null, tokenRequired: false, imports: 0,
+  policies: { global: true, project: false }, projectId: 'project-demo', exportedPages: 0, fileEdits: [], configConflict: false, feedbackAvailable: true };
 const stamp = '2026-10-01T10:00:00+00:00';
 function record(id, content, status='active', version=1, scope='global') {
   return { memory_id:id, content, status, version, scope, project_id:scope==='project'?'project-demo':null,
@@ -48,6 +48,10 @@ const server = http.createServer((req,res) => {
     if (p==='/agent/ui-defaults' && req.method==='GET') return send(res,200,{configured:false,defaults:{},updated_at:null});
     if (p==='/agent/models') return send(res,200,{default_client:'local',clients:[{name:'local',default_model:'m-base',models:['m-base','m-configured','m-dynamic'],source:'provider'}]});
     if (p==='/sessions/demo/context-status') return send(res,200,{active_compaction_jobs:{},token_estimate:9,token_budget:500,recent_message_count:1});
+    if (p==='/memories/feedback' && req.method==='GET') {
+      assert.equal(parsed.searchParams.get('limit'),'1');
+      return state.feedbackAvailable ? send(res,200,{feedback:[{content:'feedback-probe-private-sentinel'}]}) : send(res,404,{detail:'unsupported'});
+    }
     if (p==='/memories' && req.method==='GET') {
       if(parsed.searchParams.get('scope')==='project') return send(res,200,{memories:[],next_offset:null});
       const offset=Number(parsed.searchParams.get('offset')||0), limit=Number(parsed.searchParams.get('limit')||50);
@@ -60,7 +64,7 @@ const server = http.createServer((req,res) => {
     const memMatch=p.match(/^\/memories\/([^/]+)$/);
     if (memMatch && req.method==='GET') {const m=state.memories.find(x=>x.memory_id===memMatch[1]);return m?send(res,200,m):send(res,404,{detail:'missing'});}
     if (memMatch && req.method==='PATCH') {const b=JSON.parse(body);state.lastPatch=b;const old=state.memories.find(x=>x.memory_id===memMatch[1]);if (old && (old.version!==b.expected_version || old.forceConflict)) return send(res,409,{detail:'version'});if(!old)return send(res,404,{});const n=record('mem-confirmed-new',b.content,'active',1,old.scope);n.supersedes_id=old.memory_id;state.memories=state.memories.filter(x=>x!==old);state.memories.unshift(n);return send(res,200,{...n,memory_file_status:'synced'});}
-    if (memMatch && req.method==='DELETE') {const m=state.memories.find(x=>x.memory_id===memMatch[1]);if(!m)return send(res,404,{});m.status='retracted';return send(res,200,{...m,memory_file_status:'synced'});}
+    if (memMatch && req.method==='DELETE') {state.lastDelete={path:p,query:parsed.searchParams,body:body?JSON.parse(body):null};const m=state.memories.find(x=>x.memory_id===memMatch[1]);if(!m)return send(res,404,{});m.status='retracted';return send(res,200,{...m,memory_file_status:'synced'});}
     if (/^\/memories\/[^/]+\/sources$/.test(p)) return send(res,200,{sources:[{source_type:'user_api',source_ref:'manual:test',status:'active',created_at:stamp}]});
     if (p==='/background/jobs' && req.method==='GET') return send(res,200,{jobs:state.jobs,last_memory_file_error:null});
     if (p==='/background/health') return send(res,200,{queue_depth_by_status:{queued:1,running:0,failed:1},llm_workloads:{last_24h:[],cost_pricing_configured:false}});
@@ -91,10 +95,87 @@ function waitFor(p, ms=6000){return p.waitForTimeout(ms);}
     await page.goto(base+'/chat.html?backend=http%3A%2F%2F127.0.0.1%3A8765&mode=work&session_id=demo');
     await page.evaluate(()=>window.LkaChatContext && window.LkaChatContext.get());
     await page.waitForTimeout(500);
+    if (process.argv.includes('--feedback-only')) {
+      state.memories=[record('feedback-edit','Original preference','active',4)];
+      await page.evaluate(()=>{document.getElementById('memoryToken').value='feedback-smoke-token';document.getElementById('memoryTokenForm').requestSubmit();});
+      await page.locator('#openMemoryQuickButton').click();
+      await page.locator('#memoryList .memory-entry').first().click();
+      await page.locator('#memoryEdit').click();
+      assert.equal(await page.locator('#memoryEditReason').inputValue(),'unspecified','edit reason is optional and defaults to unspecified');
+      assert.deepEqual(await page.locator('#memoryEditReason option').evaluateAll(options=>options.map(option=>option.value)),
+        ['unspecified','factual_error','wording','outdated'],'edit reason options match the API contract');
+      await page.locator('#memoryEditorText').fill('Corrected preference');
+      await page.locator('#memoryEditReason').selectOption('factual_error');
+      await page.locator('#memoryEditorSave').click();
+      await page.waitForFunction(()=>document.querySelector('#memoryEditorOverlay').hidden);
+      assert.equal(state.lastPatch.content,'Corrected preference');
+      assert.equal(state.lastPatch.expected_version,4);
+      assert.equal(state.lastPatch.feedback_reason,'factual_error','PATCH body carries the selected reason');
+      const supportProbe=requests.filter(request=>request.path.startsWith('/memories/feedback?'));
+      assert.equal(supportProbe.length,1,'support is probed once for the page');
+      assert.equal(supportProbe[0].auth,'Bearer feedback-smoke-token','support probe uses the memory API bearer token');
+      assert(!(await page.locator('body').innerText()).includes('feedback-probe-private-sentinel'),'probe response content is not displayed');
+      await page.locator('#memorySearch').fill('Corrected preference');
+      await page.locator('#memoryList .memory-entry').first().click();
+      await page.locator('#memoryRetract').click();
+      assert.deepEqual(await page.locator('#memoryRetractReason option').evaluateAll(options=>options.map(option=>option.value)),
+        ['unspecified','factual_error','outdated','duplicate','not_worth_remembering','do_not_store'],'retraction reasons match the API contract');
+      await page.locator('#memoryRetractReason').selectOption('do_not_store');
+      await page.locator('#memoryRetractYes').click();
+      await page.waitForFunction(()=>document.querySelector('#memoryStatus').textContent.includes('记忆已停止使用'));
+      assert.equal(state.lastDelete.query.get('expected_version'),'1','DELETE preserves version concurrency guard');
+      assert.equal(state.lastDelete.query.has('feedback_reason'),false,'DELETE URL excludes the reason'); assert.equal(state.lastDelete.body.feedback_reason,'do_not_store','DELETE JSON body carries the selected reason');
+      assert.equal(state.memories.find(row=>row.memory_id==='mem-confirmed-new').status,'retracted','retraction remains soft');
+
+      state.feedbackAvailable=false;
+      state.memories=[record('legacy-edit','Legacy preference','active',7)];
+      await page.reload();
+      await page.waitForTimeout(500);
+      await page.evaluate(()=>{document.getElementById('memoryToken').value='feedback-smoke-token';document.getElementById('memoryTokenForm').requestSubmit();});
+      await page.locator('#openMemoryQuickButton').click();
+      await page.locator('#memoryList .memory-entry').first().click();
+      await page.waitForFunction(()=>document.querySelector('#memoryFeedbackStatus') && !document.querySelector('#memoryFeedbackStatus').hidden);
+      assert((await page.locator('#memoryFeedbackStatus').innerText()).includes('不会发送原因'));
+      assert((await page.locator('#memoryFeedbackStatus').innerText()).includes('更新并确认后端'));
+      assert.equal(await page.locator('#memoryEditReasonWrap').isVisible(),false,'unsupported backend hides edit reason');
+      await page.locator('#memoryEdit').click();
+      assert.equal(await page.locator('#memoryEditReasonWrap').isVisible(),false,'legacy edit remains available without feedback controls');
+      await page.locator('#memoryEditorText').fill('Legacy corrected preference');
+      await page.locator('#memoryEditorSave').click();
+      await page.waitForFunction(()=>document.querySelector('#memoryEditorOverlay').hidden);
+      assert.equal(state.lastPatch.content,'Legacy corrected preference');
+      assert.equal(Object.hasOwn(state.lastPatch,'feedback_reason'),false,'legacy PATCH omits unsupported field');
+      await page.locator('#memorySearch').fill('Legacy corrected preference');
+      await page.locator('#memoryList .memory-entry').first().click();
+      await page.locator('#memoryRetract').click();
+      assert.equal(await page.locator('#memoryRetractReasonWrap').isVisible(),false,'unsupported backend hides retraction reason');
+      await page.locator('#memoryRetractYes').click();
+      await page.waitForFunction(()=>document.querySelector('#memoryStatus').textContent.includes('记忆已停止使用'));
+      assert.equal(state.lastDelete.query.get('expected_version'),'1');
+      assert.equal(state.lastDelete.query.has('feedback_reason'),false,'legacy DELETE URL omits the reason'); assert.equal(state.lastDelete.body,null,'legacy DELETE has no body');
+      state.feedbackAvailable=true;
+      await page.locator('#memoryClose').click();
+      await page.locator('#openMemoryQuickButton').click();
+      await page.waitForFunction(()=>document.querySelector('#memoryFeedbackStatus') && document.querySelector('#memoryFeedbackStatus').textContent.includes('已启用记忆反馈'));
+      await page.locator('#memoryList .memory-entry').first().click();
+      await page.locator('#memoryEdit').click();
+      assert.equal(await page.locator('#memoryEditReasonWrap').isVisible(),true,'reopen retries a previously unsupported probe');
+      await page.locator('#memoryEditorCancel').click();
+      const probes=requests.filter(request=>request.path.startsWith('/memories/feedback?'));
+      assert.equal(probes.length,3,'one probe per page and one retry on reopen; edits do not probe');
+      assert(probes.every(request=>request.auth==='Bearer feedback-smoke-token'),'probes use the configured bearer token');
+      await page.evaluate(()=>{document.getElementById('memoryToken').value='feedback-smoke-token-rotated';document.getElementById('memoryTokenForm').requestSubmit();});
+      await page.waitForTimeout(250);
+      const rotatedProbes=requests.filter(request=>request.path.startsWith('/memories/feedback?'));
+      assert.equal(rotatedProbes.length,4,'changing token probes capability for the new auth context');
+      assert.equal(rotatedProbes[3].auth,'Bearer feedback-smoke-token-rotated');
+      console.log(JSON.stringify({result:'PASS',checks:['supported edit/retract reasons and request fields','single authenticated GET probe per page','probe response content discarded','404 hides feedback controls','404 displays update-backend guidance','legacy PATCH and DELETE omit unsupported feedback field','reopen retries unsupported result','rotated token gets an isolated capability probe']},null,2));
+      return;
+    }
     await page.locator('#openMemoryQuickButton').click();
     await page.locator('#memoryList .memory-entry').first().waitFor();
     assert.equal(await page.locator('#memoryList .memory-entry').count(),50,'first page should show 50');
-    await page.locator('#memoryMore').click(); await page.locator('#memoryList .memory-entry').last().waitFor();
+    await page.locator('#memoryMore').click(); await page.waitForFunction(()=>document.querySelectorAll('#memoryList .memory-entry').length===52);
     assert.equal(await page.locator('#memoryList .memory-entry').count(),52,'pagination should append remaining entries');
     assert.equal(await page.locator('#memoryList img').count(),0,'memory content must be escaped');
     await page.locator('#memoryList .memory-entry').nth(2).click(); await page.waitForTimeout(100);
@@ -115,12 +196,12 @@ function waitFor(p, ms=6000){return p.waitForTimeout(ms);}
     await page.waitForFunction(()=>document.querySelector('#memoryEditorOverlay').hidden);
     let created=state.memories.find(x=>x.memory_id==='mem-created');assert(created);
     await page.locator('#memorySearch').fill('Keep this smoke memory'); await page.locator('#memoryList .memory-entry').first().click();
-    await page.locator('#memoryEdit').click(); await page.locator('#memoryEditorText').fill('Corrected smoke memory'); state.memories.find(x=>x.memory_id==='mem-created').forceConflict=true; await page.locator('#memoryEditorSave').click(); await page.waitForFunction(()=>document.querySelector('#memoryEditorError').textContent.length>0);
+    await page.locator('#memoryEdit').click(); await page.locator('#memoryEditorText').fill('Corrected smoke memory'); await page.locator('#memoryEditReason').selectOption('factual_error'); state.memories.find(x=>x.memory_id==='mem-created').forceConflict=true; await page.locator('#memoryEditorSave').click(); await page.waitForFunction(()=>document.querySelector('#memoryEditorError').textContent.length>0);
     assert.equal(await page.locator('#memoryEditorText').inputValue(),'Corrected smoke memory','409 must preserve editor draft'); assert.equal(await page.locator('#memoryEditorReload').isHidden(),false);
     state.memories.find(x=>x.memory_id==='mem-created').forceConflict=false; await page.locator('#memoryEditorSave').click(); await page.waitForFunction(()=>document.querySelector('#memoryEditorOverlay').hidden);
-    assert(state.memories.some(x=>x.memory_id==='mem-confirmed-new'&&x.content==='Corrected smoke memory'));
-    await page.locator('#memorySearch').fill('Corrected smoke memory'); await page.locator('#memoryList .memory-entry').first().click(); await page.locator('#memoryRetract').click(); await page.locator('#memoryRetractYes').click(); await page.waitForTimeout(300);
-    assert.equal(state.memories.find(x=>x.memory_id==='mem-confirmed-new').status,'retracted');
+    assert(state.memories.some(x=>x.memory_id==='mem-confirmed-new'&&x.content==='Corrected smoke memory')); assert.equal(state.lastPatch.feedback_reason,'factual_error','edit reason is sent with the correction');
+    await page.locator('#memorySearch').fill('Corrected smoke memory'); await page.locator('#memoryList .memory-entry').first().click(); await page.locator('#memoryRetract').click(); await page.locator('#memoryRetractReason').selectOption('do_not_store'); await page.locator('#memoryRetractYes').click(); await page.waitForTimeout(300);
+    assert.equal(state.memories.find(x=>x.memory_id==='mem-confirmed-new').status,'retracted'); assert.equal(state.lastDelete.body.feedback_reason,'do_not_store','retraction reason is sent in the DELETE body'); assert.equal(state.lastDelete.query.has('feedback_reason'),false,'retraction reason stays out of the URL'); assert.equal(state.lastDelete.query.get('expected_version'),'1');
     // Learning checkbox.
     await page.locator('#memoryLearningGlobal').check(); assert.equal(state.policies.global,true);
     await page.locator('#memoryLearningGlobal').uncheck(); await page.waitForTimeout(100); assert.equal(state.policies.global,false);
@@ -155,7 +236,7 @@ function waitFor(p, ms=6000){return p.waitForTimeout(ms);}
     const quick=await browser.newPage({viewport:{width:430,height:680}});
     await quick.addInitScript(()=>{localStorage.setItem('agentic-rag-pet-chat-sessions-v4',JSON.stringify([{id:'demo',conversation_id:'demo',title:'Demo',workspace:'C:/fake/project',created_at:Date.now(),updated_at:Date.now(),messages:[{role:'assistant',text:'hello'}]}]));localStorage.setItem('agentic-rag-pet-chat-active-session-v4','demo');});
     await quick.route('http://127.0.0.1:8765/**',async route=>{const u=new URL(route.request().url());const mocked=await route.fetch({url:base+u.pathname+u.search});await route.fulfill({response:mocked});});
-    await quick.goto(base+'/chat.html?backend=http%3A%2F%2F127.0.0.1%3A8765&mode=quick&session_id=demo');await quick.locator('#openMemoryQuickButton').click();await quick.locator('#memoryList').waitFor();await quick.waitForTimeout(700);
+    await quick.goto(base+'/chat.html?backend=http%3A%2F%2F127.0.0.1%3A8765&mode=quick&session_id=demo&panel=memory');await quick.locator('#memoryList').waitFor();await quick.waitForTimeout(700);
     assert((await quick.locator('#memoryStatus').innerText()).length>0,'quick memory overlay should finish its initial load');
     assert.equal(await quick.locator('body').evaluate(e=>e.classList.contains('work-mode')),false,'quick layout must run outside work mode');
     await quick.screenshot({path:path.join(OUT,'quick-430x680.png'),fullPage:true});

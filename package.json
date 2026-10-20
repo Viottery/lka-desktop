@@ -4,14 +4,30 @@
   "private": true,
   "description": "Isolated browser regressions for the LKA desktop frontend",
   "scripts": {
+    "test:matters": "node tests/frontend_matters_smoke.cjs",
+    "test:matter-host": "node tests/frontend_matters_host_smoke.cjs",
+    "test:matter-store": "node tests/matter_store_test.cjs",
+    "test:matter-calendar": "node tests/matter_calendar_test.cjs",
     "test:sessions": "node tests/frontend_session_lifecycle_smoke.cjs",
     "test:chat": "node tests/frontend_chat_turn_smoke.cjs",
+    "test:run-controls": "node tests/frontend_run_controls_smoke.cjs",
     "test:messages": "node tests/frontend_messages_smoke.cjs",
     "test:message-refresh": "node tests/frontend_message_refresh_smoke.cjs",
     "test:mobile": "node tests/frontend_mobile_smoke.cjs",
     "test:safety-feedback": "node tests/frontend_safety_review_feedback.cjs",
     "test:images": "node tests/frontend_image_composer_smoke.cjs",
-    "test:files": "node tests/frontend_workspace_files_smoke.cjs"
+    "test:files": "node tests/frontend_workspace_files_smoke.cjs",
+    "test:global-assistant": "node tests/frontend_global_assistant_smoke.cjs",
+    "test:manager-workspace": "node tests/frontend_manager_workspace_test.cjs",
+    "test:backend-messages": "node tests/frontend_backend_messages_test.cjs",
+    "test:manager-chat": "node tests/frontend_manager_chat_smoke.cjs",
+    "test:quick-assistant": "node tests/frontend_quick_assistant_smoke.cjs",
+    "test:quick-assistant-panel": "node tests/frontend_quick_assistant_panel_smoke.cjs",
+    "test:quick-settings": "node tests/frontend_quick_settings_smoke.cjs",
+    "test:conversation-position": "node tests/conversation_position_test.cjs",
+    "test:conversation-continuity": "node tests/frontend_conversation_continuity_smoke.cjs",
+    "test:assistant-lifecycle": "node tests/frontend_assistant_lifecycle_smoke.cjs",
+    "test:manager-input-queue": "node tests/frontend_manager_input_queue_smoke.cjs"
   },
   "devDependencies": {
     "playwright-core": "1.59.1"

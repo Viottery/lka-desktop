@@ -24,6 +24,7 @@ const server = http.createServer(async (req, res) => {
     return fs.createReadStream(file).pipe(res);
   }
   if (p === '/knowledge/file-types') return json(res, { file_types: [{ extensions: ['.txt', '.text', '.md', '.pdf', '.docx', '.pptx', '.xlsx', '.xls', '.html', '.htm', '.epub', '.csv', '.json', '.xml', '.msg'], index_supported: true }] });
+  if (p === '/managers/default' && req.method === 'POST') return json(res, { detail: 'Synthetic backend has no manager support' }, 404);
   if (p === '/agent/models') return json(res, { default_client: 'synthetic', clients: [{ name: 'synthetic', default_model: 'model-a', models: ['model-a', 'model-b'] }] });
   if (p === '/agent/safety-reviews' && req.method === 'GET') return json(res, { reviews: [] });
   if (p === '/agent/ui-defaults') return json(res, { configured: false, defaults: {} });
@@ -44,6 +45,7 @@ const server = http.createServer(async (req, res) => {
     stream = res; res.write('event: llm_started\ndata: {"stage":"synthetic"}\n\n'); return;
   }
   if (p === '/projects') return json(res, { projects: [], next_offset: null });
+  if (p === '/memories/feedback') return json(res, { feedback: [], next_offset: null });
   if (p === '/memories') return json(res, { memories: [], next_offset: null });
   if (p === '/memories/learning') return json(res, { scope: 'global', enabled: false });
   if (p === '/background/events') { res.writeHead(200, { 'content-type': 'text/event-stream' }); return res.end(': synthetic\n\n'); }

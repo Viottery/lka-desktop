@@ -4,7 +4,7 @@
   var chat = window.LkaChatContext;
   var state = { scope: "global", tab: "entries", rows: [], next: null, selected: null,
     generation: 0, projectId: null, token: "", config: null, schema: null, models: null,
-    jobs: [], preview: null, contextKey: "" };
+    jobs: [], preview: null, contextKey: "", feedbackSupported: null, feedbackProbe: null, feedbackProbeEpoch: 0, feedbackCapabilityKey: null };
   var typeNames = { preference: "偏好", project_decision: "项目决策", user_fact: "个人事实" };
   var statusNames = { active: "已生效", candidate: "候选", retracted: "已撤回", superseded: "已替代",
     queued: "排队中", running: "处理中", retry_wait: "等待重试", succeeded: "已完成", failed: "失败", cancelled: "已取消" };
@@ -41,6 +41,8 @@
       var detail = Array.isArray(payload.detail) ? payload.detail.map(function (e) { return (e.loc || []).join(".") + "：" + e.msg; }).join("；") : payload.detail;
       var error = new Error(messages[status] || ("请求失败 HTTP " + status + (detail ? "：" + String(detail) : "")));
       error.status = status;
+      error.detail = status === 409 && payload.detail === "Default management session is unavailable; restore or explicitly replace it"
+        ? "default_manager_deleted" : payload.detail;
       throw error;
     }
     return payload;
@@ -116,6 +118,7 @@
     '<form class="memory-form" id="memoryEditorForm"><div class="memory-inline"><label>作用范围<select id="memoryEditorScope"><option value="global">所有会话</option><option value="project">当前项目</option></select></label>' +
     '<label>类型<select id="memoryEditorType"><option value="preference">偏好</option><option value="project_decision">项目决策</option><option value="user_fact">个人事实</option></select></label></div>' +
     '<p id="memoryEditorWorkspace" class="memory-note"></p><label>记忆内容<textarea id="memoryEditorText" maxlength="500" required></textarea><small id="memoryCharacterCount"></small></label>' +
+    '<label id="memoryEditReasonWrap" class="memory-note" hidden>调整原因（可选）<select id="memoryEditReason"><option value="unspecified">不说明</option><option value="factual_error">内容有误</option><option value="wording">只调整表达</option><option value="outdated">内容已过时</option></select><small>你的选择会帮助改进记忆判断。</small></label>' +
     '<label class="memory-inline"><input id="memoryEditorPersonal" type="checkbox">包含个人信息</label><p class="memory-note">保存后可在后续任务中使用；记忆不改变工具权限。</p>' +
     '<p id="memoryEditorError" class="memory-note" role="alert"></p><footer><button id="memoryEditorReload" type="button" hidden>重新载入最新版本</button><button id="memoryEditorCancel" type="button">取消</button><button id="memoryEditorSave" type="submit" class="memory-primary">保存</button></footer></form></section>';
   document.body.appendChild(editor);
@@ -131,19 +134,57 @@
   function open(scope) {
     if (scope === "project" && context().workspace) { state.scope = scope; state.tab = "entries"; }
     lastFocus = document.activeElement;
-    overlay.hidden = false; notice(""); renderTab(); el("memoryClose").focus();
+    overlay.hidden = false; notice(""); renderTab(); probeMemoryFeedback(); el("memoryClose").focus();
   }
-  function close() { overlay.hidden = true; stopStream(); if (lastFocus && lastFocus.isConnected) lastFocus.focus(); }
+  function close() {
+    overlay.hidden = true; stopStream();
+    if (state.feedbackSupported !== true) {
+      state.feedbackProbeEpoch++; state.feedbackSupported = null; state.feedbackProbe = null;
+    }
+    if (lastFocus && lastFocus.isConnected) lastFocus.focus();
+  }
   el("memoryClose").onclick = close;
   el("openMemoryCenterButton").onclick = open;
   el("openMemoryQuickButton").onclick = open;
   el("memoryTokenForm").onsubmit = function (event) {
     event.preventDefault(); state.token = el("memoryToken").value.trim(); el("memoryToken").value = "";
-    state.generation++; renderTab();
+    state.feedbackProbeEpoch++; state.feedbackSupported = null; state.feedbackProbe = null; state.feedbackCapabilityKey = null;
+    state.generation++; renderTab(); probeMemoryFeedback();
   };
   Array.prototype.forEach.call(overlay.querySelectorAll("[data-memory-tab]"), function (button) {
     button.onclick = function () { state.tab = button.dataset.memoryTab; renderTab(); };
   });
+  function paintFeedbackSupport() {
+    var supported = state.feedbackSupported === true;
+    var status = el("memoryFeedbackStatus");
+    if (status) {
+      status.hidden = false;
+      status.textContent = supported ? "已启用记忆反馈；所选原因可帮助改进记忆判断。" :
+        "当前无法确认后端支持记忆反馈，因此不会发送原因。更新并确认后端可访问后，重新打开此页面即可启用。";
+    }
+    var editReason = el("memoryEditReasonWrap");
+    if (editReason) editReason.hidden = !supported || !editorRecord;
+    var retractReason = el("memoryRetractReasonWrap");
+    if (retractReason) retractReason.hidden = !supported;
+  }
+  function probeMemoryFeedback() {
+    var capabilityKey = String(context().backend || "") + "\u0000" + state.token;
+    if (state.feedbackCapabilityKey !== capabilityKey) {
+      state.feedbackProbeEpoch++; state.feedbackSupported = null; state.feedbackProbe = null;
+      state.feedbackCapabilityKey = capabilityKey;
+    }
+    if (state.feedbackSupported !== null) { paintFeedbackSupport(); return Promise.resolve(state.feedbackSupported); }
+    if (state.feedbackProbe) return state.feedbackProbe;
+    var epoch = state.feedbackProbeEpoch;
+    state.feedbackProbe = api("/memories/feedback?limit=1").then(function () { return true; }, function () { return false; }).then(function (supported) {
+      if (epoch !== state.feedbackProbeEpoch) return false;
+      state.feedbackSupported = supported;
+      state.feedbackProbe = null;
+      paintFeedbackSupport();
+      return supported;
+    });
+    return state.feedbackProbe;
+  }
   function renderTab() {
     stopStream(); notice(""); state.generation++;
     Array.prototype.forEach.call(overlay.querySelectorAll("[data-memory-tab]"), function (button) {
@@ -167,6 +208,7 @@
       scopeToolbar('<input id="memorySearch" type="search" aria-label="搜索已载入记忆" placeholder="搜索已载入记忆"><button id="memoryAdd" class="memory-primary">新增记忆</button><button id="memoryRefresh">刷新</button>') +
       '<div class="memory-learning"><label><input id="memoryLearningGlobal" type="checkbox" disabled>自动学习我的偏好</label><label><input id="memoryLearningProject" type="checkbox" disabled>自动学习当前项目</label></div>' +
       '<p class="memory-note">学习开关立即生效；关闭后仍保留并使用已有记忆。候选及冲突待确认条目暂不用于回答。</p>' +
+      '<p id="memoryFeedbackStatus" class="memory-note" hidden></p>' +
       '<div class="memory-layout"><div><div class="memory-list" id="memoryList">正在读取记忆…</div><button id="memoryMore" hidden>加载更多</button></div><div id="memoryDetail" class="memory-detail"><p class="memory-note">选择一条记忆，查看来源或纠正内容。</p></div></div>' +
       '<details class="memory-work-only" id="memoryRelocate"><summary>项目目录搬迁</summary><p class="memory-note">仅在同一项目搬到新目录时使用。保留项目记忆身份，不移动磁盘文件；普通工作目录切换不需要搬迁。</p>' +
       '<form id="memoryRelocateForm" class="memory-toolbar"><label>新目录<input id="memoryRelocatePath" required placeholder="已搬迁项目的新目录"></label><button type="submit">迁移记忆身份</button></form></details>';
@@ -253,13 +295,15 @@
       '<dt>版本</dt><dd>' + esc(record.version) + '</dd><dt>敏感程度</dt><dd>' + (record.sensitivity === "personal" ? "个人信息" : "普通") + '</dd></dl>' +
       (metadata.needs_review ? '<p class="memory-restart">与其他记忆存在冲突，暂不参与回答。请查看冲突条目，并明确保留或纠正哪条要求。</p><div id="memoryConflicts"></div>' : "") +
       '<div class="memory-actions"><button id="memoryEdit">' + (record.status === "candidate" || metadata.needs_review ? "确认或纠正" : "纠正") + '</button><button id="memoryRetract" class="memory-danger">停止使用</button></div>' +
-      '<div id="memoryRetractConfirm" hidden><p class="memory-note">停止使用后保留原始来源与审计。当前接口不支持直接恢复；以后需要重新确认并保存。</p><button id="memoryRetractYes" class="memory-danger">确认停止使用</button><button id="memoryRetractNo">取消</button></div>' +
+      '<div id="memoryRetractConfirm" hidden><p class="memory-note">停止使用会撤回这条记忆，但保留来源与审计记录；当前接口不支持直接恢复。</p><label id="memoryRetractReasonWrap" class="memory-note" hidden>原因（可选）<select id="memoryRetractReason"><option value="unspecified">不说明</option><option value="factual_error">内容有误</option><option value="outdated">已过时</option><option value="duplicate">重复内容</option><option value="not_worth_remembering">不值得长期记住</option><option value="do_not_store">不希望保存这类内容</option></select><small>你的选择可帮助改进记忆判断。</small></label><button id="memoryRetractYes" class="memory-danger">确认停止使用</button><button id="memoryRetractNo">取消</button></div>' +
       '<h3 style="margin-top:20px">来源</h3><div id="memorySources">正在读取来源…</div><p class="memory-note">来源接口提供标识与时间，不提供原始私密正文。</p>';
     el("memoryEdit").onclick = function () { remember(record.content, record); };
-    el("memoryRetract").onclick = function () { el("memoryRetractConfirm").hidden = false; el("memoryRetractYes").focus(); };
+    el("memoryRetract").onclick = function () { el("memoryRetractConfirm").hidden = false; paintFeedbackSupport(); el("memoryRetractYes").focus(); };
     el("memoryRetractNo").onclick = function () { el("memoryRetractConfirm").hidden = true; };
     el("memoryRetractYes").onclick = function () { run(this, async function () {
-      await api("/memories/" + encodeURIComponent(record.memory_id) + q + (q ? "&" : "?") + "expected_version=" + record.version, "DELETE");
+      var feedbackBody = state.feedbackSupported === true ? { feedback_reason: el("memoryRetractReason").value } : undefined;
+      await api("/memories/" + encodeURIComponent(record.memory_id) + q + (q ? "&" : "?") +
+        "expected_version=" + record.version, "DELETE", feedbackBody);
       await loadEntries(false); notice("记忆已停止使用，原始来源与审计记录保留。");
     }); };
     api("/memories/" + encodeURIComponent(record.memory_id) + "/sources" + q).then(function (data) {
@@ -292,6 +336,8 @@
     el("memoryEditorText").value = String(text || "");
     el("memoryEditorPersonal").checked = !!record && record.sensitivity === "personal";
     el("memoryEditorPersonal").disabled = !!record;
+    el("memoryEditReasonWrap").hidden = !record || state.feedbackSupported !== true;
+    el("memoryEditReason").value = "unspecified";
     el("memoryEditorError").textContent = ""; el("memoryEditorReload").hidden = true;
     paintEditor(); el("memoryEditorText").focus();
   }
@@ -314,7 +360,8 @@
     try {
       if (scope === "project" && context().workspace !== editorWorkspace) throw new Error("当前项目已切换。编辑内容保留，请关闭后在目标项目重新保存。");
       var data = editorRecord ? await api("/memories/" + encodeURIComponent(editorRecord.memory_id) + recordQuery(editorRecord, editorWorkspace), "PATCH", {
-        content: text, expected_version: editorRecord.version }) : await api("/memories", "POST", {
+        content: text, expected_version: editorRecord.version,
+        ...(state.feedbackSupported === true ? { feedback_reason: el("memoryEditReason").value } : {}) }) : await api("/memories", "POST", {
         content: text, memory_type: el("memoryEditorType").value, scope: scope,
         workspace_path: scope === "project" ? editorWorkspace : null, sensitivity: el("memoryEditorPersonal").checked ? "personal" : "normal" });
       editorSaving = false; closeEditor();

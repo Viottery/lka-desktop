@@ -15,14 +15,14 @@
 }
 .pet-settings-button .arrow-button { -fx-padding: 0 1 0 10; }
 .pet-settings-button .arrow { -fx-background-color: #195e64; }
-.pet-compact-settings .arrow-button {
+.pet-compact-settings > .arrow-button {
     -fx-padding: 0;
     -fx-min-width: 0;
     -fx-pref-width: 0;
     -fx-max-width: 0;
     -fx-background-color: transparent;
 }
-.pet-compact-settings .arrow {
+.pet-compact-settings > .arrow-button > .arrow {
     -fx-shape: "";
     -fx-background-color: transparent;
 }
@@ -120,10 +120,6 @@
 .pet-quick-card-focused {
     -fx-border-color: #b8cec2;
 }
-.pet-quick-spine {
-    -fx-background-color: #6d9b85;
-    -fx-background-radius: 2;
-}
 .pet-quick-composer { -fx-alignment: center; -fx-padding: 0 2; }
 .pet-quick-footer {
     -fx-border-color: #e5e7dc transparent transparent transparent;
@@ -180,7 +176,7 @@
     -fx-background-insets: 0;
     -fx-background-radius: 0;
     -fx-border-color: transparent;
-    -fx-padding: 7 0 7 9;
+    -fx-padding: 7 0;
 }
 .pet-quick-native-send {
     -fx-font-size: 16px;
@@ -225,3 +221,101 @@
     -fx-alignment: center;
     -fx-graphic-text-gap: 0;
 }
+
+/* The attachment action belongs to the input row, not the footer icon grid. */
+.pet-native-image-button {
+    -fx-background-radius: 16;
+    -fx-border-radius: 16;
+    -fx-padding: 0;
+}
+.pet-native-image-button:hover, .pet-native-image-button:focused {
+    -fx-background-color: #eaf0e8;
+}
+
+/* One quiet settings sheet, with conversation controls before pet actions. */
+.context-menu .quick-settings-menu-item,
+.context-menu .quick-settings-menu-item:focused {
+    -fx-padding: 0;
+    -fx-background-color: #f8fcfb;
+}
+.quick-settings-scroll,
+.quick-settings-scroll > .viewport {
+    -fx-background-color: #f8fcfb;
+    -fx-background-insets: 0;
+    -fx-border-color: transparent;
+    -fx-padding: 0;
+}
+.quick-settings-panel {
+    -fx-background-color: #f8fcfb;
+    -fx-padding: 16;
+    -fx-font-family: "Noto Sans SC";
+    -fx-font-size: 13px;
+}
+.context-menu .quick-settings-panel .label,
+.quick-settings-panel .check-box {
+    -fx-font-family: "Noto Sans SC";
+    -fx-font-size: 13px;
+    -fx-font-weight: normal;
+    -fx-text-fill: #203c3a;
+}
+.context-menu .quick-settings-panel .quick-settings-title {
+    -fx-font-size: 15px;
+    -fx-font-weight: bold;
+}
+.context-menu .quick-settings-panel .quick-settings-muted {
+    -fx-text-fill: #789491;
+    -fx-font-size: 11px;
+}
+.context-menu .quick-settings-panel .quick-settings-error { -fx-text-fill: #a04f45; }
+.quick-settings-panel .combo-box,
+.quick-settings-panel .button {
+    -fx-font-family: "Noto Sans SC";
+    -fx-font-size: 13px;
+    -fx-text-fill: #53756f;
+    -fx-background-color: #f8fcfb;
+    -fx-border-color: #dbe8e5;
+    -fx-background-radius: 7;
+    -fx-border-radius: 7;
+    -fx-padding: 6 9;
+    -fx-focus-color: #2b7d70;
+    -fx-faint-focus-color: transparent;
+}
+.quick-settings-panel .combo-box .list-cell {
+    -fx-padding: 0;
+    -fx-font-family: "Noto Sans SC";
+    -fx-font-size: 13px;
+    -fx-text-fill: #203c3a;
+}
+.quick-settings-panel .combo-box:focused,
+.quick-settings-panel .button:focused { -fx-border-color: #2b7d70; }
+.quick-settings-panel .button:hover { -fx-background-color: #edf5f2; }
+.quick-settings-panel .quick-settings-apply {
+    -fx-background-color: #53756f;
+    -fx-text-fill: #f8fcfb;
+    -fx-border-color: #53756f;
+    -fx-padding: 9 12;
+}
+.quick-settings-panel .quick-settings-apply:hover { -fx-background-color: #42665f; }
+.quick-settings-panel .check-box .box {
+    -fx-background-color: #f8fcfb;
+    -fx-border-color: #dbe8e5;
+    -fx-border-radius: 3;
+    -fx-background-radius: 3;
+}
+.quick-settings-panel .check-box:selected .mark { -fx-background-color: #2b7d70; }
+.quick-settings-panel .check-box:focused .box { -fx-border-color: #2b7d70; }
+.quick-settings-panel .separator .line { -fx-border-color: #dbe8e5; }
+.quick-settings-pet-section > .title {
+    -fx-background-color: transparent;
+    -fx-padding: 5 0;
+}
+.quick-settings-pet-section > .content {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-padding: 10 0 0 0;
+}
+.quick-settings-pet-section > .title > .arrow-button { -fx-padding: 0 8 0 0; }
+.quick-settings-pet-section > .title:focused { -fx-border-color: #2b7d70; }
+.quick-settings-panel .quick-settings-pet-action,
+.quick-settings-panel .quick-settings-danger { -fx-font-size: 12px; -fx-padding: 5 8; }
+.quick-settings-panel .quick-settings-danger { -fx-text-fill: #a04f45; }

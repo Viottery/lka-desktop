@@ -23,6 +23,8 @@ _ROUTES = (
     ("GET", r"agent/runs/" + _ID + r"/snapshot", set()),
     ("GET", r"agent/runs/" + _ID + r"/events", {"after_sequence", "limit"}),
     ("GET", r"agent/runs/" + _ID + r"/stream", {"after_sequence"}),
+    ("POST", r"agent/runs/" + _ID + r"/interrupt", set()),
+    ("POST", r"agent/runs/" + _ID + r"/replace", set()),
     ("POST", r"agent/runs/" + _ID + r"/cancel", set()),
     ("POST", r"agent/runs/" + _ID + r"/resume", set()),
     ("POST", r"agent/runs/" + _ID + r"/continue", set()),
@@ -36,15 +38,30 @@ _ROUTES = (
     ("GET", r"sessions/" + _ID, set()), ("PATCH", r"sessions/" + _ID, set()),
     ("DELETE", r"sessions/" + _ID, {"only_if_empty", "expected_updated_at"}),
     ("POST", r"sessions/" + _ID + r"/restore", set()),
+    ("GET", r"sessions/" + _ID + r"/runs", {"limit", "offset"}),
+    ("GET", r"sessions/" + _ID + r"/inputs", set()),
+    ("POST", r"sessions/" + _ID + r"/inputs", set()),
+    ("POST", r"sessions/" + _ID + r"/inputs/resume", set()),
     ("PUT", r"sessions/" + _ID + r"/workspace", set()),
     ("GET", r"sessions/" + _ID + r"/files", {"path", "query", "offset", "limit"}),
     ("GET", r"sessions/" + _ID + r"/file", {"path"}),
     ("GET", r"sessions/" + _ID + r"/file/raw", {"path"}),
+    ("POST", r"managers/default", set()),
+    ("GET", r"managers/" + _ID, set()), ("PATCH", r"managers/" + _ID, set()),
+    ("GET", r"managers/" + _ID + r"/goals", {"limit", "offset"}),
+    ("GET", r"managers/" + _ID + r"/events", {"after", "limit"}),
+    ("GET", r"managers/" + _ID + r"/executions", {"after", "limit"}),
+    ("GET", r"managers/" + _ID + r"/deliveries", {"after", "limit"}),
+    ("GET", r"matters/sync", {"after", "limit"}),
+    ("GET", r"matters", {"limit", "offset", "status", "q", "kind", "parent_matter_id", "project_id", "due_before", "due_after", "unscheduled", "scheduled_on", "scheduled_before", "scheduled_after", "inbox", "section", "visibility"}),
+    ("POST", r"matters", set()),
+    ("GET", r"matters/" + _ID, set()), ("PATCH", r"matters/" + _ID, set()),
     ("GET", r"projects", {"limit", "offset", "q"}), ("POST", r"projects", set()),
     ("GET", r"projects/" + _ID, set()), ("PATCH", r"projects/" + _ID, set()),
     ("GET", r"projects/" + _ID + r"/sessions", {"limit", "offset", "q"}),
     ("GET", r"memories", {"scope", "workspace_path", "include_candidates", "limit", "offset"}),
     ("GET", r"memories/export", {"scope", "workspace_path", "include_candidates", "limit", "offset"}),
+    ("GET", r"memories/feedback", {"scope", "workspace_path", "limit", "offset"}),
     ("GET", r"memories/learning", {"scope", "workspace_path"}), ("PUT", r"memories/learning", set()),
     ("GET", r"memories/" + _ID, {"workspace_path"}),
     ("GET", r"memories/" + _ID + r"/sources", {"workspace_path"}),
@@ -65,11 +82,11 @@ _ROUTES = (
 )
 _MAX_BODY = 1024 * 1024
 _MAX_RESPONSE = 8 * 1024 * 1024
-_MAX_FILE_RESPONSE = 128 * 1024 * 1024
-_MAX_IMAGE_UPLOAD = 10 * 1024 * 1024
-_MAX_DOCUMENT_UPLOAD = 64 * 1024 * 1024
-_MAX_IMAGE_RESPONSE = 10 * 1024 * 1024
-_MAX_DOCUMENT_RESPONSE = 64 * 1024 * 1024
+_MAX_FILE_RESPONSE = 256 * 1024 * 1024
+_MAX_IMAGE_UPLOAD = 256 * 1024 * 1024
+_MAX_DOCUMENT_UPLOAD = 256 * 1024 * 1024
+_MAX_IMAGE_RESPONSE = 256 * 1024 * 1024
+_MAX_DOCUMENT_RESPONSE = 256 * 1024 * 1024
 _IMAGE_EXTENSIONS = {".png", ".jpg", ".jpeg", ".webp", ".gif", ".heic", ".heif", ".bmp", ".tif", ".tiff"}
 _STREAMS = {"agent/turn/stream"}
 
@@ -175,8 +192,8 @@ async def workbench_proxy(path: str, request: Request):
     async for chunk in request.stream():
         body.extend(chunk)
         if len(body) > body_limit:
-            message = ("Image exceeds 10 MiB" if is_image_upload else
-                       "Document exceeds 64 MiB" if is_attachment_upload else "Request too large")
+            message = ("Image exceeds 256 MiB" if is_image_upload else
+                       "Document exceeds 256 MiB" if is_attachment_upload else "Request too large")
             raise HTTPException(413, message)
     if is_attachment_upload and not filename_header:
         raise HTTPException(422, "Attachment filename is required")
@@ -190,7 +207,7 @@ async def workbench_proxy(path: str, request: Request):
     url = base + "/" + quote(path, safe="/")
     try:
         streaming_request = path in _STREAMS or path.endswith("/stream") or path == "background/events"
-        timeout = httpx.Timeout(connect=10, read=None if streaming_request else 180 if is_attachment_upload and not is_image_upload else 30, write=30, pool=10)
+        timeout = httpx.Timeout(connect=10, read=None if streaming_request else 600 if is_attachment_upload else 30, write=600 if is_attachment_upload else 30, pool=10)
         client = httpx.AsyncClient(timeout=timeout, follow_redirects=False, trust_env=False)
         headers["Accept-Encoding"] = "identity"
         upstream_request = client.build_request(request.method, url,
@@ -206,8 +223,9 @@ async def workbench_proxy(path: str, request: Request):
     if upstream.status_code >= 400:
         status = upstream.status_code if upstream.status_code in {400, 401, 403, 404, 409, 413, 415, 422, 429} else 502
         detail = "workbench_request_failed"
+        safe_identifiers = {}
         try:
-            if ("/attachments" in path and status in {413, 415, 422}) or path in {"agent/turn", "agent/turn/stream"}:
+            if ("/attachments" in path and status in {413, 415, 422}) or path in {"agent/turn", "agent/turn/stream"} or path.startswith("managers/"):
                 try:
                     bounded_body = await _bounded_error_body(upstream)
                     upstream_error = json.loads(bounded_body.decode("utf-8")) if bounded_body else {}
@@ -216,8 +234,9 @@ async def workbench_proxy(path: str, request: Request):
                 raw_detail = upstream_error.get("detail") if isinstance(upstream_error, dict) else None
                 if "/attachments" in path and status in {413, 415, 422}:
                     known_errors = {
-                        "Attachment exceeds 10 MiB.": "Image exceeds the 10 MiB upload limit.",
-                        "Attachment exceeds 64 MiB.": "Document exceeds the 64 MiB upload limit.",
+                        "Attachment exceeds 256 MiB.": "Attachment exceeds the 256 MiB upload limit.",
+                        "Normalized audio exceeds 12 MiB.": "Normalized audio exceeds 12 MiB.",
+                        "Normalized audio exceeds 12 MiB or is empty.": "Normalized audio exceeds 12 MiB or is empty.",
                         "Unsupported attachment file type.": "This document file type is not supported.",
                         "Document media type does not match its filename.": "The document content type does not match its file type.",
                         "Binary source does not match declared text type.": "The selected document does not match its file type.",
@@ -234,6 +253,17 @@ async def workbench_proxy(path: str, request: Request):
                     }
                     if isinstance(raw_detail, str) and raw_detail in known_errors:
                         detail = known_errors[raw_detail]
+                elif (path in {"agent/turn", "agent/turn/stream"} and status == 409
+                      and isinstance(upstream_error, dict)
+                      and all(isinstance(upstream_error.get(name), str) and re.fullmatch(_ID, upstream_error[name])
+                              for name in ("session_id", "run_id"))):
+                    detail = "session_busy"
+                    safe_identifiers = {name: upstream_error[name] for name in ("session_id", "run_id")}
+                elif (path == "managers/default" and status == 409
+                      and raw_detail == "Default management session is unavailable; restore or explicitly replace it"):
+                    detail = "default_manager_deleted"
+                elif path.startswith("managers/") and isinstance(raw_detail, str) and raw_detail in {"management_disabled", "management_revision_conflict", "manager_not_found"}:
+                    detail = raw_detail
                 elif raw_detail == "Selected model has not enabled image input (supports_vision).":
                     detail = "The selected model does not have image input enabled."
         finally:
@@ -241,7 +271,7 @@ async def workbench_proxy(path: str, request: Request):
                 await upstream.aclose()
             finally:
                 await client.aclose()
-        return Response(json.dumps({"detail": detail}), status_code=status,
+        return Response(json.dumps({"detail": detail, **safe_identifiers}), status_code=status,
                         media_type="application/json", headers={"Cache-Control": "no-store"})
     if (path in _STREAMS or path.endswith("/stream") or path == "background/events"
             or path.endswith("/file/raw") or media_type.lower().startswith("text/event-stream")):

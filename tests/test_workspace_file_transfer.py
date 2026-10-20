@@ -194,6 +194,19 @@ class WorkspaceFileTransferTests(unittest.IsolatedAsyncioTestCase):
         finally:
             junction.rmdir()
 
+    async def test_upload_and_download_accept_exact_limit_and_reject_one_more_byte(self):
+        with patch("app.api.routes.workspace_files._MAX_UPLOAD_BYTES", 16), patch(
+                "app.api.routes.workspace_files._MAX_DOWNLOAD_BYTES", 16):
+            response = await self.request("POST", self._query("upload"), content=b"x" * 16,
+                headers={"Content-Type": "application/octet-stream", "X-Filename": "boundary.bin"})
+            self.assertEqual(response.status_code, 200)
+            downloaded = await self.request("GET", self._query("download", path="boundary.bin"))
+            self.assertEqual(downloaded.status_code, 200)
+            self.assertEqual(downloaded.content, b"x" * 16)
+            (self.root / "boundary.bin").write_bytes(b"x" * 17)
+            rejected = await self.request("GET", self._query("download", path="boundary.bin"))
+            self.assertEqual(rejected.status_code, 413)
+
     async def test_oversize_upload_and_disconnected_upload_clean_temporary_files(self):
         with patch("app.api.routes.workspace_files._MAX_UPLOAD_BYTES", 16):
             response = await self.request("POST", self._query("upload"), content=b"x" * 17,
@@ -314,7 +327,7 @@ class WorkspaceFileTransferTests(unittest.IsolatedAsyncioTestCase):
 
         oversized = self.root / "large.bin"
         with oversized.open("wb") as stream:
-            stream.truncate(128 * 1024 * 1024 + 1)
+            stream.truncate(256 * 1024 * 1024 + 1)
         response = await self.request("GET", self._query("download", path="large.bin"))
         self.assertEqual(response.status_code, 413)
 

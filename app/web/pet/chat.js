@@ -3,6 +3,14 @@
   var input = document.querySelector("#questionInput");
   var sendButton = document.querySelector("#sendButton");
   var form = document.querySelector("#chatForm");
+  if (window.__lkaMatterAssistantStorageError) {
+    if (sendButton) sendButton.disabled = true;
+    if (input) input.disabled = true;
+    if (form) form.addEventListener("submit", function (event) { event.preventDefault(); });
+    var isolationStatus = document.querySelector("#runStatus");
+    if (isolationStatus) { isolationStatus.textContent = "当前浏览器无法隔离助手会话，请在其他受支持的窗口重新打开。"; isolationStatus.classList.add("error"); }
+    return;
+  }
   var chatShell = document.querySelector("#chatShell");
   var sidebarBackdrop = document.querySelector("#sidebarBackdrop");
   var sessionList = document.querySelector("#sessionList");
@@ -62,6 +70,17 @@
   var workMode = urlParams.get("mode") === "work" || urlParams.get("layout") === "mobile";
   var requestedSessionId = safeText(urlParams.get("session_id")).trim();
   var requestedRunId = safeText(urlParams.get("run_id")).trim();
+  var managerEmbedding = window.parent !== window && urlParams.get("embedded") === "matter" && urlParams.get("assistant") === "global";
+  var quickAssistantDefault = !workMode && urlParams.get("assistant") === "quick" && !requestedSessionId && !requestedRunId;
+  var quickAssistantEpoch = 0, quickAssistantPromise = null, quickAssistantManager = null;
+  var assistantPreparation = null, assistantCacheEpoch = 0, preparedAssistantId = "";
+  var unassignedQuickDraft = "";
+  var quickAssistantLoading = quickAssistantDefault;
+  var quickAssistantLastState = { loading: quickAssistantDefault, manager: null };
+  var managerSessionReady = !managerEmbedding && !quickAssistantDefault;
+  var globalAssistantLaunch = !managerEmbedding && urlParams.get("assistant") === "global" && !requestedSessionId;
+  function isManagerSession(session) { return !!session && session.kind === "manager"; }
+  function modelOverridesAllowed(sessionId) { return !managerEmbedding && !isManagerSession(getSessionById(sessionId)); }
   document.body.classList.toggle("work-mode", workMode);
   document.body.classList.toggle("quick-mode", !workMode);
 
@@ -72,7 +91,7 @@
   // v4: use unified conversation ids as session ids + editable titles.
   var sessionsKey = "agentic-rag-pet-chat-sessions-v4";
   var runCursorKeyPrefix = sessionsKey + "-run-cursor-";
-  var activeSessionKey = "agentic-rag-pet-chat-active-session-v4";
+  var activeSessionKey = "agentic-rag-pet-chat-active-session-v4" + (workMode ? "" : "-quick");
   var deletedSessionsKey = sessionsKey + "-deleted";
   var deletedSnapshotsKey = sessionsKey + "-deleted-snapshots";
   var draftKeyPrefix = sessionsKey + "-draft-";
@@ -88,7 +107,7 @@
   var backendDeletedSessions = [];
   var viewingDeletedSessions = false;
   var previousSessionsKey = "agentic-rag-pet-chat-sessions-v3";
-  var previousActiveSessionKey = "agentic-rag-pet-chat-active-session-v3";
+  var previousActiveSessionKey = "agentic-rag-pet-chat-active-session-v3" + (workMode ? "" : "-quick");
   var legacySessionsKey = "agentic-rag-pet-chat-sessions-v2";
   var sessions = [];
   var historyItems = [];
@@ -110,6 +129,7 @@
   var emptyCleanupCapability = null;
   var multiAgentSnapshotRequestIds = {};
   var activeAgentEventController = null;
+  var managerStreams = Object.create(null), managerPendingTurns = Object.create(null);
   var activeAgentTurnGeneration = 0;
   var pendingSafetyReviews = [];
   var approvalQueueReady = false;
@@ -123,10 +143,23 @@
   var activeSessionId = "";
   var lastSubmitAt = 0;
   var pendingState = null;
+  var runCommandInFlight = Object.create(null);
+  var managerInputQueues = Object.create(null);
+  var composerRequestedBusy = false;
+  var suspendedTurns = Object.create(null);
+  var cancelledRunIds = Object.create(null);
+  var runStatusRequestInFlight = false;
+  var replacementCommands = Object.create(null);
   var renamingSessionId = "";
   var renameDraft = "";
   var backendOffline = false;
   var backendBaseUrl = resolveBackendBaseUrl();
+  var renderingMessages = false;
+  var conversationReading = window.LkaConversationPosition ? window.LkaConversationPosition.create({
+    container: messages, namespace: backendBaseUrl, surface: workMode ? "work" : "quick",
+    getSessionId: function () { return activeSessionId; }
+  }) : null;
+  window.LkaConversationReading = conversationReading;
   var runSettingsKey = "agentic-rag-pet-run-settings-v1";
   var runSettings = { workspace: "", llmClient: "", llmModel: "", safetyMode: "backend", stream: true, workspaceParent: "" };
   var modelCatalog = null;
@@ -134,6 +167,7 @@
   var defaultsDirty = false;
   var defaultsSaveChain = Promise.resolve();
   var defaultsReady = Promise.resolve();
+  var defaultsSaveError = null;
   var workspaceRequests = {};
   var workspaceBindings = Object.create(null);
   var fileWorkspacePreparations = [];
@@ -150,6 +184,7 @@
   function loadRunSettings() {
     try { runSettings = Object.assign(runSettings, JSON.parse(localStorage.getItem(runSettingsKey) || "{}")); } catch (ignored) {}
     if (workspaceInput) workspaceInput.value = "";
+    if (managerEmbedding) { runSettings.workspace = ""; runSettings.llmClient = ""; runSettings.llmModel = ""; }
     renderModelOptions();
     if (safetyModeSelect) safetyModeSelect.value = runSettings.safetyMode || "backend";
     if (streamToggle) streamToggle.checked = runSettings.stream !== false;
@@ -235,8 +270,8 @@
       var payload = await response.json();
       if (!payload.configured || defaultsDirty) return;
       var defaults = payload.defaults || {};
-      runSettings.llmClient = defaults.llm_client || "";
-      runSettings.llmModel = defaults.llm_model || "";
+      runSettings.llmClient = managerEmbedding ? "" : defaults.llm_client || "";
+      runSettings.llmModel = managerEmbedding ? "" : defaults.llm_model || "";
       runSettings.safetyMode = defaults.safety_mode || "backend";
       runSettings.stream = defaults.stream !== false;
       runSettings.workspaceParent = defaults.workspace_parent || "";
@@ -253,10 +288,12 @@
   function saveDefaultPreferences() {
     var parent = workspaceParentInput ? workspaceParentInput.value.trim() : "";
     if (parent && !/^(?:[A-Za-z]:[\\/]|\/|\\\\)/.test(parent)) {
-      if (defaultsSaveStatus) { defaultsSaveStatus.textContent = "请输入完整的绝对路径"; defaultsSaveStatus.classList.add("error"); }
+      defaultsSaveError = new Error("请输入完整的绝对路径");
+      if (defaultsSaveStatus) { defaultsSaveStatus.textContent = defaultsSaveError.message; defaultsSaveStatus.classList.add("error"); }
       return;
     }
     defaultsDirty = true;
+    defaultsSaveError = null;
     if (llmModelInput && llmModelInput.value) {
       try {
         var selected = JSON.parse(llmModelInput.value);
@@ -283,8 +320,10 @@
       }
       if (defaultsSaveStatus) defaultsSaveStatus.textContent = "默认设置已保存";
     }).catch(function (error) {
+      defaultsSaveError = error;
       if (defaultsSaveStatus) { defaultsSaveStatus.textContent = "保存失败：" + error.message; defaultsSaveStatus.classList.add("error"); }
     });
+    return defaultsSaveChain;
   }
 
   function resolveBackendBaseUrl() {
@@ -443,6 +482,7 @@
     return {
       id: conversationId,
       conversation_id: conversationId,
+      kind: "ordinary",
       title: "新会话",
       title_is_custom: false,
       created_at: Date.now(),
@@ -499,6 +539,12 @@
       logPath: safeText(rawMessage.logPath || rawMessage.log_path).trim(),
       attachments: window.LkaImageComposer.normalize(rawMessage.attachments),
       clientId: safeText(rawMessage.clientId),
+      messageId: safeText(rawMessage.messageId || rawMessage.message_id),
+      inputStatus: safeText(rawMessage.inputStatus),
+      inputError: safeText(rawMessage.inputError),
+      queueRequest: rawMessage.queueRequest || null,
+      queueRestoredDraft: rawMessage.queueRestoredDraft,
+      queuePriorDraft: rawMessage.queuePriorDraft,
       selectedPackage: safeText(rawMessage.selectedPackage || rawMessage.selected_package).trim()
     };
   }
@@ -534,14 +580,16 @@
     var normalizedSession = {
       id: conversationId,
       conversation_id: conversationId,
+      kind: safeText(rawSession.kind).trim() || "ordinary",
+      backendHistoryVersion: rawSession.backendHistoryVersion === 1 ? 1 : 0,
       title: normalizedTitle,
       title_is_custom: customTitle,
       created_at: Number(rawSession.created_at) || Date.now(),
       updated_at: Number(rawSession.updated_at) || Date.now(),
-      workspace: safeText(rawSession.workspace).trim(),
+      workspace: rawSession.kind === "manager" ? "" : safeText(rawSession.workspace).trim(),
       workspace_is_custom: !!rawSession.workspace_is_custom,
-      project_id: safeText(rawSession.project_id).trim(),
-      backendWorkspace: safeText(rawSession.backendWorkspace).trim(),
+      project_id: rawSession.kind === "manager" ? "" : safeText(rawSession.project_id).trim(),
+      backendWorkspace: rawSession.kind === "manager" ? "" : safeText(rawSession.backendWorkspace).trim(),
       multiAgentRunId: savedRunId || safeText(rawSession.multiAgentRunId || rawSession.multi_agent_run_id).trim(),
       multiAgentSequence: savedRunId
         ? savedSequence
@@ -550,6 +598,11 @@
       timelineEvents: Array.isArray(rawSession.timelineEvents) ? rawSession.timelineEvents.slice(-100).map(function (item) {
         return { type: safeText(item.type), message: truncateText(item.message, item.type === "safety_review_decided" ? 4000 : 180), at: Number(item.at) || Date.now() };
       }) : [],
+      runControlStatus: safeText(rawSession.runControlStatus || ""),
+      pauseRequested: !!rawSession.pauseRequested,
+      resumePending: !!rawSession.resumePending,
+      controlNotice: safeText(rawSession.controlNotice),
+      pausedAnswer: safeText(rawSession.pausedAnswer),
       timelineState: safeText(rawSession.timelineState || ""),
       messages: normalizedMessages.slice(-180)
     };
@@ -593,9 +646,12 @@
     var blank = sessions.find(function (session) {
       return session.id === activeSessionId && isReusableEmptySession(session);
     }) || sessions.find(isUnusedLocalSession);
+    var pinnedManagers = sessions.filter(function (session) {
+      return isManagerSession(session) && (session.id === preparedAssistantId || managerStreams[session.id] || managerPendingTurns[session.id]);
+    });
     sessions = sessions.filter(function (session) {
-      return !isUnusedLocalSession(session) || session === blank;
-    }).slice(0, 24);
+      return pinnedManagers.indexOf(session) < 0 && (!isUnusedLocalSession(session) || session === blank);
+    }).slice(0, 24).concat(pinnedManagers);
   }
 
   function persistSessions() {
@@ -612,6 +668,8 @@
     try {
       localStorage.setItem(sessionsKey, JSON.stringify(sessions.map(function (session) {
         var storedSession = Object.assign({}, session);
+        delete storedSession.resumePending;
+        delete storedSession.controlNotice;
         delete storedSession.multiAgentSnapshot;
         delete storedSession.multiAgentSnapshotRequest;
         return storedSession;
@@ -632,7 +690,7 @@
   }
 
   function writeDraft(sessionId, value) {
-    if (!sessionId) return;
+    if (!sessionId) { if (quickAssistantDefault && !getActiveSession()) unassignedQuickDraft = safeText(value); return; }
     try {
       if (value) localStorage.setItem(draftStorageKey(sessionId), value);
       else localStorage.removeItem(draftStorageKey(sessionId));
@@ -641,15 +699,21 @@
 
   function saveCurrentDraft() {
     var session = getActiveSession();
-    if (session && !document.body.classList.contains("native-composer")) {
-      writeDraft(session.id, input.value);
+    if (!document.body.classList.contains("native-composer")) {
+      writeDraft(session ? session.id : "", input.value);
     }
   }
 
   function showDraftForSession(session) {
+    if (session && unassignedQuickDraft) {
+      var existingDraft = readDraft(session.id), pendingDraft = unassignedQuickDraft;
+      unassignedQuickDraft = "";
+      if (existingDraft !== pendingDraft && !existingDraft.endsWith("\n" + pendingDraft)) writeDraft(session.id, existingDraft ? existingDraft + "\n" + pendingDraft : pendingDraft);
+    }
     var draft = session ? readDraft(session.id) : "";
     input.value = draft;
     window.LkaImageComposer.refresh();
+    renderRunControls();
     if (window.petBridge && typeof window.petBridge.setComposerDraft === "function") {
       window.petBridge.setComposerDraft(draft);
     }
@@ -657,7 +721,8 @@
 
   window.__petChatNativeDraftChanged = function (draft) {
     var session = getActiveSession();
-    if (session) writeDraft(session.id, safeText(draft));
+    writeDraft(session ? session.id : "", safeText(draft));
+    renderRunControls();
   };
 
   function loadDeletedSessionIds() {
@@ -795,7 +860,7 @@
     }
     session.title_is_custom = false;
     session.title = deriveAutoSessionTitle(session);
-    if (/^\[(Image|File) input\]$/.test(session.title)) session.title = session.title === "[File input]" ? "文件任务" : "图片任务";
+    if (/^\[(Image|File|Audio) input\]$/.test(session.title)) session.title = session.title === "[File input]" ? "文件任务" : session.title === "[Audio input]" ? "音频任务" : "图片任务";
   }
 
   function getSessionMessageCount(session) {
@@ -823,7 +888,7 @@
   }
 
   function isReusableEmptySession(session) {
-    return !!session && !session.summary_only && !session.title_is_custom
+    return !!session && !isManagerSession(session) && !session.summary_only && !session.title_is_custom
       && !session.workspace_is_custom && isAutomaticSessionWorkspace(session)
       && !readDraft(session.id) && !window.LkaImageComposer.hasDraft(session.id) && !session.multiAgentRunId && !session.timelineState
       && !(session.timelineEvents && session.timelineEvents.length)
@@ -839,6 +904,8 @@
 
   function ensureActiveSession() {
     var active = getActiveSession();
+    if (managerEmbedding) return managerSessionReady && isManagerSession(active) ? active : null;
+    if (quickAssistantLoading || quickAssistantDefault && !managerSessionReady) return active;
     if (active) {
       return active;
     }
@@ -853,9 +920,11 @@
   }
 
   function loadSessions(preserveActiveSelection) {
+    var awaitingQuickIdentity = preserveActiveSelection && quickAssistantDefault && !managerSessionReady && !getActiveSession();
     var loadedSessions = [];
     var loadedActiveId = "";
     var previousActive = preserveActiveSelection ? getActiveSession() : null;
+    var liveManagers = preserveActiveSelection ? sessions.filter(function (item) { return isManagerSession(item) && (managerPendingTurns[item.id] || managerStreams[item.id]); }) : [];
 
     try {
       var rawSessions = localStorage.getItem(sessionsKey);
@@ -883,6 +952,10 @@
       .map(sanitizeSession)
       .filter(function (item) { return item !== null; });
 
+    liveManagers.forEach(function (live) {
+      sessions = sessions.filter(function (item) { return item.id !== live.id; });
+      if (!deletedSessionIds[live.id]) sessions.unshift(live);
+    });
     if (previousActive && !deletedSessionIds[previousActive.id]
         && !sessions.some(function (item) { return item.id === previousActive.id; })) {
       sessions.unshift(previousActive);
@@ -893,6 +966,7 @@
     normalizeSessionBounds();
     activeSessionId = preserveActiveSelection && previousActive && getSessionById(previousActive.id)
       ? previousActive.id : safeText(loadedActiveId || (sessions[0] && sessions[0].id)).trim();
+    if (awaitingQuickIdentity) { activeSessionId = ""; return; }
     if (preserveActiveSelection) ensureActiveSession();
   }
 
@@ -904,8 +978,16 @@
     return Number.isFinite(parsed) ? parsed : Date.now();
   }
 
-  function normalizeBackendRole(rawRole) {
-    return rawRole === "user" ? "user" : "assistant";
+  function normalizeBackendRole(entry) {
+    // Provenance describes persisted inputs, never the agent's actual answer.
+    if (entry.role === "assistant" || entry.role === "agent") return "assistant";
+    var payload = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
+    var envelope = payload.input_envelope && typeof payload.input_envelope === "object" ? payload.input_envelope : {};
+    var origin = safeText(payload.input_origin || envelope.origin).trim();
+    if (origin && origin !== "user") return "";
+    if (entry.role === "user" || origin === "user") return "user";
+    // Older backends persisted visible tool messages without input provenance.
+    return entry.role === "tool" ? "assistant" : "";
   }
 
   function sessionFromBackendDetail(detail) {
@@ -918,35 +1000,12 @@
       return null;
     }
     var rawMessages = Array.isArray(detail.messages) ? detail.messages : [];
-    var normalizedMessages = rawMessages
-      .map(function (entry) {
-        if (!entry || typeof entry !== "object") {
-          return null;
-        }
-        var text = safeText(entry.content).trim();
-        if (!text) {
-          return null;
-        }
-        var details = entry.payload && typeof entry.payload === "object"
-          ? buildAgentRunDetails(entry.payload)
-          : {};
-        return {
-          role: normalizeBackendRole(entry.role),
-          text: text,
-          isError: false,
-          progressEvents: details.progressEvents || [],
-          verificationWarnings: details.verificationWarnings || [],
-          traceId: details.traceId || "",
-          logPath: details.logPath || "",
-          attachments: window.LkaImageComposer.fromIds(entry.payload && entry.payload.attachment_ids),
-          selectedPackage: details.selectedPackage || ""
-        };
-      })
-      .filter(function (item) { return item !== null; });
+    var normalizedMessages = normalizeBackendMessages(rawMessages);
 
-    return sanitizeSession({
+    var loaded = sanitizeSession({
       id: sessionId,
       conversation_id: sessionId,
+      kind: rawSession.kind,
       title: safeText(rawSession.title).trim() || "新会话",
       title_is_custom: !!(rawSession.metadata && rawSession.metadata.title_is_custom),
       created_at: timestampToMillis(rawSession.created_at),
@@ -957,9 +1016,19 @@
       workspace_is_custom: !!(rawSession.metadata && (rawSession.metadata.explicit_workspace || rawSession.metadata.project_session || rawSession.metadata.workspace_is_custom)),
       messages: normalizedMessages.length ? normalizedMessages : [defaultGreetingMessage()]
     });
+    loaded.backendHistoryVersion = 1;
+    loaded.backendHistoryFiltered = rawMessages.some(function (entry) {
+      return entry && !normalizeBackendRole(entry);
+    });
+    return loaded;
   }
 
-  function mergeBackendSession(remoteSession) {
+  function sessionMessageSnapshot(sessionId) {
+    var session = getSessionById(sessionId);
+    return session ? JSON.stringify(session.messages || []) : null;
+  }
+
+  function mergeBackendSession(remoteSession, expectedMessages) {
     if (!remoteSession || !remoteSession.id) {
       return;
     }
@@ -972,9 +1041,15 @@
     var existingMessages = Array.isArray(existing.messages) ? existing.messages : [];
     var remoteMessages = Array.isArray(remoteSession.messages) ? remoteSession.messages : [];
     // A sync started before the user sent a turn must not replace its local messages.
-    if (!(pendingState && pendingState.conversationId === existing.id)
-        && (remoteMessages.length >= existingMessages.length || existingMessages.length <= 1)) {
+    if (isManagerSession(existing) && (queueEnabled(existing) || existingMessages.some(function (item) { return !!item.queueRequest; }))
+        && (expectedMessages === undefined || expectedMessages === sessionMessageSnapshot(existing.id))) {
+      existing.messages = mergeQueuedMessages(existing, remoteMessages);
+      existing.backendHistoryVersion = remoteSession.backendHistoryVersion;
+    } else if (!managerPendingTurns[existing.id] && !(pendingState && pendingState.conversationId === existing.id)
+        && (expectedMessages === undefined || expectedMessages === sessionMessageSnapshot(existing.id))
+        && (remoteSession.backendHistoryFiltered || isManagerSession(remoteSession) || remoteMessages.length >= existingMessages.length || existingMessages.length <= 1)) {
       existing.messages = remoteMessages;
+      existing.backendHistoryVersion = remoteSession.backendHistoryVersion;
     }
     if (renamingSessionId !== existing.id && remoteSession.title && remoteSession.title_is_custom) {
       existing.title = remoteSession.title;
@@ -982,6 +1057,7 @@
     } else if (!existing.title_is_custom && remoteSession.title && remoteSession.title !== "New Chat" && remoteSession.title !== "新会话") {
       existing.title = remoteSession.title;
     }
+    existing.kind = remoteSession.kind;
     existing.workspace_is_custom = existing.workspace_is_custom || remoteSession.workspace_is_custom;
     existing.updated_at = Math.max(Number(existing.updated_at) || 0, Number(remoteSession.updated_at) || 0);
     if (!pendingState && (!existing.backendWorkspace || existing.workspace === existing.backendWorkspace)) {
@@ -998,6 +1074,7 @@
     saveCurrentDraft();
     function eligible(session) {
       return session && !listedIds[session.id] && getSessionMessageCount(session) > 0
+        && !managerPendingTurns[session.id] && !managerStreams[session.id]
         && !(pendingState && pendingState.conversationId === session.id)
         && !deletingSessionIds[session.id] && renamingSessionId !== session.id
         && !readDraft(session.id).trim();
@@ -1065,7 +1142,7 @@
     var candidates = details.filter(function (detail) {
       var raw = detail.session;
       var local = raw && getSessionById(raw.session_id);
-      return raw && raw.metadata && raw.metadata.source_frontend === "windows-pet"
+      return raw && raw.kind !== "manager" && raw.metadata && raw.metadata.source_frontend === "windows-pet"
         && Array.isArray(detail.messages) && !detail.messages.length
         && raw.updated_at && emptyCleanupStillSafe(local);
     });
@@ -1101,6 +1178,7 @@
   }
 
   async function syncSessionsFromBackend() {
+    if (managerEmbedding || quickAssistantLoading || quickAssistantDefault && !managerSessionReady) return;
     if (sessionSyncPromise) return sessionSyncPromise;
     sessionSyncPromise = (async function () {
     try {
@@ -1112,19 +1190,21 @@
       if (!listResponse.ok) throw new Error("HTTP " + listResponse.status);
       var listPayload = await listResponse.json();
       var backendSessions = Array.isArray(listPayload.sessions) ? listPayload.sessions : [];
+      backendSessions.forEach(function (summary) { var cached = getSessionById(summary.session_id); if (cached && summary.kind) cached.kind = summary.kind; });
       var needDetails = backendSessions.filter(function (summary) {
         var id = safeText(summary && summary.session_id).trim();
-        if (!id || deletingSessionIds[id]
+        if (!id || summary.kind === "manager" && id !== activeSessionId && id !== requestedSessionId || deletingSessionIds[id]
             || (deletedThisPage[id] && Date.now() - deletedThisPage[id] < 3000)) return false;
         var local = getSessionById(id);
-        return !local || local.summary_only || id === activeSessionId
+        return !local || !local.backendHistoryVersion || local.summary_only || id === activeSessionId
           || isReusableEmptySession(local)
           || timestampToMillis(summary.updated_at) > Number(local.updated_at || 0) + 100;
       });
-      var details = [];
+      var details = [], detailMessageSnapshots = Object.create(null);
       for (var i = 0; i < needDetails.length; i += 4) {
         var batch = await Promise.all(needDetails.slice(i, i + 4).map(async function (summary) {
           try {
+            detailMessageSnapshots[summary.session_id] = sessionMessageSnapshot(summary.session_id);
             var detailResponse = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(summary.session_id), {
               method: "GET", headers: { "Accept": "application/json" }
             });
@@ -1154,7 +1234,7 @@
       remoteSessions = remoteSessions.filter(function (session) {
         return !deletedSessionIds[session.id] && !deletingSessionIds[session.id];
       });
-      remoteSessions.forEach(mergeBackendSession);
+      remoteSessions.forEach(function (remote) { mergeBackendSession(remote, detailMessageSnapshots[remote.id]); });
       await cleanupEmptyBackendSessions(details);
       normalizeSessionBounds();
 
@@ -1191,7 +1271,7 @@
   function sessionSummaryFromBackend(raw) {
     if (!raw || !raw.session_id) return null;
     return {
-      id: safeText(raw.session_id), conversation_id: safeText(raw.session_id),
+      id: safeText(raw.session_id), conversation_id: safeText(raw.session_id), kind: safeText(raw.kind).trim() || "ordinary",
       title: safeText(raw.title).trim() || "新会话", title_is_custom: true,
       updated_at: timestampToMillis(raw.updated_at), created_at: timestampToMillis(raw.created_at),
       workspace: raw.workspace && raw.workspace.path || "", messages: [defaultGreetingMessage()],
@@ -1201,6 +1281,7 @@
   }
 
   async function loadHistoryPage(reset) {
+    if (managerEmbedding) return;
     if (!reset && (historyLoading || !historyHasMore)) return;
     var generation = reset ? ++historyRequestGeneration : historyRequestGeneration;
     var deletedView = viewingDeletedSessions;
@@ -1259,12 +1340,14 @@
     if (topbar) document.body.style.setProperty("--workbench-header-height", Math.ceil(topbar.getBoundingClientRect().height) + "px");
     document.body.classList.toggle("work-sidebar-hidden", !panelVisibility.sidebar);
     document.body.classList.toggle("work-rail-hidden", !panelVisibility.rail);
-    [["sidebar", toggleSidebarButton, "sessionSidebar", "会话列表"], ["rail", toggleSettingsButton, "contextRail", "工作区与设置"]].forEach(function (item) {
-      var open = panelOpen(item[0]), button = item[1], panel = document.getElementById(item[2]);
+    var managerView = isManagerSession(getActiveSession()), followup = document.querySelector(".ga-workspace");
+    [["sidebar", toggleSidebarButton, "sessionSidebar", "会话列表"], ["rail", toggleSettingsButton, "contextRail", managerView ? "跟进面板" : "工作区与设置"]].forEach(function (item) {
+      var open = panelOpen(item[0]), button = item[1], panel = item[0] === "rail" && managerView && followup ? followup : document.getElementById(item[2]);
       var docked = item[0] === "sidebar" ? sidebarDocked() : railDocked();
       if (button) {
         var label = (open ? (docked ? "收起" : "关闭") : "展开") + item[3];
         button.setAttribute("aria-expanded", String(open));
+        if (panel) button.setAttribute("aria-controls", panel.id || item[2]);
         button.setAttribute("aria-label", label); button.title = label;
       }
       if (panel) {
@@ -1380,6 +1463,7 @@
   function createMessageElement(role, text, isError, pendingApproval, sessionId, details) {
     var article = document.createElement("article");
     article.className = "message " + role + (isError ? " error" : "");
+    if (details && details.clientId) article.dataset.clientId = details.clientId;
 
     var bubble = document.createElement("div");
     bubble.className = "bubble";
@@ -1397,6 +1481,20 @@
       bubble.appendChild(body);
     }
     if (role === "user") window.LkaImageComposer.renderHistory(bubble, details && details.attachments, sessionId);
+    if (role === "user" && details && details.inputStatus) {
+      var receipt = document.createElement("p");
+      receipt.className = "input-queue-status";
+      receipt.setAttribute("data-input-status", details.inputStatus);
+      receipt.textContent = ({ submitting: "正在发送…", queued: "已排队", running: "处理中", completed: "已完成", failed: "处理失败", cancelled: "已取消", submission_failed: "发送未确认，请重试" })[details.inputStatus] || details.inputStatus;
+      if (details.inputError) receipt.textContent += " · " + details.inputError;
+      bubble.appendChild(receipt);
+      if (details.inputStatus === "submission_failed" && details.queueRequest) {
+        var retryInput = document.createElement("button");
+        retryInput.type = "button"; retryInput.className = "retry-task-button"; retryInput.textContent = "重试发送";
+        retryInput.addEventListener("click", function () { retryQueuedInput(sessionId, details.clientId); });
+        bubble.appendChild(retryInput);
+      }
+    }
     if (role === "assistant") {
       appendAgentRunDetails(bubble, details || {});
     }
@@ -1509,7 +1607,14 @@
     bubble.appendChild(box);
   }
 
-  function scrollMessagesToBottom() {
+  function scrollMessagesToBottom(force) {
+    if (renderingMessages) return;
+    if (force === true && !workMode && conversationReading && conversationReading.focusRow) {
+      var questions = messages.querySelectorAll(".message.user");
+      var latest = questions[questions.length - 1];
+      if (latest) { conversationReading.focusRow(latest); return; }
+    }
+    if (conversationReading) { conversationReading.followLatest({ force: force === true }); return; }
     if (!workMode && typeof window.__petQuickScrollToLatest === "function") { window.__petQuickScrollToLatest(); return; }
     messages.scrollTop = messages.scrollHeight;
   }
@@ -1537,6 +1642,7 @@
 
   function renderActiveSessionMeta() {
     var session = getActiveSession();
+    renderRunControls();
     if (continueWorkbenchButton) continueWorkbenchButton.disabled = workbenchOpening || !session || getSessionMessageCount(session) === 0;
     if (!session) {
       if (activeSessionTitle) {
@@ -1549,11 +1655,12 @@
     }
     applySessionTitle(session);
     if (activeSessionTitle) {
-      activeSessionTitle.textContent = !workMode && session.project_name && !getSessionMessageCount(session) ? session.project_name + " · 新任务" : session.title || "新会话";
+      activeSessionTitle.textContent = workMode && isManagerSession(session) ? "真理" : !workMode && session.project_name && !getSessionMessageCount(session) ? session.project_name + " · 新任务" : session.title || "新会话";
     }
     if (activeSessionSubtitle) {
-      activeSessionSubtitle.textContent =
-        "更新于 " + formatTimestamp(session.updated_at) + " · " + getSessionMessageCount(session) + " 条消息";
+      activeSessionSubtitle.textContent = workMode && isManagerSession(session)
+        ? "真理会接着跟进你交代的事"
+        : "更新于 " + formatTimestamp(session.updated_at) + " · " + getSessionMessageCount(session) + " 条消息";
     }
   }
 
@@ -1565,9 +1672,14 @@
       var folderName = parts.pop() || "";
       var isDefaultFolder = folderName === (session && session.id) ||
         (/^session-[0-9a-f]{64}$/.test(folderName) && parts.slice(-2).join("/") === "Local Knowledge Agent/Workspaces");
-      workspaceSummary.textContent = !path ? "正在准备独立工作区…" : isDefaultFolder ? "默认任务工作区" : folderName;
+      workspaceSummary.textContent = isManagerSession(session) ? "真理 · 按授权范围处理任务" : !path ? "正在准备独立工作区…" : isDefaultFolder ? "默认任务工作区" : folderName;
       workspaceSummary.title = path || "尚未设置工作区";
     }
+    var managerView = isManagerSession(session);
+    document.body.classList.toggle("manager-conversation", managerView);
+    [workspaceInput, changeWorkspaceButton, indexWorkspaceButton].forEach(function (control) { if (control) control.disabled = managerView; });
+    if (workMode && !managerEmbedding && input) input.placeholder = managerView ? "和真理聊聊目标、进展或下一步…" : "描述你想完成的任务…";
+    syncWorkbenchPanels();
     var projectButton = document.querySelector("#newProjectSessionButton");
     if (projectButton) projectButton.disabled = !path || !!pendingState;
     window.dispatchEvent(new CustomEvent("lka-session-context", { detail: {
@@ -1620,6 +1732,7 @@
   async function loadFileList() {
     if (!workMode || !fileList || activeRailTab !== "files") return;
     var session = getActiveSession();
+    if (managerEmbedding || isManagerSession(session)) { showFilePanelMessage("真理不绑定工作目录；可直接上传附件。", false); return; }
     var generation = ++fileRequestGeneration;
     selectedFilePath = "";
     window.dispatchEvent(new CustomEvent("lka-workspace-files", { detail: { sessionId: session ? session.id : "", workspace: session ? session.workspace || "" : "", path: fileRelativePath } }));
@@ -1725,6 +1838,7 @@
   }
 
   async function ensureSessionWorkspace(session) {
+    if (managerEmbedding || isManagerSession(session)) return "";
     if (!session || session.workspace) return session && session.workspace;
     await defaultsReady;
     var requestKey = session.id;
@@ -1766,6 +1880,7 @@
 
   async function prepareSessionWorkspace(session) {
     if (!session) return;
+    if (managerEmbedding || isManagerSession(session) || globalAssistantLaunch && getSessionMessageCount(session) === 0) { renderWorkspaceSummary(session); return; }
     renderWorkspaceSummary(session);
     if (session.workspace) return;
     try {
@@ -1827,6 +1942,7 @@
 
     var searchTerm = sessionSearchInput ? sessionSearchInput.value.trim().toLocaleLowerCase() : "";
     var ordered = sessions.filter(function (session) {
+      if (isManagerSession(session)) return false;
       if (!searchTerm) return true;
       applySessionTitle(session);
       return (session.title || "").toLocaleLowerCase().indexOf(searchTerm) !== -1 ||
@@ -1837,6 +1953,7 @@
     var includedIds = Object.create(null);
     ordered.forEach(function (session) { includedIds[session.id] = true; });
     historyItems.forEach(function (summary) {
+      if (isManagerSession(summary) || isManagerSession(getSessionById(summary.id))) return;
       if (!includedIds[summary.id] && !deletedSessionIds[summary.id] && !deletingSessionIds[summary.id]) {
         ordered.push(getSessionById(summary.id) || summary);
         includedIds[summary.id] = true;
@@ -1927,8 +2044,10 @@
 
         var renameButton = document.createElement("button");
         renameButton.type = "button";
-        renameButton.className = "session-mini";
-        renameButton.textContent = "重命名";
+        renameButton.className = "session-mini session-icon-action";
+        renameButton.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M16 3l5 5-12 12-6 1 1-6L16 3Z M14 5l5 5"/></svg>';
+        renameButton.title = "重命名会话";
+        renameButton.setAttribute("aria-label", "重命名会话：" + (session.title || "新会话"));
         renameButton.addEventListener("click", function (event) {
           event.preventDefault();
           event.stopPropagation();
@@ -1937,8 +2056,10 @@
 
         var deleteButton = document.createElement("button");
         deleteButton.type = "button";
-        deleteButton.className = "session-mini danger";
-        deleteButton.textContent = "删除";
+        deleteButton.className = "session-mini danger session-icon-action";
+        deleteButton.innerHTML = '<svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7"/></svg>';
+        deleteButton.title = "删除会话（可恢复）";
+        deleteButton.setAttribute("aria-label", "删除会话：" + (session.title || "新会话"));
         deleteButton.disabled = !!deletingSessionIds[session.id];
         deleteButton.addEventListener("click", function (event) {
           event.preventDefault();
@@ -2016,6 +2137,7 @@
   }
 
   async function refreshDeletedSessions() {
+    if (managerEmbedding) return;
     try {
       var response = await fetch(backendBaseUrl + "/sessions/deleted?limit=200", {
         headers: { Accept: "application/json" }
@@ -2023,7 +2145,7 @@
       if (!response.ok) throw new Error("HTTP " + response.status);
       var payload = await response.json();
       backendDeletedSessions = (Array.isArray(payload.sessions) ? payload.sessions : [])
-        .filter(function (item) { return item && item.session_id; })
+        .filter(function (item) { return item && item.session_id && item.kind !== "manager"; })
         .map(function (item) {
           return {
             id: safeText(item.session_id),
@@ -2066,7 +2188,17 @@
   }
 
   function renderActiveMessages() {
+    if (conversationReading) conversationReading.beforeRender();
+    renderingMessages = true;
+    try { renderActiveMessagesContent(); } finally {
+      renderingMessages = false;
+      if (conversationReading) conversationReading.afterRender();
+    }
+  }
+
+  function renderActiveMessagesContent() {
     var session = getActiveSession();
+    if (session && session.pausedAnswer && !isTerminalRunStatus(session.runControlStatus) && !liveAnswers[session.id]) liveAnswers[session.id] = session.pausedAnswer;
     if (!workMode && typeof window.__petQuickBeforeMessagesRender === "function") window.__petQuickBeforeMessagesRender();
     messages.innerHTML = "";
     if (!session) {
@@ -2136,11 +2268,10 @@
     var welcome = document.createElement("div");
     welcome.className = "welcome";
     welcome.innerHTML = '<span class="welcome-eyebrow">理事所 · 工作台</span>' +
-      '<h1>现在，想推进哪件事？</h1>' +
-      '<p>直接描述目标即可。会话消息独立保存，资料与结果留在当前工作目录。</p>';
+      ((managerEmbedding || isManagerSession(getActiveSession())) ? '<h1>把事情交给真理</h1><p>整理目标、委托任务，持续跟进进展。需要你决定时，会在右侧提醒。</p>' : '<h1>现在，想推进哪件事？</h1><p>直接描述目标即可。会话消息独立保存，资料与结果留在当前工作目录。</p>');
     var suggestions = document.createElement("div");
     suggestions.className = "welcome-suggestions";
-    ["梳理这个工作区的文件", "帮我制定下一步计划", "总结一份资料"].forEach(function (prompt) {
+    (isManagerSession(getActiveSession()) ? ["整理本周需要关注的事", "查看目标进展", "规划接下来的安排"] : ["梳理这个工作区的文件", "帮我制定下一步计划", "总结一份资料"]).forEach(function (prompt) {
       var button = document.createElement("button");
       button.type = "button";
       button.textContent = prompt + " ↗";
@@ -2151,6 +2282,7 @@
         } else {
           input.value = prompt;
           writeDraft(activeSessionId, prompt);
+          renderRunControls();
           focusComposer();
         }
       });
@@ -2173,40 +2305,53 @@
     return getSessionById(loaded.id) || loaded;
   }
 
-  async function switchSession(sessionId) {
-    var next;
+  async function switchSession(sessionId, assistantEpoch, manager) {
+    if (assistantEpoch === undefined) cancelQuickAssistantOpen();
+    var selectionEpoch = quickAssistantEpoch, next;
     try { next = await ensureLocalSession(sessionId); }
     catch (error) {
+      if (selectionEpoch !== quickAssistantEpoch) return false;
       setRunStatus("会话载入失败：" + safeText(error.message || error), "error");
       loadHistoryPage(true);
       return;
     }
+    if (selectionEpoch !== quickAssistantEpoch) return false;
     saveCurrentDraft();
-    activeAgentTurnGeneration += 1;
-    abortActiveAgentEventStream();
-    pendingState = null;
+    leaveActiveConversation();
     setComposerDisabled(backendOffline);
     renamingSessionId = "";
     renameDraft = "";
     activeSessionId = next.id;
+    pendingState = managerPendingTurns[next.id] || null;
+    activeAgentEventController = managerStreams[next.id] && managerStreams[next.id].controller || null;
+    managerSessionReady = !isManagerSession(next);
+    setComposerDisabled(backendOffline);
+    if (isManagerSession(next)) {
+      try { await prepareManagerConversation(next.id, manager); }
+      catch (error) { return false; }
+      if (selectionEpoch !== quickAssistantEpoch || activeSessionId !== next.id) return false;
+    }
     showDraftForSession(next);
     fileRelativePath = "";
     renderSessionList();
     renderActiveMessages();
     prepareSessionWorkspace(next);
     refreshActiveMultiAgentSnapshot();
+    refreshManagerInputs();
     reconnectActiveSavedRun();
     loadFileList();
     persistSessions();
     setSidebarOpen(false);
     focusComposer();
+    return true;
   }
 
   function createAndSwitchNewSession(projectWorkspace) {
+    if (managerEmbedding) return;
+    cancelQuickAssistantOpen();
+    setRunStatus("就绪");
     saveCurrentDraft();
-    activeAgentTurnGeneration += 1;
-    abortActiveAgentEventStream();
-    pendingState = null;
+    leaveActiveConversation();
     setComposerDisabled(backendOffline);
     viewingDeletedSessions = false;
     if (sessionSearchInput) sessionSearchInput.value = "";
@@ -2236,6 +2381,9 @@
   }
 
   function openFreshTask() {
+    if (managerEmbedding) return;
+    cancelQuickAssistantOpen();
+    setRunStatus("就绪");
     var active = getActiveSession();
     if (!isReusableEmptySession(active)) {
       createAndSwitchNewSession();
@@ -2484,6 +2632,10 @@
       logPath: safeText(options && options.logPath).trim(),
       attachments: window.LkaImageComposer.normalize(options && options.attachments),
       clientId: safeText(options && options.clientId),
+      messageId: safeText(options && options.messageId),
+      inputStatus: safeText(options && options.inputStatus),
+      inputError: "",
+      queueRequest: options && options.queueRequest || null,
       selectedPackage: safeText(options && options.selectedPackage).trim()
     });
     if (session.messages.length > 180) {
@@ -2491,15 +2643,181 @@
     }
   }
 
-  function setComposerDisabled(disabled) {
-    sendButton.disabled = !!disabled;
-    var projectButton = document.querySelector("#newProjectSessionButton"), active = getActiveSession();
-    if (projectButton) projectButton.disabled = !!disabled || !active || !active.workspace;
-    // Keep the next task editable while the current Agent turn is running.
-    input.disabled = false;
-    if (window.petBridge && typeof window.petBridge.setComposerBusy === "function") {
-      window.petBridge.setComposerBusy(!!disabled);
+  function resizeWorkbenchComposer() {
+    if (!workMode) return;
+    if (document.body.classList.contains("mobile-workbench")) {
+      if (typeof window.LkaMobileResizeComposer === "function") window.LkaMobileResizeComposer();
+      return;
     }
+    input.rows = 1;
+    input.style.height = "36px";
+    var draftHeight = input.scrollHeight;
+    input.style.height = Math.min(156, Math.max(36, draftHeight)) + "px";
+    input.style.overflowY = draftHeight > 156 ? "auto" : "hidden";
+  }
+
+  function renderRunControls(overrideDraft) {
+    resizeWorkbenchComposer();
+    var session = getActiveSession(), status = session && session.runControlStatus || "";
+    var activeRun = !!(session && session.multiAgentRunId && status && !isTerminalRunStatus(status));
+    var controlState = session && session.resumePending ? "resuming" : session && session.pauseRequested ? "pause_requested" : status || "idle";
+    if (sendButton.getAttribute("data-run-state") !== controlState) sendButton.setAttribute("data-run-state", controlState);
+    var draft = document.body.classList.contains("native-composer") ? session && readDraft(session.id) || "" : input.value;
+    if (typeof overrideDraft === "string") draft = overrideDraft;
+    var hasContent = !!safeText(draft).trim() || !!(session && window.LkaImageComposer.hasAttachments(session.id));
+    var continuous = queueEnabled(session);
+    var action = hasContent || !activeRun ? "send" : status === "paused" ? "resume" : "pause";
+    var locked = backendOffline || !managerSessionReady || !!(session && (runCommandInFlight[session.id] || session.resumePending || session.pauseRequested));
+    var running = activeRun && status !== "paused";
+    if (continuous && action === "send") locked = backendOffline || !managerSessionReady;
+    var inputCapability = isManagerSession(session) ? queueState(session) : null;
+    if (action === "send" && inputCapability && !inputCapability.supported && !inputCapability.unsupported) locked = true;
+    var disabled = locked || action === "send" && !continuous && (running || !!pendingState || !activeRun && composerRequestedBusy);
+    if (sendButton.getAttribute("data-action") !== action) {
+      var path = action === "pause" ? "M8 5v14M16 5v14" : action === "resume" ? "m9 5 11 7-11 7Z" : "M3 11L21 3L13 21L10 13Z M10 13L21 3";
+      sendButton.innerHTML = '<svg viewBox="0 0 24 24" width="21" height="21" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="' + path + '"/></svg>';
+      sendButton.setAttribute("data-action", action);
+    }
+    var label = action === "pause" ? "暂停任务" : action === "resume" ? "继续任务" : "发送任务";
+    var title = session && session.pauseRequested ? "正在暂停，等待当前步骤结束" : session && session.resumePending ? "正在继续任务" :
+      action === "pause" ? "暂停任务，当前步骤结束后生效" : action === "resume" ? "从暂停的位置继续" :
+      status === "paused" ? "发送新指令，打断并替换暂停的任务" : running ? "任务运行中，可先写好下一条消息" : "发送任务";
+    if (continuous && action === "send") { label = "发送消息"; title = activeRun ? "发送后排队，当前任务结束后自动处理" : "发送消息"; }
+    renderInputQueueControls(session);
+    if (sendButton.title !== title) sendButton.title = title;
+    if (sendButton.getAttribute("aria-label") !== label) sendButton.setAttribute("aria-label", label);
+    sendButton.disabled = !!disabled;
+    input.disabled = false;
+    var projectButton = document.querySelector("#newProjectSessionButton");
+    if (projectButton) projectButton.disabled = !!pendingState || running || !session || !session.workspace;
+    if (window.petBridge) {
+      if (typeof window.petBridge.setComposerAction === "function") window.petBridge.setComposerAction(action);
+      if (typeof window.petBridge.setComposerBusy === "function") window.petBridge.setComposerBusy(!!disabled);
+    }
+  }
+
+  function settlePausedRun(session, turnState) {
+    session = session && (getSessionById(session.id) || session);
+    session.runControlStatus = "paused"; session.pauseRequested = false; session.resumePending = false;
+    session.timelineState = "paused";
+    session.pausedAnswer = turnState && turnState.answer || liveAnswers[session.id] || session.pausedAnswer || "";
+    if (turnState) suspendedTurns[session.id] = turnState;
+    delete managerPendingTurns[session.id];
+    if (pendingState && pendingState.conversationId === session.id) pendingState = null;
+    if (activeSessionId === session.id) {
+      setRunStatus(session.controlNotice || "已暂停，可继续或发送新指令", session.controlNotice ? "error" : "");
+      setComposerDisabled(backendOffline);
+      renderRunTimeline(session);
+    }
+    persistSessions();
+  }
+
+  function settleCancelledRun(session) {
+    session = session && (getSessionById(session.id) || session);
+    if (cancelledRunIds[session.multiAgentRunId]) return;
+    cancelledRunIds[session.multiAgentRunId] = true;
+    if (activeSessionId === session.id) { activeAgentTurnGeneration += 1; abortActiveAgentEventStream(); }
+    session.runControlStatus = "cancelled"; session.pauseRequested = false; session.resumePending = false;
+    session.controlNotice = ""; session.timelineState = "cancelled"; session.pausedAnswer = "";
+    delete suspendedTurns[session.id]; delete runProcesses[session.id];
+    delete managerPendingTurns[session.id];
+    if (managerStreams[session.id]) { managerStreams[session.id].controller.abort(); delete managerStreams[session.id]; }
+    // Preserve already streamed text, but never invent an assistant error/reply.
+    if (liveAnswers[session.id]) { addMessageToSession(session, "assistant", liveAnswers[session.id], false); delete liveAnswers[session.id]; }
+    if (pendingState && pendingState.conversationId === session.id) pendingState = null;
+    if (activeSessionId === session.id) { setRunStatus("本轮已打断，可发送新任务"); setComposerDisabled(backendOffline); renderActiveMessages(); }
+    persistSessions();
+  }
+
+  function followSupersedingRun(session, replacementId) {
+    session = session && (getSessionById(session.id) || session);
+    if (!replacementId || replacementId === session.multiAgentRunId) return;
+    var generation = activeSessionId === session.id ? ++activeAgentTurnGeneration : activeAgentTurnGeneration;
+    if (activeSessionId === session.id) abortActiveAgentEventStream();
+    session.multiAgentRunId = replacementId; session.multiAgentSequence = 0; session.multiAgentSnapshot = null;
+    session.runControlStatus = "running"; session.pauseRequested = false; session.resumePending = false;
+    session.controlNotice = ""; session.timelineState = "running"; session.timelineEvents = []; session.pausedAnswer = "";
+    delete liveAnswers[session.id]; delete runProcesses[session.id]; delete suspendedTurns[session.id];
+    delete replacementCommands[session.id]; saveRunCursor(session); persistSessions();
+    if (activeSessionId !== session.id) {
+      if (isManagerSession(session)) { delete managerPendingTurns[session.id]; reconnectSavedRun(session, null); }
+      return;
+    }
+    pendingState = { conversationId: session.id, generation: generation };
+    setComposerDisabled(true); setRunStatus("正在接回新指令的任务…");
+    var expectedMessages = sessionMessageSnapshot(session.id);
+    fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(session.id)).then(function (response) {
+      return response.ok ? response.json() : null;
+    }).then(function (detail) {
+      if (!detail || activeAgentTurnGeneration !== generation || session.multiAgentRunId !== replacementId
+          || expectedMessages !== sessionMessageSnapshot(session.id)) return;
+      var remote = sessionFromBackendDetail(detail);
+      if (remote && (remote.backendHistoryFiltered || remote.messages.length >= session.messages.length)) { session.messages = remote.messages; if (activeSessionId === session.id) renderActiveMessages(); persistSessions(); }
+    }).catch(function () {});
+    reconnectSavedRun(session, { answer: "", events: [], session: session, generation: generation, terminal: false });
+  }
+
+  function applyRunSnapshot(session, run) {
+    session = session && (getSessionById(session.id) || session);
+    if (!session || !run || run.run_id && run.run_id !== session.multiAgentRunId) return;
+    if (run.superseded_by_run_id) { followSupersedingRun(session, run.superseded_by_run_id); return; }
+    session.runControlStatus = safeText(run.status);
+    session.pauseRequested = !!run.pause_requested;
+    if (session.runControlStatus !== "paused") session.resumePending = false;
+    if (session.runControlStatus === "paused" && !session.resumePending) settlePausedRun(session);
+    else if (session.runControlStatus === "cancelled") settleCancelledRun(session);
+    else if (activeSessionId === session.id) setComposerDisabled(!!pendingState && !isTerminalRunStatus(session.runControlStatus));
+    persistSessions();
+  }
+
+  async function postRunCommand(runId, action, body) {
+    var response = await fetch(backendBaseUrl + "/agent/runs/" + encodeURIComponent(runId) + "/" + action, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body || {})
+    });
+    var data = await response.json();
+    if (!response.ok) {
+      var detail = typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail || {});
+      throw new Error("HTTP " + response.status + "：" + (detail || response.statusText));
+    }
+    return data;
+  }
+
+  async function controlActiveRun(action) {
+    var session = getActiveSession();
+    if (!session || !session.multiAgentRunId || runCommandInFlight[session.id] || backendOffline) return;
+    var runId = session.multiAgentRunId, controlAuthEpoch = assistantCacheEpoch;
+    runCommandInFlight[session.id] = true; session.controlNotice = ""; setComposerDisabled(true);
+    try {
+      var result = await postRunCommand(runId, action);
+      if (controlAuthEpoch !== assistantCacheEpoch) return;
+      session = getSessionById(session.id) || session;
+      if (session.multiAgentRunId !== runId) return;
+      if (action === "resume") {
+        // The response may still be a paused snapshot: resume is scheduled async.
+        session.resumePending = true; session.pauseRequested = false;
+        session.controlNotice = "";
+        var state = suspendedTurns[session.id] || { answer: liveAnswers[session.id] || "", events: [] };
+        state.generation = activeSessionId === session.id ? ++activeAgentTurnGeneration : activeAgentTurnGeneration; state.finalized = false; state.paused = false; state.terminal = false; state.terminalStatus = "";
+        if (activeSessionId === session.id || isManagerSession(session)) {
+          var resumedPending = { conversationId: session.id, generation: state.generation };
+          if (activeSessionId === session.id) pendingState = resumedPending;
+          if (isManagerSession(session)) managerPendingTurns[session.id] = resumedPending;
+          reconnectSavedRun(session, state);
+        }
+      } else applyRunSnapshot(session, result);
+    } catch (error) {
+      session.resumePending = false;
+      session.controlNotice = "操作未生效：" + safeText(error.message);
+      if (activeSessionId === session.id) setRunStatus(session.controlNotice, "error");
+    } finally {
+      delete runCommandInFlight[session.id];
+      if (activeSessionId === session.id) setComposerDisabled(!!pendingState);
+    }
+  }
+
+  function setComposerDisabled(disabled) {
+    composerRequestedBusy = !!disabled;
+    renderRunControls();
   }
 
   function focusComposer(force) {
@@ -2542,12 +2860,21 @@
       if (!entry || typeof entry !== "object") {
         return;
       }
-      var role = entry.role === "user" ? "user" : (entry.role === "assistant" ? "assistant" : "");
+      var role = normalizeBackendRole(entry);
       var content = safeText(entry.content || entry.text).trim();
+      if (!content && entry.payload && Array.isArray(entry.payload.attachment_ids) && entry.payload.attachment_ids.length) content = "[File input]";
       if (!role || !content) {
         return;
       }
+      var details = entry.payload && typeof entry.payload === "object" ? buildAgentRunDetails(entry.payload) : {};
       normalized.push({
+        messageId: safeText(entry.message_id),
+        clientId: safeText(entry.payload && entry.payload.client_message_id),
+        progressEvents: details.progressEvents || [],
+        verificationWarnings: details.verificationWarnings || [],
+        traceId: details.traceId || "",
+        logPath: details.logPath || "",
+        selectedPackage: details.selectedPackage || "",
         role: role,
         text: content,
         isError: false,
@@ -2664,10 +2991,18 @@
     }
   }
 
+  function agentTurnError(response, text, sessionId) {
+    var error = new Error("HTTP " + response.status + " " + response.statusText + (text ? ": " + text.slice(0, 500) : ""));
+    if (response.status === 409 && getSessionById(sessionId)) {
+      try { var conflict = JSON.parse(text); if (conflict.session_id === sessionId && typeof conflict.run_id === "string" && /^[A-Za-z0-9_-]{1,160}$/.test(conflict.run_id)) error.conflictingRunId = conflict.run_id; } catch (ignored) {}
+    }
+    return error;
+  }
+
   async function callAgentTurn(payload) {
     var llm = {};
-    if (runSettings.llmClient) llm.client_name = runSettings.llmClient;
-    if (runSettings.llmModel) llm.model = runSettings.llmModel;
+    if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmClient) llm.client_name = runSettings.llmClient;
+    if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmModel) llm.model = runSettings.llmModel;
     var response = await fetch(backendBaseUrl + "/agent/turn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -2675,6 +3010,7 @@
         session_id: payload.session_id || payload.conversation_id,
         user_input: payload.question || payload.user_input || "",
         attachment_ids: payload.attachment_ids || [],
+        resumable: true,
         llm: llm,
         safety_review_mode: payload.safety_review_mode || undefined
       })
@@ -2682,25 +3018,25 @@
     var text = await response.text();
     var data = text ? JSON.parse(text) : {};
     if (!response.ok) {
-      throw new Error("HTTP " + response.status + " " + response.statusText + ": " + text);
+      throw agentTurnError(response, text, payload.session_id || payload.conversation_id);
     }
     data.conversation_id = data.session_id || payload.conversation_id || payload.session_id;
     return data;
   }
 
   async function callAgentTurnStream(payload, onEvent, signal) {
-    var llm = { response_mode: "stream" };
-    if (runSettings.llmClient) llm.client_name = runSettings.llmClient;
-    if (runSettings.llmModel) llm.model = runSettings.llmModel;
+    var llm = { response_mode: runSettings.stream ? "stream" : "text" };
+    if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmClient) llm.client_name = runSettings.llmClient;
+    if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmModel) llm.model = runSettings.llmModel;
     var response = await fetch(backendBaseUrl + "/agent/turn/stream", {
       method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify({ session_id: payload.session_id, user_input: payload.question, attachment_ids: payload.attachment_ids || [],
-        llm: llm, safety_review_mode: payload.safety_review_mode || undefined }),
+        resumable: true, llm: llm, safety_review_mode: payload.safety_review_mode || undefined }),
       signal: signal
     });
     if (!response.ok) {
       var errorBody = await response.text();
-      throw new Error("HTTP " + response.status + " " + response.statusText + (errorBody ? ": " + errorBody.slice(0, 500) : ""));
+      throw agentTurnError(response, errorBody, payload.session_id || payload.conversation_id);
     }
     if (!response.body) throw new Error("HTTP stream unavailable in this WebView");
     var reader = response.body.getReader(), decoder = new TextDecoder(), buffer = "", currentEvent = "message";
@@ -2955,7 +3291,9 @@
       || eventName === "run_completed"
       || eventName === "run_failed"
       || eventName === "run_cancelled"
-      || eventName === "run_timed_out";
+      || eventName === "run_timed_out"
+      || eventName === "run_paused"
+      || eventName === "run_resumed";
   }
 
   function isApprovalQueueRefreshEvent(eventName) {
@@ -2967,7 +3305,9 @@
       || eventName === "run_completed"
       || eventName === "run_failed"
       || eventName === "run_cancelled"
-      || eventName === "run_timed_out";
+      || eventName === "run_timed_out"
+      || eventName === "run_paused"
+      || eventName === "run_resumed";
   }
 
   function scheduleApprovalQueuePoll() {
@@ -3117,8 +3457,28 @@
     }
   }
 
+  function leaveActiveConversation() {
+    if (conversationReading) conversationReading.capture();
+    var current = getActiveSession();
+    if (isManagerSession(current)) {
+      if (pendingState && pendingState.conversationId === current.id) managerPendingTurns[current.id] = pendingState;
+      activeAgentEventController = null;
+    } else abortActiveAgentEventStream();
+    activeAgentTurnGeneration += 1;
+    pendingState = null;
+  }
+  function turnIsCurrent(session, generation) {
+    if (isManagerSession(session)) {
+      var turn = managerPendingTurns[session.id];
+      return !!turn && turn.generation === generation && !deletedSessionIds[session.id];
+    }
+    return generation === activeAgentTurnGeneration;
+  }
   function abortActiveAgentEventStream() {
-    var controller = activeAgentEventController;
+    var entry = managerStreams[activeSessionId];
+    var controller = activeAgentEventController || entry && entry.controller;
+    if (entry) delete managerStreams[activeSessionId];
+    delete managerPendingTurns[activeSessionId];
     activeAgentEventController = null;
     if (controller && !controller.signal.aborted) controller.abort();
   }
@@ -3131,7 +3491,9 @@
     var response = await fetch(backendBaseUrl + "/agent/runs/" + encodeURIComponent(runId), { signal: signal });
     if (!response.ok) return "";
     var run = await response.json();
-    return safeText(run && run.status).trim();
+    var session = sessions.find(function (item) { return item.multiAgentRunId === runId; });
+    if (session) applyRunSnapshot(session, run);
+    return session && session.multiAgentRunId !== runId ? session.runControlStatus : safeText(run && run.status).trim();
   }
 
   function waitForReconnectRetry(delayMs, signal) {
@@ -3150,13 +3512,19 @@
   }
 
   function applySavedRunEvent(session, eventName, data, eventId, turnState) {
+    if (data && data.run_id && data.run_id !== session.multiAgentRunId) return "";
     var currentSession = rememberStreamPosition(session, data, eventId) || session;
+    if (eventName === "run_cancelled" && data && data.payload && data.payload.superseded_by_run_id) {
+      followSupersedingRun(currentSession, data.payload.superseded_by_run_id); return "superseded";
+    }
     recordRunEvent(currentSession, eventName, data);
+    if (eventName === "run_paused") { settlePausedRun(currentSession, turnState); return "paused"; }
+    if (eventName === "run_cancelled") settleCancelledRun(currentSession);
     var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
     var answer = turnState ? turnState.answer : liveAnswers[currentSession.id] || "";
     if (eventName === "llm_delta" && payload.display_target === "assistant_answer") {
       answer = safeText(payload.content_snapshot || (answer + safeText(payload.delta)));
-      var streamedBody = renderStreamingAnswer(currentSession, answer, false);
+      var streamedBody = runSettings.stream ? renderStreamingAnswer(currentSession, answer, false) : null;
       if (turnState) { turnState.answer = answer; turnState.body = streamedBody; }
     } else if (eventName === "final_answer") {
       var metadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
@@ -3177,6 +3545,7 @@
     if (isApprovalQueueRefreshEvent(eventName)) refreshSafetyReviewQueue();
 
     if (activeSessionId === currentSession.id) {
+      if (isTerminalRunStatus(currentSession.runControlStatus) && !pendingState) setComposerDisabled(backendOffline);
       if (eventName === "run_completed") setRunStatus("本轮完成");
       else if (eventName === "run_failed") setRunStatus(eventMessage(data) || "本轮失败", "error");
       else if (eventName === "run_cancelled") setRunStatus("本轮已取消");
@@ -3202,7 +3571,53 @@
     return "";
   }
 
+  var savedRunSubscriptions = Object.create(null);
+  window.__petChatReceiveSavedRunStream = function (requestId, eventName, data, eventId) {
+    var subscription = savedRunSubscriptions[requestId];
+    if (!subscription) return;
+    if (typeof data === "string") {
+      try { data = JSON.parse(data); }
+      catch (error) { subscription.close("保存的运行事件格式无效"); return; }
+    }
+    subscription.event(eventName, data, eventId);
+  };
+  window.__petChatSavedRunStreamClosed = function (requestId, error) {
+    var subscription = savedRunSubscriptions[requestId];
+    if (subscription) subscription.close(error);
+  };
+
+  function consumeSavedRunViaBridge(session, controller, turnState) {
+    return new Promise(function (resolve, reject) {
+      var runId = session.multiAgentRunId, requestId = "saved-" + Date.now() + "-" + Math.random().toString(36).slice(2), settled = false;
+      function finish(status, error) {
+        if (settled) return; settled = true;
+        delete savedRunSubscriptions[requestId]; controller.signal.removeEventListener("abort", abort);
+        if (typeof window.petBridge.cancelSavedRunStream === "function") window.petBridge.cancelSavedRunStream(requestId);
+        if (error) reject(new Error(safeText(error)));
+        else resolve({ terminalStatus: status || "", closed: !status && !controller.signal.aborted });
+      }
+      function abort() { finish(""); }
+      savedRunSubscriptions[requestId] = {
+        event: function (name, data, eventId) {
+          if (controller.signal.aborted || (activeSessionId !== session.id && !isManagerSession(session)) || session.multiAgentRunId !== runId) return;
+          if (data && data.run_id && data.run_id !== runId) return;
+          try {
+            var status = applySavedRunEvent(session, name, data, eventId, turnState);
+            if (status) finish(status);
+          } catch (error) { finish("", error.message); }
+        },
+        close: function (error) { finish("", error); }
+      };
+      controller.signal.addEventListener("abort", abort, { once: true });
+      if (controller.signal.aborted) { abort(); return; }
+      try {
+        window.petBridge.streamSavedRun(JSON.stringify({ run_id: runId, after_sequence: Math.max(0, Number(session.multiAgentSequence) || 0), request_id: requestId }));
+      } catch (error) { finish("", error.message); }
+    });
+  }
+
   async function consumeSavedRunEventStream(session, controller, turnState) {
+    if (window.petBridge && typeof window.petBridge.streamSavedRun === "function") return consumeSavedRunViaBridge(session, controller, turnState);
     var runId = session.multiAgentRunId;
     var afterSequence = Math.max(0, Number(session.multiAgentSequence) || 0);
     var url = backendBaseUrl + "/agent/runs/" + encodeURIComponent(runId)
@@ -3226,10 +3641,10 @@
       if (!dataLines.length) return;
       try {
         var data = JSON.parse(dataLines.join("\n"));
-        if (controller.signal.aborted || activeSessionId !== session.id) return;
+        if (controller.signal.aborted || (activeSessionId !== session.id && !isManagerSession(session))) return;
         terminalStatus = applySavedRunEvent(session, eventName, data, eventId, turnState) || terminalStatus;
       } catch (error) {
-        setRunStatus("事件解析失败：" + error.message, "error");
+        if (activeSessionId === session.id) setRunStatus("事件解析失败：" + error.message, "error");
       }
     }
 
@@ -3249,7 +3664,9 @@
   }
 
   function finishReconnectedTurn(session, turnState, status) {
-    if (!turnState || turnState.finalized || turnState.generation !== activeAgentTurnGeneration) return;
+    if (status === "paused") { settlePausedRun(session, turnState); return; }
+    if (status === "cancelled") { settleCancelledRun(session); return; }
+    if (!turnState || turnState.finalized || !turnIsCurrent(session, turnState.generation)) return;
     turnState.finalized = true;
     if (status === "completed") {
       window.__petChatReceive({
@@ -3269,20 +3686,32 @@
       finishReconnectedTurn(session, turnState, "disconnected");
       return;
     }
-    abortActiveAgentEventStream();
+    var existingStream = managerStreams[session.id];
+    if (isManagerSession(session) && existingStream && !existingStream.controller.signal.aborted && existingStream.runId === session.multiAgentRunId) return;
+    var pendingTurn = activeSessionId === session.id ? pendingState : managerPendingTurns[session.id];
+    if (activeSessionId === session.id) abortActiveAgentEventStream();
+    else if (existingStream) existingStream.controller.abort();
     var controller = new AbortController();
-    activeAgentEventController = controller;
+    if (activeSessionId === session.id) activeAgentEventController = controller;
+    if (isManagerSession(session)) managerStreams[session.id] = { controller: controller, runId: session.multiAgentRunId };
+    if (turnState && isManagerSession(session)) managerPendingTurns[session.id] = pendingTurn || { conversationId: session.id, generation: turnState.generation };
     var retryDelays = [400, 900, 1800, 3600];
     var runId = session.multiAgentRunId;
     var terminalStatus = "";
+    function stillFollowingRun() {
+      return !controller.signal.aborted && (activeSessionId === session.id || isManagerSession(session))
+        && (getSessionById(session.id) || session).multiAgentRunId === runId;
+    }
     try {
       for (var attempt = 0; attempt <= retryDelays.length; attempt += 1) {
-        if (controller.signal.aborted || activeSessionId !== session.id
+        if (controller.signal.aborted || (activeSessionId !== session.id && !isManagerSession(session))
           || (getSessionById(session.id) || session).multiAgentRunId !== runId) return;
         try {
           var currentSession = getSessionById(session.id) || session;
           var result = await consumeSavedRunEventStream(currentSession, controller, turnState);
+          if (!stillFollowingRun()) return;
           if (result.terminalStatus) {
+            if (result.terminalStatus === "superseded") return;
             if (result.missing) {
               if (activeSessionId === session.id) setRunStatus("保存的 Agent 运行已不可用", "error");
               finishReconnectedTurn(session, turnState, "missing");
@@ -3293,7 +3722,9 @@
           }
           if (controller.signal.aborted) return;
           terminalStatus = await readSavedRunStatus(runId, controller.signal);
-          if (isTerminalRunStatus(terminalStatus)) break;
+          if (!stillFollowingRun()) return;
+          if (isTerminalRunStatus(terminalStatus) || terminalStatus === "paused" && !currentSession.resumePending) break;
+          terminalStatus = "";
           throw new Error("Agent event stream closed before the run reached a terminal state");
         } catch (error) {
           if (controller.signal.aborted || (error && error.name === "AbortError")) return;
@@ -3306,7 +3737,11 @@
       if (!terminalStatus) {
         try { terminalStatus = await readSavedRunStatus(runId, controller.signal); } catch (ignored) {}
       }
-      if (isTerminalRunStatus(terminalStatus)) {
+      if (!stillFollowingRun()) return;
+      if (terminalStatus === "paused") {
+        if (!session.resumePending) settlePausedRun(session, turnState);
+        else { session.resumePending = false; if (pendingState && pendingState.conversationId === session.id) pendingState = null; session.controlNotice = "继续尚未生效，请重试"; if (activeSessionId === session.id) setComposerDisabled(backendOffline); }
+      } else if (isTerminalRunStatus(terminalStatus)) {
         if (activeSessionId === session.id) {
           if (terminalStatus === "completed") setRunStatus("本轮完成");
           else setRunStatus("本轮" + (terminalStatus === "failed" ? "失败" : terminalStatus === "cancelled" ? "已取消" : "已超时"), terminalStatus === "failed" || terminalStatus === "timed_out" ? "error" : "");
@@ -3321,18 +3756,27 @@
       }
     } finally {
       if (activeAgentEventController === controller) activeAgentEventController = null;
+      if (managerStreams[session.id] && managerStreams[session.id].controller === controller) delete managerStreams[session.id];
     }
   }
 
   function reconnectActiveSavedRun() {
     var session = getActiveSession();
-    if (session && session.multiAgentRunId) reconnectSavedRun(session, null);
+    if (session && session.runControlStatus === "paused" && !session.resumePending) { setComposerDisabled(backendOffline); return; }
+    if (session && session.multiAgentRunId && !isTerminalRunStatus(session.runControlStatus)) {
+      if (isManagerSession(session) && managerStreams[session.id] && !managerStreams[session.id].controller.signal.aborted) return;
+      if (!session.runControlStatus) session.runControlStatus = "queued";
+      setComposerDisabled(false);
+      readSavedRunStatus(session.multiAgentRunId).catch(function () {});
+      reconnectSavedRun(session, null);
+    }
   }
 
   async function refreshActiveRunState() {
     var session = getActiveSession();
-    if (!session || !session.multiAgentRunId || pendingState || activeAgentEventController
-        || ["running", "waiting"].indexOf(session.timelineState) < 0) return;
+    if (runStatusRequestInFlight || !session || !session.multiAgentRunId
+        || ["running", "waiting", "paused"].indexOf(session.timelineState) < 0) return;
+    runStatusRequestInFlight = true;
     var runId = session.multiAgentRunId;
     try {
       var status = await readSavedRunStatus(runId);
@@ -3347,10 +3791,11 @@
         recordRunEvent(session, status === "failed" ? "run_failed" :
           status === "timed_out" ? "run_timed_out" : "run_cancelled", {});
         setRunStatus("本轮" + (status === "failed" ? "失败" : status === "timed_out" ? "超时" : "已取消"), "error");
-      } else if (status) {
+      } else if (status && status !== "paused" && !pendingState && !activeAgentEventController) {
         reconnectSavedRun(session, null);
       }
     } catch (ignored) {}
+    finally { runStatusRequestInFlight = false; }
   }
 
   function showSafetyReview(review, state) {
@@ -3366,6 +3811,9 @@
   }
 
   function timelineText(eventName, data) {
+    if (eventName === "run_pause_requested") return "正在暂停，等待当前步骤结束";
+    if (eventName === "run_paused") return "任务已暂停";
+    if (eventName === "run_resumed") return "继续处理任务";
     if (eventName === "run_started") return "开始处理任务";
     if (eventName === "llm_started") return "正在分析任务";
     if (eventName === "tool_started") return "调用工具：" + safeText(data && (data.tool_name || data.payload && data.payload.tool_name) || "处理中");
@@ -3510,7 +3958,7 @@
     if (outputBlocks.length) events = outputBlocks;
     else events = events.slice(-1);
     var state = session && session.timelineState || "";
-    var active = state === "running" || state === "waiting";
+    var active = state === "running" || state === "waiting" || state === "paused";
     var hasFinal = storedEvents.some(function (item) { return item.type === "final_answer"; });
     var visible = active && !hasFinal;
     document.body.classList.toggle("run-progress-inline", visible);
@@ -3550,6 +3998,14 @@
 
   function recordRunEvent(session, eventName, data) {
     if (!session || eventName === "heartbeat") return;
+    var current = getSessionById(session.id) || session;
+    var statuses = { run_started: "running", run_resumed: "running", run_paused: "paused", run_completed: "completed", run_failed: "failed", run_cancelled: "cancelled", run_timed_out: "timed_out" };
+    if (["run_completed", "run_failed", "run_timed_out"].indexOf(eventName) >= 0) current.pausedAnswer = "";
+    if (statuses[eventName]) { current.runControlStatus = statuses[eventName]; current.pauseRequested = false; current.controlNotice = ""; if (eventName !== "run_paused") current.resumePending = false; }
+    if (eventName === "run_pause_requested") current.pauseRequested = true;
+    if (eventName === "run_resumed") current.timelineState = "running";
+    if (eventName === "run_paused") current.timelineState = "paused";
+    if (current.id === activeSessionId) renderRunControls();
     var processChanged = recordProcessOutput(session, eventName, data);
     if (eventName === "llm_delta") return;
     var message = truncateText(timelineText(eventName, data), eventName === "safety_review_decided" ? 4000 : 180);
@@ -3582,13 +4038,17 @@
   }
 
   function handleStreamEvent(eventName, data, state) {
+    if (eventName === "run_cancelled" && data && data.payload && data.payload.superseded_by_run_id) {
+      followSupersedingRun(state.session, data.payload.superseded_by_run_id); return;
+    }
     recordRunEvent(state.session, eventName, data);
+    if (eventName === "run_paused") { state.paused = true; settlePausedRun(state.session, state); return; }
+    if (eventName === "run_cancelled") settleCancelledRun(state.session);
     var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
     if (eventName === "llm_delta" && payload.display_target === "assistant_answer") {
       state.answer = safeText(payload.content_snapshot || (state.answer + safeText(payload.delta)));
-      state.body = renderStreamingAnswer(state.session, state.answer, false);
-      setRunStatus("正在生成回答…");
-      scrollMessagesToBottom();
+      if (runSettings.stream) state.body = renderStreamingAnswer(state.session, state.answer, false);
+      if (activeSessionId === state.session.id) { setRunStatus("正在生成回答…"); scrollMessagesToBottom(); }
       return;
     }
     if (eventName === "final_answer") {
@@ -3602,9 +4062,9 @@
       var review = payload.safety_review || payload.review || payload;
       if (review.mode === "manual" && review.status === "pending") {
         state.review = review;
-        setRunStatus("等待安全审查确认：" + (review.tool_name || "工具调用"), "review");
+        if (activeSessionId === state.session.id) setRunStatus("等待安全审查确认：" + (review.tool_name || "工具调用"), "review");
       } else {
-        setRunStatus(review.mode === "llm" ? "正在进行模型安全审查…" : "安全审查已自动通过");
+        if (activeSessionId === state.session.id) setRunStatus(review.mode === "llm" ? "正在进行模型安全审查…" : "安全审查已自动通过");
       }
       return;
     }
@@ -3614,41 +4074,83 @@
         : eventName === "run_failed" ? "failed"
           : eventName === "run_cancelled" ? "cancelled" : "timed_out";
     }
-    if (eventName === "run_started") setRunStatus("Agent 已启动");
-    else if (eventName === "llm_started") setRunStatus("LLM：" + (data.stage || "处理中") + "…");
-    else if (eventName === "tool_started") setRunStatus("正在调用工具：" + (data.tool_name || payload.tool_name || "处理中"));
-    else if (eventName === "run_completed") setRunStatus("本轮完成");
-    else if (eventName === "run_failed") setRunStatus(eventMessage(data) || "本轮失败", "error");
-    else if (eventName !== "heartbeat" && eventMessage(data)) setRunStatus(eventMessage(data));
+    if (activeSessionId === state.session.id) {
+      if (eventName === "run_started") setRunStatus("Agent 已启动");
+      else if (eventName === "llm_started") setRunStatus("LLM：" + (data.stage || "处理中") + "…");
+      else if (eventName === "tool_started") setRunStatus("正在调用工具：" + (data.tool_name || payload.tool_name || "处理中"));
+      else if (eventName === "run_completed") setRunStatus("本轮完成");
+      else if (eventName === "run_failed") setRunStatus(eventMessage(data) || "本轮失败", "error");
+      else if (eventName !== "heartbeat" && eventMessage(data)) setRunStatus(eventMessage(data));
+    }
     state.events.push(data);
+  }
+
+  var nativeTurnGenerations = Object.create(null);
+  function markNativePendingTurn(payload) {
+    var sessionId = payload.session_id || payload.conversation_id;
+    var originalPending = managerPendingTurns[sessionId] || pendingState;
+    if (originalPending && originalPending.conversationId === sessionId && turnIsCurrent(getSessionById(sessionId), originalPending.generation)) {
+      originalPending.nativeTurn = { sessionId: sessionId, generation: originalPending.generation };
+      var generations = nativeTurnGenerations[sessionId] || (nativeTurnGenerations[sessionId] = new Set());
+      generations.add(originalPending.generation);
+    }
   }
 
   function sendAgentTurnViaDesktopBridge(payload) {
     if (!window.petBridge || typeof window.petBridge.send !== "function") {
       return false;
     }
+    markNativePendingTurn(payload);
     window.petBridge.send(JSON.stringify({
       question: payload.question || payload.user_input || "",
       conversation_id: payload.conversation_id || payload.session_id,
       session_id: payload.session_id || payload.conversation_id,
       mode: payload.mode || "wait",
       attachment_ids: payload.attachment_ids || [],
-      llm_client: runSettings.llmClient || "",
-      llm_model: runSettings.llmModel || "",
+      resumable: true,
+      llm_response_mode: runSettings.stream ? "stream" : "text",
+      llm_client: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmClient || "" : "",
+      llm_model: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmModel || "" : "",
       safety_review_mode: payload.safety_review_mode || ""
     }));
     return true;
   }
 
+  var nativeStreamCallbacks = Object.create(null);
+  window.__petChatReceiveStream = function (eventName, data, requestId) {
+    var keys = Object.keys(nativeStreamCallbacks);
+    // Old hosts do not tag callbacks; only an unambiguous subscription is routable.
+    var key = requestId || (keys.length === 1 ? keys[0] : ""), subscription = nativeStreamCallbacks[key];
+    if (!subscription) return;
+    subscription.event(eventName, data);
+    if (["run_completed", "run_failed", "run_cancelled", "run_timed_out", "run_paused"].indexOf(eventName) >= 0) {
+      delete nativeStreamCallbacks[key];
+      var entry = managerStreams[subscription.sessionId];
+      if (entry && entry.controller === subscription.controller) delete managerStreams[subscription.sessionId];
+      if (subscription.controller && activeAgentEventController === subscription.controller) activeAgentEventController = null;
+    }
+  };
   function sendAgentStreamViaDesktopBridge(payload, onEvent) {
     if (!window.petBridge || typeof window.petBridge.stream !== "function") return false;
-    window.__petChatReceiveStream = onEvent;
+    var requestId = "turn-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+    var originalPending = managerPendingTurns[payload.conversation_id || payload.session_id] || pendingState;
+    nativeStreamCallbacks[requestId] = { event: onEvent, sessionId: payload.conversation_id || payload.session_id, generation: originalPending && originalPending.generation };
+    markNativePendingTurn(payload);
+    if (isManagerSession(getSessionById(payload.conversation_id || payload.session_id))) {
+      var nativeController = new AbortController(), nativeSessionId = payload.conversation_id || payload.session_id;
+      nativeController.signal.addEventListener("abort", function () { delete nativeStreamCallbacks[requestId]; }, { once: true });
+      nativeStreamCallbacks[requestId].controller = nativeController;
+      managerStreams[nativeSessionId] = { controller: nativeController, runId: "" };
+    }
     window.petBridge.stream(JSON.stringify({
+      request_id: requestId,
       question: payload.question || payload.user_input || "",
       conversation_id: payload.conversation_id || payload.session_id,
       attachment_ids: payload.attachment_ids || [],
-      llm_client: runSettings.llmClient || "",
-      llm_model: runSettings.llmModel || "",
+      resumable: true,
+      llm_response_mode: runSettings.stream ? "stream" : "text",
+      llm_client: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmClient || "" : "",
+      llm_model: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmModel || "" : "",
       safety_review_mode: payload.safety_review_mode || ""
     }));
     return true;
@@ -3684,6 +4186,8 @@
   }
 
   async function bindSessionWorkspace(session, requestedWorkspace, assertCurrent) {
+    if (isManagerSession(session)) { if (assertCurrent) assertCurrent(); return session.id; }
+    if (managerEmbedding) throw new Error("真理会话尚未载入，请重试。");
     var workspace = requestedWorkspace === undefined ? session.workspace : requestedWorkspace;
     var key = session.id + "\n" + (workspace || "");
     if (workspaceBindings[key]) return workspaceBindings[key];
@@ -3694,6 +4198,7 @@
   }
 
   async function bindSessionWorkspaceNow(session, requestedWorkspace, assertCurrent) {
+    if (isManagerSession(session)) { if (assertCurrent) assertCurrent(); return session.id; }
     if (assertCurrent) assertCurrent();
     var workspace = requestedWorkspace === undefined ? session.workspace : requestedWorkspace;
     if (!workspace) return session.id;
@@ -3757,7 +4262,256 @@
     return session.id;
   }
 
-  async function sendQuestion(question) {
+  // The persistent manager inbox is separate from an executing turn. Enqueueing
+  // must never reset the current generation, output or event subscription.
+  function queueState(session) {
+    return session && (managerInputQueues[session.id] || (managerInputQueues[session.id] = { supported: false, unsupported: false, chain: Promise.resolve(), receipts: [] }));
+  }
+  function queueEnabled(session) { return isManagerSession(session) && !!(managerInputQueues[session.id] && managerInputQueues[session.id].supported); }
+  function validInputSnapshot(value) {
+    return value && Array.isArray(value.inputs) && typeof value.paused === "boolean"
+      && Number.isInteger(value.pending_count) && value.pending_count >= 0
+      && (value.active_run_id === null || typeof value.active_run_id === "string");
+  }
+  async function inputQueueRequest(session, method, body, suffix) {
+    var path = "/sessions/" + encodeURIComponent(session.id) + "/inputs" + (suffix || "");
+    if (window.LkaMatterHost && typeof window.LkaMatterHost.request === "function") return window.LkaMatterHost.request(path, method, body);
+    var response = await fetch(backendBaseUrl + path, { method: method, headers: { "Content-Type": "application/json", Accept: "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+    var value = await response.json();
+    if (!response.ok) { var error = new Error(typeof value.detail === "string" ? value.detail : "HTTP " + response.status); error.status = response.status; error.detail = value.detail; throw error; }
+    return value;
+  }
+  function mergeQueuedMessages(session, remote) {
+    var local = session.messages || [], state = queueState(session);
+    var merged = remote.map(function (message) {
+      var prior = local.find(function (item) { return message.messageId && item.messageId === message.messageId || message.clientId && item.clientId === message.clientId; });
+      if (prior) Object.assign(message, { clientId: prior.clientId || message.clientId, inputStatus: prior.inputStatus, queueRequest: prior.queueRequest, inputError: prior.inputError, queueRestoredDraft: prior.queueRestoredDraft, queuePriorDraft: prior.queuePriorDraft });
+      var receipt = state.receipts.find(function (item) { return item.message_id === message.messageId || message.clientId && item.client_message_id === message.clientId; });
+      if (receipt) { message.clientId = receipt.client_message_id; message.messageId = receipt.message_id; message.inputStatus = receipt.status; message.inputError = ""; }
+      return message;
+    });
+    local.forEach(function (message) {
+      if (message.clientId && message.queueRequest && !merged.some(function (item) { return item.clientId === message.clientId || message.messageId && item.messageId === message.messageId; })) merged.push(message);
+    });
+    return merged.slice(-180);
+  }
+  async function refreshQueuedHistory(session) {
+    var state = queueState(session), historyEpoch = (state.historyEpoch || 0) + 1, runId = session.multiAgentRunId;
+    state.historyEpoch = historyEpoch;
+    try {
+      var response = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(session.id), { headers: { Accept: "application/json" } });
+      if (!response.ok) return false;
+      var remote = sessionFromBackendDetail(await response.json()), current = getSessionById(session.id);
+      if (!current || !isManagerSession(remote) || remote.id !== current.id || state.historyEpoch !== historyEpoch || managerInputQueues[session.id] !== state) return false;
+      current.messages = mergeQueuedMessages(current, remote.messages);
+      current.backendHistoryVersion = remote.backendHistoryVersion;
+      // A terminal run's final answer is now represented by durable history.
+      if (current.multiAgentRunId === runId && isTerminalRunStatus(current.runControlStatus)) { delete liveAnswers[current.id]; delete runProcesses[current.id]; }
+      if (activeSessionId === current.id) renderActiveMessages();
+      persistSessions(); return true;
+    } catch (ignored) { return false; }
+  }
+  function renderInputQueueControls(session) {
+    var node = document.querySelector("#inputQueueControls");
+    if (!node && runStatus) {
+      node = document.createElement("div"); node.id = "inputQueueControls"; node.className = "input-queue-controls";
+      node.setAttribute("role", "status"); node.setAttribute("aria-live", "polite"); runStatus.insertAdjacentElement("afterend", node);
+    }
+    if (!node) return;
+    node.hidden = !queueEnabled(session);
+    if (node.hidden) return;
+    var state = queueState(session);
+    node.textContent = "未完成 " + (state.pending_count || 0) + " 条" + (state.paused ? " · 队列已暂停" : "");
+    if (state.paused) {
+      var resume = document.createElement("button"); resume.type = "button"; resume.className = "retry-task-button";
+      resume.textContent = "继续处理队列"; resume.disabled = !!state.resuming;
+      resume.addEventListener("click", async function () {
+        if (state.resuming) return; state.resuming = true; renderInputQueueControls(session);
+        var epoch = (state.requestEpoch || 0) + 1; state.requestEpoch = epoch;
+        try { var snapshot = await inputQueueRequest(session, "POST", {}, "/resume"); if (!validInputSnapshot(snapshot)) throw new Error("队列状态无效"); if (managerInputQueues[session.id] === state) await applyInputSnapshot(session, snapshot, epoch); }
+        catch (error) { if (activeSessionId === session.id) setRunStatus("继续队列失败：" + error.message, "error"); }
+        finally { state.resuming = false; renderInputQueueControls(getActiveSession()); }
+      }); node.appendChild(resume);
+    }
+  }
+  function clearAcknowledgedQueueDraft(session, message) {
+    if (message.queueRestoredDraft !== undefined && readDraft(session.id) === message.queueRestoredDraft) {
+      writeDraft(session.id, message.queuePriorDraft || "");
+      var currentAttachments = window.LkaImageComposer.capture(session.id);
+      window.LkaImageComposer.restore(currentAttachments.filter(function (item) {
+        return !(message.attachments || []).some(function (sent) { return sent.local_id === item.local_id || sent.attachment_id && sent.attachment_id === item.attachment_id; });
+      }), session.id);
+      if (activeSessionId === session.id) showDraftForSession(session);
+    }
+    delete message.queueRestoredDraft; delete message.queuePriorDraft;
+  }
+  async function applyInputSnapshot(session, snapshot, epoch) {
+    session = getSessionById(session.id) || session;
+    var state = queueState(session);
+    if (epoch !== state.requestEpoch) return;
+    var signature = JSON.stringify(snapshot), changed = state.signature !== signature;
+    state.supported = true; state.signature = signature; state.receipts = snapshot.inputs;
+    state.paused = snapshot.paused; state.pending_count = snapshot.pending_count;
+    session.messages.forEach(function (message) {
+      var receipt = snapshot.inputs.find(function (item) { return item.client_message_id === message.clientId || message.messageId && item.message_id === message.messageId; });
+      if (receipt) {
+        clearAcknowledgedQueueDraft(session, message);
+        message.messageId = receipt.message_id; message.inputStatus = receipt.status; message.inputError = "";
+        delete message.queueRestoredDraft; delete message.queuePriorDraft;
+      }
+    });
+    if (!state.jobs) state.jobs = session.messages.filter(function (message) {
+      return message.queueRequest && ["submitting", "submission_failed"].indexOf(message.inputStatus) >= 0
+        && !snapshot.inputs.some(function (receipt) { return receipt.client_message_id === message.clientId; });
+    }).map(function (message) { return { clientId: message.clientId, selected: message.attachments || [] }; });
+    if (changed) await refreshQueuedHistory(session);
+    if (epoch !== state.requestEpoch || managerInputQueues[session.id] !== state) return;
+    var runId = snapshot.active_run_id, selected = activeSessionId === session.id;
+    if (runId && runId !== session.multiAgentRunId) {
+      // Queue roots advance independently of the viewed conversation. Replace
+      // only this manager's subscription, leaving another session's turn intact.
+      if (selected) { activeAgentTurnGeneration += 1; abortActiveAgentEventStream(); pendingState = null; }
+      else {
+        var previous = managerStreams[session.id];
+        if (previous) { previous.controller.abort(); delete managerStreams[session.id]; }
+        delete managerPendingTurns[session.id];
+      }
+      delete liveAnswers[session.id]; delete runProcesses[session.id];
+      session.multiAgentRunId = runId; session.multiAgentSequence = 0; session.timelineEvents = [];
+      session.runControlStatus = "queued"; session.timelineState = "running"; session.pausedAnswer = "";
+      session.pauseRequested = false; session.resumePending = false; saveRunCursor(session);
+      // active_run_id also includes paused and waiting roots; it is not a status.
+      try { await readSavedRunStatus(runId); } catch (ignored) {}
+      if (epoch !== state.requestEpoch || managerInputQueues[session.id] !== state || session.multiAgentRunId !== runId) return;
+    }
+    var subscription = managerStreams[session.id];
+    if (runId && !(subscription && !subscription.controller.signal.aborted)
+        && !isTerminalRunStatus(session.runControlStatus) && (session.runControlStatus !== "paused" || session.resumePending)) {
+      reconnectSavedRun(session, null);
+    }
+    persistSessions();
+    if (activeSessionId === session.id) renderRunControls();
+    drainQueuedInputs(session);
+  }
+  function refreshManagerInputs(session) {
+    session = session || getActiveSession();
+    if (document.hidden || !isManagerSession(session) || deletedSessionIds[session.id] || deletingSessionIds[session.id]) return Promise.resolve(false);
+    var state = queueState(session);
+    if (state.loading) return state.refreshPromise || Promise.resolve(false);
+    if (state.unsupported || state.resuming) return Promise.resolve(false);
+    state.loading = true;
+    var epoch = (state.requestEpoch || 0) + 1; state.requestEpoch = epoch;
+    var refresh = (async function () {
+    try {
+      var snapshot = await inputQueueRequest(session, "GET");
+      if (!validInputSnapshot(snapshot)) {
+        if (!state.supported) { state.unsupported = true; return false; }
+        throw new Error("消息队列响应无效");
+      }
+      if (managerInputQueues[session.id] !== state) return false;
+      await applyInputSnapshot(session, snapshot, epoch); return true;
+    } catch (error) {
+      if (managerInputQueues[session.id] !== state) return false;
+      if (!state.supported && (error.status === 404 || error.status === 409 && ["session_input_queue_requires_default_manager", "session_input_queue_disabled"].indexOf(error.detail) >= 0)) state.unsupported = true;
+      else if (!state.supported && activeSessionId === session.id) setRunStatus("暂时无法核对消息队列，草稿已保留，正在重试连接…", "error");
+      // Only a validated response enables continuous sending. Failures never
+      // reroute an attempted inbox submission to the legacy turn endpoint.
+      return false;
+    } finally { state.loading = false; if (activeSessionId === session.id) renderRunControls(); }
+    }());
+    state.refreshPromise = refresh;
+    return refresh;
+  }
+  function sameQueuedAttachments(left, right) {
+    return JSON.stringify((left || []).map(function (item) { return item.local_id || item.attachment_id; })) === JSON.stringify((right || []).map(function (item) { return item.local_id || item.attachment_id; }));
+  }
+  function enqueueManagerInput(session, question) {
+    var text = safeText(question).trim(), selected = window.LkaImageComposer.capture(session.id);
+    var failed = session.messages.find(function (item) { return item.inputStatus === "submission_failed" && item.queueRequest && item.queueRequest.user_input === text && sameQueuedAttachments(item.attachments, selected); });
+    var body = failed ? failed.queueRequest : { client_message_id: "input-" + Date.now() + "-" + Math.random().toString(36).slice(2), user_input: text, attachment_ids: [], llm: { response_mode: runSettings.stream ? "stream" : "text" } };
+    if (!failed && ["skip", "llm", "manual"].indexOf(runSettings.safetyMode) >= 0) body.safety_review_mode = runSettings.safetyMode;
+    if (!failed) addMessageToSession(session, "user", text || "[File input]", false, { clientId: body.client_message_id, attachments: selected, inputStatus: "submitting", queueRequest: body });
+    // Capture/clear synchronously, before uploads or requests yield to a new draft.
+    input.value = ""; writeDraft(session.id, "");
+    var message = failed || session.messages[session.messages.length - 1];
+    message.inputStatus = "submitting"; message.inputError = "";
+    submitQueuedInput(session, message, selected);
+    if (activeSessionId === session.id) {
+      scrollMessagesToBottom(true);
+      window.requestAnimationFrame(function () { if (activeSessionId === session.id) scrollMessagesToBottom(true); });
+    }
+  }
+  function retryQueuedInput(sessionId, clientId) {
+    var session = getSessionById(sessionId), message = session && session.messages.find(function (item) { return item.clientId === clientId; });
+    if (!message || message.inputStatus !== "submission_failed" || !queueEnabled(session)) return;
+    var draft = readDraft(sessionId), selected = message.attachments;
+    if (draft.trim() === message.queueRequest.user_input && activeSessionId === sessionId) {
+      var current = window.LkaImageComposer.capture(sessionId);
+      if (sameQueuedAttachments(current, selected)) { selected = current; input.value = ""; writeDraft(sessionId, ""); showDraftForSession(session); }
+      else window.LkaImageComposer.restore(current, sessionId);
+    }
+    message.inputStatus = "submitting"; message.inputError = ""; submitQueuedInput(session, message, selected);
+  }
+  function submitQueuedInput(session, message, selected) {
+    var state = queueState(session);
+    state.jobs = state.jobs || [];
+    var job = state.jobs.find(function (item) { return item.clientId === message.clientId; });
+    if (job) job.selected = selected;
+    else state.jobs.push({ clientId: message.clientId, selected: selected });
+    persistSessions();
+    if (activeSessionId === session.id) { renderActiveMessages(); renderRunControls(); }
+    drainQueuedInputs(session);
+  }
+  function drainQueuedInputs(session) {
+    var state = queueState(session);
+    if (state.processing || !state.jobs || !state.jobs.length) return;
+    state.processing = true;
+    function renderSubmission() { persistSessions(); if (activeSessionId === session.id) { renderActiveMessages(); renderRunControls(); } }
+    state.chain = (async function () {
+      while (state.jobs.length && managerInputQueues[session.id] === state) {
+        var job = state.jobs[0], selected = job.selected;
+        var message = session.messages.find(function (item) { return item.clientId === job.clientId; });
+        if (!message) { state.jobs.shift(); continue; }
+        var body = message.queueRequest;
+        var accepted = state.receipts.find(function (item) { return item.client_message_id === job.clientId; });
+        if (accepted) { state.jobs.shift(); continue; }
+        // An uncertain send blocks later local submissions until its stable ID
+        // is acknowledged or explicitly retried. Never silently reverse input order.
+        if (message.inputStatus === "submission_failed") break;
+        try {
+          body.attachment_ids = await window.LkaImageComposer.prepare(selected, session.id);
+          if (managerInputQueues[session.id] !== state) return;
+          message = session.messages.find(function (item) { return item.clientId === job.clientId; }) || message;
+          message.attachments = window.LkaImageComposer.normalize(selected); renderSubmission();
+          var result = await inputQueueRequest(session, "POST", body);
+          if (managerInputQueues[session.id] !== state) return;
+          if (!result || !result.input || result.input.client_message_id !== body.client_message_id || !result.input.message_id) throw new Error("发送回执无效，请重试核对");
+          message = session.messages.find(function (item) { return item.clientId === job.clientId; }) || message;
+          clearAcknowledgedQueueDraft(session, message);
+          message.messageId = result.input.message_id; message.inputStatus = result.input.status; message.inputError = "";
+          state.jobs.shift(); renderSubmission(); await refreshManagerInputs(session);
+        } catch (error) {
+          if (managerInputQueues[session.id] !== state) return;
+          message = session.messages.find(function (item) { return item.clientId === job.clientId; }) || message;
+          accepted = state.receipts.find(function (item) { return item.client_message_id === job.clientId; });
+          if (accepted) { clearAcknowledgedQueueDraft(session, message); message.inputStatus = accepted.status; message.messageId = accepted.message_id; message.inputError = ""; state.jobs.shift(); renderSubmission(); continue; }
+          message.inputStatus = "submission_failed"; message.inputError = safeText(error.message);
+          var later = readDraft(session.id), text = body.user_input;
+          message.queuePriorDraft = later.trim() === text ? "" : later;
+          message.queueRestoredDraft = later.trim() === text ? later : text + (text && later ? "\n" : "") + later;
+          writeDraft(session.id, message.queueRestoredDraft);
+          window.LkaImageComposer.restore(selected, session.id);
+          if (activeSessionId === session.id) { showDraftForSession(session); setRunStatus("消息发送未确认，后续消息等待重试；内容已保留：" + error.message, "error"); }
+          renderSubmission(); break;
+        }
+      }
+    }()).finally(function () { state.processing = false; });
+  }
+
+  async function sendQuestion(question, replaceRunId) {
+    if (managerEmbedding && (!managerSessionReady || !isManagerSession(getActiveSession()))) {
+      setRunStatus("真理会话尚未载入，请刷新后重试。", "error"); return;
+    }
     var cleaned = safeText(question).trim();
     if (!cleaned && !window.LkaImageComposer.hasAttachments(activeSessionId)) {
       focusComposer();
@@ -3772,12 +4526,51 @@
       }
     }
 
+    function restoreUnsentInput() {
+      session = getSessionById(session.id) || session;
+      session.messages = session.messages.filter(function (item) { return item.clientId !== imageMessageId; });
+      var laterDraft = readDraft(session.id), restoredDraft = cleaned;
+      if (laterDraft && laterDraft !== cleaned) restoredDraft += (restoredDraft ? "\n" : "") + laterDraft;
+      writeDraft(session.id, restoredDraft);
+      window.LkaImageComposer.restore(selectedImages, session.id);
+      if (activeSessionId === session.id) showDraftForSession(session);
+    }
+    function recoverSessionConflict(runId) {
+      var originalPending = managerPendingTurns[session.id] || pendingState;
+      if (!turnIsCurrent(session, turnGeneration) || !originalPending
+        || originalPending.conversationId !== session.id || originalPending.generation !== turnGeneration
+        || originalPending.recoverSessionConflict !== recoverSessionConflict) return false;
+      restoreUnsentInput();
+      if (pendingState && pendingState.conversationId === session.id) pendingState = null;
+      delete managerPendingTurns[session.id];
+      if (managerStreams[session.id]) { managerStreams[session.id].controller.abort(); delete managerStreams[session.id]; }
+      session.multiAgentRunId = runId || ""; session.multiAgentSequence = 0;
+      session.runControlStatus = runId ? "queued" : "failed"; session.timelineState = runId ? "running" : "failed";
+      session.controlNotice = runId ? "此会话已有任务进行中，已连接原任务；本次输入已保留，尚未发送。"
+        : "发送失败：运行冲突响应不完整。本次文字和附件已保留，请核对后重试。";
+      delete liveAnswers[session.id]; delete runProcesses[session.id];
+      if (activeSessionId === session.id) {
+        renderActiveMessages(); setRunStatus(session.controlNotice, "error");
+        setComposerDisabled(backendOffline);
+      }
+      if (runId) reconnectSavedRun(session, null);
+      persistSessions(); return true;
+    }
     var fileOnly = window.LkaImageComposer.hasDocuments(session.id);
+    var audioOnly = window.LkaImageComposer.hasAudios(session.id);
     var selectedImages = window.LkaImageComposer.capture(session.id);
     var imageMessageId = "input-" + Date.now() + "-" + Math.random().toString(36).slice(2);
     var requestStarted = false;
+    var replacementAccepted = false;
+    var priorPausedTurn = replaceRunId ? { events: session.timelineEvents, answer: liveAnswers[session.id], pausedAnswer: session.pausedAnswer, process: runProcesses[session.id] } : null;
+    session.pausedAnswer = "";
+    if (!replaceRunId) {
+      session.multiAgentRunId = ""; session.multiAgentSequence = 0; session.pausedAnswer = "";
+      try { localStorage.removeItem(runCursorKeyPrefix + encodeURIComponent(session.id)); } catch (ignored) {}
+    }
+    session.runControlStatus = "queued"; session.pauseRequested = false; session.controlNotice = "";
     activeAgentTurnGeneration += 1;
-    var turnGeneration = activeAgentTurnGeneration;
+    var turnGeneration = activeAgentTurnGeneration, turnAuthEpoch = assistantCacheEpoch;
     abortActiveAgentEventStream();
 
     touchSession(session);
@@ -3788,7 +4581,7 @@
     session.timelineState = "running";
     recordRunEvent(session, "run_started", {});
 
-    addMessageToSession(session, "user", cleaned || (fileOnly ? "[File input]" : "[Image input]"), false, { attachments: selectedImages, clientId: imageMessageId });
+    addMessageToSession(session, "user", cleaned || (fileOnly ? "[File input]" : audioOnly ? "[Audio input]" : "[Image input]"), false, { attachments: selectedImages, clientId: imageMessageId });
     applySessionTitle(session);
     touchSession(session);
     pinSessionToTop(session.id);
@@ -3800,16 +4593,18 @@
     setComposerDisabled(true);
     pendingState = {
       conversationId: session.id,
-      generation: turnGeneration
+      generation: turnGeneration,
+      recoverSessionConflict: recoverSessionConflict
     };
+    if (isManagerSession(session)) managerPendingTurns[session.id] = pendingState;
 
-    if (workMode) {
+    {
       // History appends scroll before the live output and progress change the
       // layout. An explicit send must reveal the whole new turn after those
       // changes, without moving a different session if the user switches.
-      scrollMessagesToBottom();
+      scrollMessagesToBottom(true);
       window.requestAnimationFrame(function () {
-        if (turnGeneration === activeAgentTurnGeneration && session.id === activeSessionId) scrollMessagesToBottom();
+        if (turnIsCurrent(session, turnGeneration) && session.id === activeSessionId) scrollMessagesToBottom(true);
       });
     }
 
@@ -3833,27 +4628,49 @@
       if (imageMessage) imageMessage.attachments = window.LkaImageComposer.normalize(selectedImages);
       persistSessions();
       if (session.id === activeSessionId && selectedImages.length) { renderActiveMessages(); liveBody = ensureLiveRunOutput(session).querySelector(".message-content"); }
+      if (turnAuthEpoch !== assistantCacheEpoch || !turnIsCurrent(session, turnGeneration)) throw quickAssistantCancelled();
       requestStarted = true;
       payload.safety_review_mode = runSettings.safetyMode === "backend" ? "" : runSettings.safetyMode;
-      if (!runSettings.stream && sendAgentTurnViaDesktopBridge(payload)) {
+      if (replaceRunId) {
+        var replacementBody = { session_id: boundSessionId, user_input: cleaned, attachment_ids: payload.attachment_ids, resumable: true,
+          llm: { response_mode: runSettings.stream ? "stream" : "text" }, safety_review_mode: payload.safety_review_mode || undefined };
+        if (!isManagerSession(session) && runSettings.llmClient) replacementBody.llm.client_name = runSettings.llmClient;
+        if (!isManagerSession(session) && runSettings.llmModel) replacementBody.llm.model = runSettings.llmModel;
+        var fingerprint = JSON.stringify(replacementBody), previous = replacementCommands[session.id];
+        replacementBody.command_id = previous && previous.runId === replaceRunId && previous.fingerprint === fingerprint ? previous.id : "replace-" + Date.now() + "-" + Math.random().toString(36).slice(2);
+        replacementCommands[session.id] = { runId: replaceRunId, fingerprint: fingerprint, id: replacementBody.command_id };
+        var replacement = await postRunCommand(replaceRunId, "replace", replacementBody);
+        session = getSessionById(session.id) || session;
+        replacementAccepted = true; session.pausedAnswer = ""; delete replacementCommands[session.id]; delete suspendedTurns[session.id];
+        session.multiAgentRunId = replacement.run_id; session.multiAgentSequence = 0; session.multiAgentSnapshot = null;
+        saveRunCursor(session); applyRunSnapshot(session, replacement);
+        await reconnectSavedRun(session, { answer: "", events: [], session: session, generation: turnGeneration, terminal: false });
+        return;
+      }
+      if (!runSettings.stream && window.petBridge && typeof window.petBridge.stream !== "function" && sendAgentTurnViaDesktopBridge(payload)) {
         console.log("[pet-chat] sent through desktop bridge:", backendBaseUrl, payload);
         return;
       }
       console.log("[pet-chat] streaming LKA agent turn:", backendBaseUrl, payload);
-      if (runSettings.stream) {
+      // Keep a live event subscription even when token-by-token display is off.
+      {
         var streamState = {
           answer: "", body: liveBody, events: [], review: null, session: session,
           generation: turnGeneration, initialRunId: session.multiAgentRunId, terminal: false
         };
         try {
           var onStreamEvent = function (eventName, data, eventId) {
-            if (turnGeneration !== activeAgentTurnGeneration) return;
+            if (!turnIsCurrent(session, turnGeneration)) return;
             session = rememberStreamPosition(session, data, eventId) || session;
             streamState.session = session;
             if (isMultiAgentRefreshEvent(eventName)) fetchMultiAgentSnapshot(session, session.multiAgentRunId);
             if (isApprovalQueueRefreshEvent(eventName)) refreshSafetyReviewQueue();
             handleStreamEvent(eventName, data, streamState);
-            if (streamState.review) showSafetyReview(streamState.review, streamState);
+            if (streamState.review && activeSessionId === session.id) showSafetyReview(streamState.review, streamState);
+            if (streamState.viaBridge && eventName === "run_cancelled") return;
+            if (streamState.viaBridge && ["run_failed", "run_timed_out"].indexOf(eventName) >= 0) {
+              window.__petChatReceive({ session_id: session.id, error: eventMessage(data) || "Agent run " + streamState.terminalStatus }); return;
+            }
             if (streamState.viaBridge && eventName === "run_completed") {
               window.__petChatReceive({ session_id: session.id,
                 answer: streamState.answer || "本轮没有生成可显示的回答。", progress_events: streamState.events });
@@ -3865,14 +4682,20 @@
             return;
           }
           var turnController = typeof AbortController === "function" ? new AbortController() : null;
-          if (turnController) activeAgentEventController = turnController;
+          if (turnController) {
+            if (activeSessionId === session.id) activeAgentEventController = turnController;
+            if (isManagerSession(session)) managerStreams[session.id] = { controller: turnController, runId: session.multiAgentRunId };
+          }
           try {
             await callAgentTurnStream(payload, onStreamEvent, turnController && turnController.signal);
           } finally {
             if (turnController && activeAgentEventController === turnController) activeAgentEventController = null;
+            if (managerStreams[session.id] && managerStreams[session.id].controller === turnController) delete managerStreams[session.id];
           }
+          if (streamState.paused) return;
+          if (streamState.terminalStatus === "cancelled") { settleCancelledRun(session); return; }
           if (!streamState.terminal && session.multiAgentRunId && session.multiAgentRunId !== streamState.initialRunId) {
-            setRunStatus("Agent 事件流结束，正在恢复运行状态…");
+            if (activeSessionId === session.id) setRunStatus("Agent 事件流结束，正在恢复运行状态…");
             await reconnectSavedRun(session, streamState);
             return;
           }
@@ -3881,18 +4704,19 @@
             return;
           }
         } catch (streamError) {
-          if (turnGeneration !== activeAgentTurnGeneration || (streamError && streamError.name === "AbortError")) return;
+          if (streamError.conflictingRunId) throw streamError;
+          if (!turnIsCurrent(session, turnGeneration) || (streamError && streamError.name === "AbortError")) return;
           if (session.multiAgentRunId && session.multiAgentRunId !== streamState.initialRunId) {
-            setRunStatus("Agent 事件流中断，正在恢复运行状态…");
+            if (activeSessionId === session.id) setRunStatus("Agent 事件流中断，正在恢复运行状态…");
             await reconnectSavedRun(session, streamState);
             return;
           }
           if ((!payload.attachment_ids.length && safeText(streamError.message).indexOf("HTTP 422") >= 0) || safeText(streamError.message).indexOf("stream unavailable") >= 0) {
             if (sendAgentTurnViaDesktopBridge(payload)) {
-              setRunStatus("WebView 流式请求不兼容，已切换桌面桥接兼容模式…");
+              if (activeSessionId === session.id) setRunStatus("WebView 流式请求不兼容，已切换桌面桥接兼容模式…");
               return;
             }
-            setRunStatus("流式入口不可用，已切换兼容模式…");
+            if (activeSessionId === session.id) setRunStatus("流式入口不可用，已切换兼容模式…");
             var fallbackResult = await callAgentTurn(payload);
             window.__petChatReceive(fallbackResult);
             return;
@@ -3902,68 +4726,116 @@
         window.__petChatReceive({ session_id: session.id,
           answer: streamState.answer || "本轮没有生成可显示的回答。", progress_events: streamState.events });
         reconcileCompletedSession(session.id);
-      } else {
-        var result = await callAgentTurn(payload);
-        window.__petChatReceive(result);
       }
     } catch (error) {
-      if (turnGeneration !== activeAgentTurnGeneration || (error && error.name === "AbortError")) return;
-      if (!requestStarted) window.LkaImageComposer.restore(selectedImages, session.id);
+      if (!turnIsCurrent(session, turnGeneration) || (error && error.name === "AbortError")) return;
+      if (error.conflictingRunId && recoverSessionConflict(error.conflictingRunId)) return;
+      if (replaceRunId && !replacementAccepted) {
+        session = getSessionById(session.id) || session;
+        session.runControlStatus = "paused"; session.timelineState = "paused";
+        session.timelineEvents = priorPausedTurn.events; session.pausedAnswer = priorPausedTurn.pausedAnswer || ""; liveAnswers[session.id] = priorPausedTurn.answer || "";
+        if (priorPausedTurn.process) runProcesses[session.id] = priorPausedTurn.process;
+        session.controlNotice = "新指令未发送：" + safeText(error.message); pendingState = null;
+        window.LkaImageComposer.restore(selectedImages, session.id);
+        session.messages = session.messages.filter(function (item) { return item.clientId !== imageMessageId; });
+        writeDraft(session.id, cleaned); if (session.id === activeSessionId) { setRunStatus(session.controlNotice, "error"); showDraftForSession(session); setComposerDisabled(backendOffline); renderActiveMessages(); }
+        persistSessions(); return;
+      }
+      if (!requestStarted) restoreUnsentInput();
       var failureText = "Backend request failed: " + (error && error.message ? error.message : String(error));
       recordRunEvent(session, "run_failed", { message: failureText });
-      setRunStatus("发送失败：" + (error && error.message ? error.message : String(error)), "error");
+      if (activeSessionId === session.id) setRunStatus("发送失败：" + (error && error.message ? error.message : String(error)), "error");
       if (isBackendOfflineError(failureText) || failureText.indexOf("Failed to fetch") >= 0) {
         setBackendOfflineState(true, "后端未连接：" + failureText + "。请确认 LKA backend 正在运行：" + backendBaseUrl);
       }
       addMessageToSession(session, "assistant", failureText, true);
-      pendingState = null;
-      setComposerDisabled(backendOffline);
+      delete managerPendingTurns[session.id];
+      if (pendingState && pendingState.conversationId === session.id) pendingState = null;
+      if (activeSessionId === session.id) setComposerDisabled(backendOffline);
       touchSession(session);
       pinSessionToTop(session.id);
       renderSessionList();
-      renderActiveMessages();
+      if (activeSessionId === session.id) renderActiveMessages();
       persistSessions();
-      focusComposer();
+      if (activeSessionId === session.id) focusComposer();
     }
   }
 
-  async function reconcileCompletedSession(sessionId) {
-    if (!sessionId) return;
+  async function reconcileCompletedSession(sessionId, mayApply) {
+    if (!sessionId || mayApply && !mayApply()) return false;
+    if (queueEnabled(getSessionById(sessionId))) return refreshQueuedHistory(getSessionById(sessionId));
+    var expectedMessages = sessionMessageSnapshot(sessionId);
     try {
       var response = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(sessionId), {
         headers: { Accept: "application/json" }
       });
-      if (!response.ok) return;
+      if (!response.ok) return false;
       var remote = sessionFromBackendDetail(await response.json());
-      if (!remote || !remote.messages.length
-          || remote.messages[remote.messages.length - 1].role !== "assistant"
-          || remote.messages[remote.messages.length - 1].text === defaultGreetingMessage().text) return;
+      if (!remote || !remote.messages.length || !remote.backendHistoryFiltered
+          && (remote.messages[remote.messages.length - 1].role !== "assistant"
+          || remote.messages[remote.messages.length - 1].text === defaultGreetingMessage().text)) return false;
       var existing = getSessionById(sessionId);
-      if (!existing || (pendingState && pendingState.conversationId === sessionId)) return;
+      if (!existing || expectedMessages !== sessionMessageSnapshot(sessionId)
+          || (pendingState && pendingState.conversationId === sessionId) || mayApply && !mayApply()
+          || isManagerSession(existing) && !isManagerSession(remote)) return false;
       // Backend history is authoritative once the run has completed.
       delete liveAnswers[sessionId];
       existing.messages = remote.messages;
       touchSession(existing);
       if (activeSessionId === sessionId) renderActiveMessages();
       persistSessions();
+      return true;
     } catch (error) {
       console.warn("[pet-chat] answer reconciliation failed", error);
+      return false;
     }
   }
 
-  function submitCurrentInput() {
-    if (pendingState || backendOffline || sendButton.disabled) return;
-    var now = Date.now();
-    if (now - lastSubmitAt < 260) {
-      return;
+  var managerConversationRefresh = null;
+  function refreshManagerConversation() {
+    var session = getActiveSession(), generation = activeAgentTurnGeneration;
+    if (queueEnabled(session)) return refreshQueuedHistory(session);
+    function safeToRefresh() {
+      return managerSessionReady && isManagerSession(session) && getActiveSession() === session
+        && generation === activeAgentTurnGeneration && !pendingState && !runCommandInFlight[session.id]
+        && !session.resumePending && !session.pauseRequested
+        && (!session.multiAgentRunId || isTerminalRunStatus(session.runControlStatus));
     }
-    lastSubmitAt = now;
+    if (!safeToRefresh()) return Promise.resolve(false);
+    if (managerConversationRefresh) return managerConversationRefresh;
+    var refresh = reconcileCompletedSession(session.id, safeToRefresh).finally(function () {
+      if (managerConversationRefresh === refresh) managerConversationRefresh = null;
+    });
+    managerConversationRefresh = refresh;
+    return refresh;
+  }
 
-    var question = input.value;
-    if (!question.trim() && !window.LkaImageComposer.hasAttachments(activeSessionId)) { window.LkaImageComposer.explainEmpty(); return; }
-    input.value = "";
-    writeDraft(activeSessionId, "");
-    sendQuestion(question);
+  function performComposerAction(question) {
+    renderRunControls(safeText(question));
+    if (backendOffline || sendButton.disabled) return false;
+    var action = sendButton.getAttribute("data-action");
+    if (action === "pause" || action === "resume") {
+      controlActiveRun(action === "pause" ? "interrupt" : "resume");
+      return false; // Native host preserves its draft for control actions.
+    }
+    if (queueEnabled(getActiveSession()) && action === "send") {
+      if (!safeText(question).trim() && !window.LkaImageComposer.hasAttachments(activeSessionId)) { window.LkaImageComposer.explainEmpty(); return false; }
+      enqueueManagerInput(getActiveSession(), question);
+      return true;
+    }
+    if (pendingState) return false;
+    if (!safeText(question).trim() && !window.LkaImageComposer.hasAttachments(activeSessionId)) { window.LkaImageComposer.explainEmpty(); return false; }
+    input.value = ""; writeDraft(activeSessionId, "");
+    var active = getActiveSession();
+    sendQuestion(question, active && active.runControlStatus === "paused" ? active.multiAgentRunId : "");
+    return true;
+  }
+
+  function submitCurrentInput() {
+    var now = Date.now();
+    if (now - lastSubmitAt < 260 && !(queueEnabled(getActiveSession()) && (input.value.trim() || window.LkaImageComposer.hasAttachments(activeSessionId)))) return;
+    lastSubmitAt = now;
+    performComposerAction(input.value);
   }
 
   window.__petChatReceive = function (result) {
@@ -3975,9 +4847,53 @@
       }
     }
 
+    if (result && result.error && !result.session_id && !result.conversation_id && !result.request_id && !/^HTTP 409:/.test(result.error)) {
+      var outstandingSessions = Object.keys(nativeTurnGenerations).filter(function (id) { return nativeTurnGenerations[id].size; });
+      if (outstandingSessions.length > 1 || outstandingSessions.length === 1 && nativeTurnGenerations[outstandingSessions[0]].size > 1) return;
+      if (outstandingSessions.length === 1) result.session_id = outstandingSessions[0];
+    }
+    if (result && result.request_id) {
+      var nativeRequest = nativeStreamCallbacks[result.request_id];
+      if (!nativeRequest || nativeRequest.sessionId !== (result.session_id || result.conversation_id)
+          || !turnIsCurrent(getSessionById(nativeRequest.sessionId), nativeRequest.generation)) return;
+      delete nativeStreamCallbacks[result.request_id];
+    }
+    // Busy errors identify the original session. Never assign a stale response
+    // to whichever session happens to be pending now.
+    if (result && typeof result.error === "string" && /^HTTP 409:/.test(result.error)) {
+      var nativeConflict = result.error.match(/^HTTP 409:\s*(\{[\s\S]*\})\s*$/), identity = null;
+      try { identity = nativeConflict ? JSON.parse(nativeConflict[1]) : null; } catch (ignored) {}
+      var conflictPending = pendingState;
+      var turn = conflictPending && conflictPending.nativeTurn;
+      var outerSessionId = result.session_id || result.conversation_id;
+      var conflictSessionId = identity && typeof identity.session_id === "string" ? identity.session_id : outerSessionId;
+      // Legacy Java errors do not echo a generation. An otherwise unidentified
+      // failure belongs to the pending turn only when exactly one native attempt
+      // remains outstanding in the whole page.
+      var outstanding = Object.keys(nativeTurnGenerations).reduce(function (count, id) { return count + nativeTurnGenerations[id].size; }, 0);
+      if (!conflictSessionId && outstanding === 1 && turn) conflictSessionId = turn.sessionId;
+      if (conflictSessionId && managerPendingTurns[conflictSessionId]) {
+        conflictPending = managerPendingTurns[conflictSessionId]; turn = conflictPending.nativeTurn;
+      }
+      var generations = conflictSessionId && nativeTurnGenerations[conflictSessionId];
+      if (turn && conflictSessionId === turn.sessionId && getSessionById(conflictSessionId)
+          && generations && generations.size === 1 && generations.has(turn.generation)
+          && turnIsCurrent(getSessionById(conflictSessionId), turn.generation) && conflictPending.generation === turn.generation
+          && conflictPending.conversationId === conflictSessionId && typeof conflictPending.recoverSessionConflict === "function"
+          && (!outerSessionId || outerSessionId === conflictSessionId)) {
+        var validRun = identity && typeof identity.run_id === "string" && /^[A-Za-z0-9_-]{1,160}$/.test(identity.run_id);
+        delete nativeTurnGenerations[conflictSessionId];
+        conflictPending.recoverSessionConflict(validRun ? identity.run_id : null);
+      } else if (generations && generations.size === 1 && (!turn || conflictSessionId !== turn.sessionId)) {
+        delete nativeTurnGenerations[conflictSessionId];
+      }
+      // Unknown sessions and ambiguous generations cannot clear another turn.
+      return;
+    }
     var responseConversationId = normalizeConversationId(
       (result && (result.session_id || result.conversation_id)) || (pendingState && pendingState.conversationId) || activeSessionId
     );
+    delete nativeTurnGenerations[responseConversationId];
     if (deletedSessionIds[responseConversationId]) return;
     var session = getOrCreateSessionById(responseConversationId);
     if (!session) {
@@ -3985,6 +4901,12 @@
       pendingState = null;
       return;
     }
+
+    if (result && result.status === "paused") {
+      if (result.run_id) session.multiAgentRunId = result.run_id;
+      settlePausedRun(session); return;
+    }
+    if (result && result.status === "cancelled") { settleCancelledRun(session); return; }
 
     // Keep frontend id aligned with backend conversation id.
     session.id = responseConversationId;
@@ -4039,9 +4961,7 @@
     pinSessionToTop(session.id);
     renderSessionList();
 
-    if (!activeSessionId || activeSessionId === (pendingState && pendingState.conversationId)) {
-      activeSessionId = session.id;
-    }
+    if (!activeSessionId) activeSessionId = session.id;
     if (activeSessionId === session.id) {
       renderActiveMessages();
     } else {
@@ -4049,9 +4969,16 @@
     }
     persistSessions();
 
-    pendingState = null;
-    setComposerDisabled(backendOffline);
-    focusComposer();
+    delete managerPendingTurns[session.id];
+    var completedStream = managerStreams[session.id];
+    if (completedStream) {
+      delete managerStreams[session.id];
+      if (activeAgentEventController === completedStream.controller) activeAgentEventController = null;
+    }
+    if (pendingState && pendingState.conversationId === session.id) pendingState = null;
+    if (activeSessionId === session.id) setComposerDisabled(backendOffline);
+    window.dispatchEvent(new CustomEvent("lka-agent-turn-finished", { detail: { sessionId: session.id } }));
+    if (activeSessionId === session.id) focusComposer();
   };
 
   if (form) {
@@ -4080,15 +5007,19 @@
         && Date.now() - lastSubmitAt < 500) event.preventDefault();
   });
   window.__petChatSubmitCurrentInput = submitCurrentInput;
-  window.__petChatSubmitText = function (text) {
-    if (pendingState || backendOffline || sendButton.disabled) return false;
-    if (!safeText(text).trim() && !window.LkaImageComposer.hasAttachments(activeSessionId)) { window.LkaImageComposer.explainEmpty(); return false; }
-    writeDraft(activeSessionId, "");
-    sendQuestion(text);
-    return true;
-  };
+  window.__petChatSubmitText = function (text) { return performComposerAction(text); };
 
-  input.addEventListener("input", function () { writeDraft(activeSessionId, input.value); });
+  input.addEventListener("input", function () { writeDraft(activeSessionId, input.value); renderRunControls(); });
+  window.addEventListener("lka-attachments-changed", renderRunControls);
+  if (workMode && !document.body.classList.contains("mobile-workbench") && typeof ResizeObserver === "function") {
+    var composerInputWidth = -1;
+    new ResizeObserver(function (entries) {
+      var width = entries[0].contentRect.width;
+      if (Math.abs(width - composerInputWidth) < 0.5) return;
+      composerInputWidth = width;
+      resizeWorkbenchComposer();
+    }).observe(input);
+  }
 
   if (toggleSidebarButton) {
     toggleSidebarButton.addEventListener("click", function () {
@@ -4158,7 +5089,7 @@
     document.body.classList.add("native-composer");
     setComposerDisabled(backendOffline || !!pendingState);
     var session = getActiveSession();
-    if (!session || session.workspace || bridgeWorkspaceRetryScheduled) return;
+    if (!session || managerEmbedding || quickAssistantLoading || !managerSessionReady || isManagerSession(session) || session.workspace || bridgeWorkspaceRetryScheduled) return;
     bridgeWorkspaceRetryScheduled = true;
     var pending = workspaceRequests[session.id];
     var retry = function () {
@@ -4219,35 +5150,266 @@
   if (openWorkbenchButton) openWorkbenchButton.addEventListener("click", openCurrentWorkbench);
   if (continueWorkbenchButton) continueWorkbenchButton.addEventListener("click", openCurrentWorkbench);
 
+  async function recoverManagerRun(session) {
+    var response = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(session.id) + "/runs?limit=30&offset=0", { headers: { Accept: "application/json" } });
+    if (!response.ok) throw new Error("无法恢复管理任务 HTTP " + response.status);
+    var payload = await response.json();
+    if (!Array.isArray(payload.runs) || payload.session_id !== session.id) throw new Error("管理任务记录无效");
+    var live = payload.runs.filter(function (run) {
+      return run && run.run_id && !run.parent_run_id && !run.superseded_by_run_id
+        && (!run.session_id || run.session_id === session.id)
+        && ["queued", "running", "paused", "waiting_confirmation", "waiting_user"].indexOf(run.status) >= 0;
+    }).sort(function (a, b) { return timestampToMillis(b.created_at) - timestampToMillis(a.created_at); })[0];
+    if (live) {
+      session.multiAgentRunId = live.run_id; session.multiAgentSequence = 0;
+      session.runControlStatus = live.status; session.timelineState = live.status === "paused" ? "paused" : "running";
+    }
+  }
+
+  function quickAssistantState(detail) {
+    quickAssistantLastState = detail;
+    window.dispatchEvent(new CustomEvent("lka-quick-assistant-state", { detail: detail }));
+  }
+  function cancelQuickAssistantOpen() {
+    quickAssistantEpoch += 1;
+    quickAssistantPromise = null;
+    quickAssistantLoading = false;
+    managerSessionReady = true;
+    quickAssistantState({ loading: false, manager: null });
+  }
+  function quickAssistantCancelled() {
+    var error = new Error("助手载入已被新的会话选择取消。"); error.name = "AbortError"; return error;
+  }
+  async function quickAssistantRequest(path, method, body) {
+    var host = window.LkaMatterHost;
+    if (host && typeof host.request === "function") {
+      await host.ready;
+      return host.request(path, method || "GET", body);
+    }
+    var response = await fetch(backendBaseUrl + path, { method: method || "GET", headers: { Accept: "application/json", "Content-Type": "application/json" }, body: body === undefined ? undefined : JSON.stringify(body) });
+    var data = await response.json();
+    if (!response.ok) { var failure = new Error("助手连接失败"); failure.status = response.status; failure.detail = data.detail; throw failure; }
+    return data;
+  }
+  async function ensureManagerExecutionWorkspace(manager) {
+    if (manager.controller.default_execution_workspace) return manager;
+    await defaultsReady;
+    var response = await fetch("/pet/session-workspace-parent", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ base_path: runSettings.workspaceParent || "" })
+    });
+    var parent = await response.json();
+    if (!response.ok || !parent.path || ["windows", "linux", "macos"].indexOf(parent.platform) < 0) {
+      throw new Error("默认任务目录准备失败：" + safeText(parent.detail || "前端未返回有效目录"));
+    }
+    try {
+      var updated = await quickAssistantRequest("/managers/" + encodeURIComponent(manager.session.session_id), "PATCH", {
+        expected_revision: manager.controller.revision,
+        default_execution_workspace: { path: parent.path, platform: parent.platform }
+      });
+      if (!updated.session || updated.session.session_id !== manager.session.session_id || !updated.controller
+          || !updated.controller.default_execution_workspace || updated.controller.default_execution_workspace.path !== parent.path
+          || updated.controller.default_execution_workspace.platform !== parent.platform
+          || updated.controller.revision <= manager.controller.revision) throw new Error("后端未确认默认目录已保存");
+      return updated;
+    } catch (error) {
+      // A conflicting writer's choice wins; never blindly retry its revision.
+      if (error.status === 409) {
+        var latest = await quickAssistantRequest("/managers/" + encodeURIComponent(manager.session.session_id));
+        if (latest.controller && latest.controller.default_execution_workspace) return latest;
+      }
+      throw new Error("默认任务目录同步失败，请重试：" + safeText(error.message));
+    }
+  }
+  var managerWorkspaceRequests = Object.create(null);
+  async function prepareManagerConversation(sessionId, supplied) {
+    var epoch = quickAssistantEpoch, scope = assistantCacheEpoch;
+    function selected() { return activeSessionId === sessionId && epoch === quickAssistantEpoch && scope === assistantCacheEpoch; }
+    if (selected()) { managerSessionReady = false; setComposerDisabled(true); }
+    try {
+      if (!managerWorkspaceRequests[sessionId]) {
+        managerWorkspaceRequests[sessionId] = (async function () {
+          var cached = quickAssistantManager && quickAssistantManager.session.session_id === sessionId
+            && quickAssistantManager.controller.default_execution_workspace ? quickAssistantManager : null;
+          var manager = supplied || cached || await quickAssistantRequest("/managers/" + encodeURIComponent(sessionId));
+          if (!manager || !manager.session || manager.session.kind !== "manager" || manager.session.session_id !== sessionId
+              || !manager.controller || manager.controller.session_id !== sessionId
+              || !Number.isSafeInteger(manager.controller.revision) || manager.controller.revision < 1) throw new Error("真理会话身份无效");
+          return ensureManagerExecutionWorkspace(manager);
+        }());
+      }
+      var operation = managerWorkspaceRequests[sessionId];
+      var manager = await operation;
+      if (selected()) {
+        quickAssistantManager = manager; managerSessionReady = true;
+        quickAssistantState({ loading: false, manager: manager }); setComposerDisabled(backendOffline || !!pendingState);
+      }
+      return manager;
+    } catch (error) {
+      if (selected()) {
+        managerSessionReady = false; setComposerDisabled(true);
+        var reason = "真理载入失败：" + quickAssistantErrorMessage(error) + "。请重试。";
+        setRunStatus(reason, "error"); quickAssistantState({ loading: false, error: reason, manager: null });
+      }
+      throw error;
+    } finally { if (managerWorkspaceRequests[sessionId] === operation) delete managerWorkspaceRequests[sessionId]; }
+  }
+  function quickAssistantErrorMessage(error) {
+    if (error.detail === "management_disabled") return "当前后端尚未启用真理";
+    if (error.status === 409 && (error.detail === "default_manager_deleted" || error.detail === "Default management session is unavailable; restore or explicitly replace it")) return "原真理已被删除，请在后端确认默认助手配置后重新连接";
+    if (error.status === 401 || error.status === 403) return "当前连接没有使用真理的权限";
+    if (error.status === 404) return "后端暂不支持真理，请检查服务版本";
+    if (error.status >= 500 || error.status === 0 || error instanceof TypeError || /HTTP \d{3}/.test(safeText(error.message))) return "暂时无法连接助手服务";
+    return safeText(error.message || "助手暂不可用");
+  }
+  function prepareAssistant(options) {
+    if (assistantPreparation) return assistantPreparation;
+    if (!(options && options.refresh) && quickAssistantManager && quickAssistantManager.controller.default_execution_workspace
+        && getSessionById(quickAssistantManager.session.session_id)) return Promise.resolve(quickAssistantManager);
+    var scope = assistantCacheEpoch, startedAt = Date.now();
+    var request = (async function () {
+      var manager = await quickAssistantRequest("/managers/default", "POST");
+      var raw = manager && manager.session, controller = manager && manager.controller;
+      if (!raw || raw.kind !== "manager" || !safeText(raw.session_id).trim() || !controller || controller.session_id !== raw.session_id
+          || !Number.isSafeInteger(controller.revision) || controller.revision < 1 || ["active", "paused"].indexOf(controller.status) < 0) throw new Error("管理会话状态无效，请重试。");
+      if (scope !== assistantCacheEpoch) throw quickAssistantCancelled();
+      manager = await ensureManagerExecutionWorkspace(manager);
+      if (scope !== assistantCacheEpoch) throw quickAssistantCancelled();
+      controller = manager.controller;
+      var existing = getSessionById(raw.session_id);
+      if (!quickAssistantManager || quickAssistantManager.session.session_id !== raw.session_id || !existing) {
+        var detail = await quickAssistantRequest("/sessions/" + encodeURIComponent(raw.session_id));
+        var loaded = sessionFromBackendDetail(detail);
+        if (!isManagerSession(loaded) || loaded.id !== raw.session_id) throw new Error("真理会话类型不匹配，请重试。");
+        await recoverManagerRun(loaded);
+        if (scope !== assistantCacheEpoch) throw quickAssistantCancelled();
+        preparedAssistantId = loaded.id;
+        var latest = getSessionById(loaded.id);
+        if (latest && latest.messages.some(function (item) { return item.queueRequest; })) loaded.messages = mergeQueuedMessages(latest, loaded.messages);
+        // A live conversation can start while default identity/history is loading.
+        // Keep that exact object and its cursor rather than replacing it with an older snapshot.
+        if (isManagerSession(latest) && (managerPendingTurns[latest.id] || managerStreams[latest.id] || latest.updated_at > startedAt)) loaded = latest;
+        else {
+          sessions = sessions.filter(function (item) { return item.id !== loaded.id; });
+          sessions.unshift(loaded);
+        }
+        if (loaded.multiAgentRunId) {
+          saveRunCursor(loaded);
+          if (loaded.runControlStatus !== "paused" || loaded.resumePending) reconnectSavedRun(loaded, null);
+        }
+        persistSessions();
+      }
+      if (!quickAssistantManager || quickAssistantManager.session.session_id !== raw.session_id || quickAssistantManager.controller.revision <= controller.revision) quickAssistantManager = manager;
+      if (activeSessionId === raw.session_id && !quickAssistantLoading) {
+        managerSessionReady = true; setComposerDisabled(backendOffline || !!pendingState);
+      }
+      var preparedSession = getSessionById(raw.session_id);
+      if (options && options.refresh && preparedSession) queueState(preparedSession).unsupported = false;
+      refreshManagerInputs(preparedSession);
+      quickAssistantState({ loading: quickAssistantLoading, manager: quickAssistantManager });
+      return quickAssistantManager;
+    }()).finally(function () { if (assistantPreparation === request) assistantPreparation = null; });
+    assistantPreparation = request;
+    return request;
+  }
+  function openQuickAssistant(options) {
+    if (quickAssistantPromise) return quickAssistantPromise;
+    var epoch = ++quickAssistantEpoch;
+    var prepared = quickAssistantManager && getSessionById(quickAssistantManager.session.session_id);
+    quickAssistantLoading = !prepared; managerSessionReady = !!prepared;
+    if (!prepared) { setComposerDisabled(true); setRunStatus("正在连接真理…"); }
+    quickAssistantState({ loading: !prepared, manager: quickAssistantManager });
+    var request = (async function () {
+      try {
+        var manager = await prepareAssistant(options);
+        if (epoch !== quickAssistantEpoch) throw quickAssistantCancelled();
+        managerSessionReady = true;
+        if (activeSessionId !== manager.session.session_id) {
+          var switched = await switchSession(manager.session.session_id, epoch, manager);
+          if (switched === false || epoch !== quickAssistantEpoch) throw quickAssistantCancelled();
+        }
+        quickAssistantLoading = false;
+        setComposerDisabled(backendOffline || !!pendingState);
+        await refreshManagerInputs();
+        if (!getActiveSession().multiAgentRunId && (queueState(getActiveSession()).supported || queueState(getActiveSession()).unsupported)) setRunStatus("真理已就绪");
+        quickAssistantState({ loading: false, manager: manager });
+        return manager;
+      } catch (error) {
+        if (epoch === quickAssistantEpoch) {
+          quickAssistantLoading = false; managerSessionReady = false;
+          var reason = "真理连接失败：" + quickAssistantErrorMessage(error) + "。可以重试，或开始新任务。";
+          setRunStatus(reason, "error"); setComposerDisabled(true);
+          quickAssistantState({ loading: false, error: reason, manager: null });
+        }
+        throw error;
+      } finally { if (quickAssistantPromise === request) quickAssistantPromise = null; }
+    }());
+    quickAssistantPromise = request;
+    return request;
+  }
+  window.addEventListener("lka-matter-auth-changed", function () {
+    assistantCacheEpoch++; assistantPreparation = null; quickAssistantManager = null; preparedAssistantId = "";
+    managerWorkspaceRequests = Object.create(null);
+    activeAgentTurnGeneration++;
+    if (activeAgentEventController) activeAgentEventController.abort();
+    activeAgentEventController = null; pendingState = null;
+    Object.keys(managerStreams).forEach(function (id) { managerStreams[id].controller.abort(); delete liveAnswers[id]; });
+    managerStreams = Object.create(null); managerPendingTurns = Object.create(null);
+    managerInputQueues = Object.create(null);
+    nativeStreamCallbacks = Object.create(null); nativeTurnGenerations = Object.create(null);
+    cancelQuickAssistantOpen();
+    if (isManagerSession(getActiveSession())) { managerSessionReady = false; setComposerDisabled(true); }
+  });
+  window.__petChatOpenAssistant = function () { return openQuickAssistant().catch(function () { return null; }); };
+
   async function openRequestedSession() {
-    if (!requestedSessionId) { openFreshTask(); return; }
-    var session = getSessionById(requestedSessionId);
+    if (!requestedSessionId) { if (managerEmbedding) { setRunStatus("缺少真理会话，请从助手入口重新打开。", "error"); setComposerDisabled(true); } else openFreshTask(); return; }
+    var requestEpoch = quickAssistantEpoch;
+    managerSessionReady = false;
+    setComposerDisabled(true);
+    var session = managerEmbedding ? null : getSessionById(requestedSessionId);
     if (!session) {
       try {
         var response = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(requestedSessionId));
         if (!response.ok) throw new Error("HTTP " + response.status);
         session = sessionFromBackendDetail(await response.json());
+        if (requestEpoch !== quickAssistantEpoch) return;
         if (!session) throw new Error("会话内容无效");
+        if (managerEmbedding && (session.id !== requestedSessionId || !isManagerSession(session))) throw new Error("真理会话类型不匹配，请从助手入口重新打开。");
+        sessions = sessions.filter(function (item) { return item.id !== session.id; });
+        if (managerEmbedding) await recoverManagerRun(session);
         sessions.unshift(session);
         normalizeSessionBounds();
       } catch (error) {
+        if (requestEpoch !== quickAssistantEpoch) return;
+        if (managerEmbedding) { setRunStatus("真理载入失败：" + safeText(error.message || error) + "。请刷新后重试。", "error"); setComposerDisabled(true); return; }
         openFreshTask();
         setRunStatus("无法继续原任务：" + safeText(error.message || error), "error");
         return;
       }
     }
-    if (requestedRunId && session.multiAgentRunId !== requestedRunId) {
+    if (requestEpoch !== quickAssistantEpoch) return;
+    if (isManagerSession(session)) {
+      activeSessionId = session.id;
+      try { await prepareManagerConversation(session.id); }
+      catch (error) { return; }
+      if (requestEpoch !== quickAssistantEpoch || activeSessionId !== session.id) return;
+    }
+    if (!managerEmbedding && requestedRunId && session.multiAgentRunId !== requestedRunId) {
       session.multiAgentRunId = requestedRunId;
       session.multiAgentSequence = 0;
       session.timelineState = "running";
     }
     activeSessionId = session.id;
+    managerSessionReady = true;
+    setComposerDisabled(backendOffline);
     showDraftForSession(session);
     fileRelativePath = "";
     renderSessionList();
     renderActiveMessages();
     renderWorkspaceSummary(session);
     refreshActiveMultiAgentSnapshot();
+    refreshManagerInputs();
     reconnectActiveSavedRun();
     loadFileList();
     persistSessions();
@@ -4350,7 +5512,8 @@
     else setSettingsOpen(true);
   });
   document.addEventListener("keydown", function (event) {
-    if ((window.LkaProjects && window.LkaProjects.isOpen()) ||
+    if ((window.LkaMatters && window.LkaMatters.isOpen()) ||
+        (window.LkaProjects && window.LkaProjects.isOpen()) ||
         (document.getElementById("memoryOverlay") && !document.getElementById("memoryOverlay").hidden) ||
         (document.getElementById("memoryEditorOverlay") && !document.getElementById("memoryEditorOverlay").hidden) ||
         (document.getElementById("workspacePicker") && !document.getElementById("workspacePicker").hidden)) return;
@@ -4394,6 +5557,7 @@
   function switchWorkspace(requestedWorkspace, expectedSessionId) {
     var session = getActiveSession();
     if (!session || (expectedSessionId && expectedSessionId !== session.id)) throw new Error("会话已改变，请重新选择工作目录。");
+    if (managerEmbedding || isManagerSession(session)) throw new Error("真理不绑定工作目录，请在普通任务会话中操作文件。");
     if (pendingState) throw new Error("请等待当前任务完成后切换工作目录。");
     requestedWorkspace = safeText(requestedWorkspace).trim();
     if (requestedWorkspace === safeText(session.workspace).trim()) return Promise.resolve(true);
@@ -4457,8 +5621,17 @@
   loadDeletedSessionIds();
   loadDeletedSessionSnapshots();
   loadSessions();
+  sessions.forEach(function (session) {
+    session.messages.forEach(function (message) {
+      if (message.queueRequest && message.inputStatus === "submitting") { message.inputStatus = "submission_failed"; message.inputError = "窗口已重新打开，请重试核对发送结果"; }
+    });
+  });
+  if (quickAssistantDefault) { activeSessionId = ""; setComposerDisabled(true); }
+  if (globalAssistantLaunch) showDraftForSession(getActiveSession());
+  if (managerEmbedding) { sessions = []; activeSessionId = ""; input.placeholder = "和真理聊聊目标、进展或下一步…"; setComposerDisabled(true); }
   setRailTab(activeRailTab);
-  openRequestedSession();
+  if (quickAssistantDefault) Promise.resolve().then(openQuickAssistant).catch(function () {});
+  else openRequestedSession();
   refreshSafetyReviewQueue();
   syncSessionsFromBackend();
   loadHistoryPage(true);
@@ -4470,6 +5643,65 @@
   };
 
   window.LkaChatContext = {
+    preferences: function () {
+      return {
+        modelValue: llmModelInput ? llmModelInput.value : "",
+        models: llmModelInput ? Array.from(llmModelInput.options).map(function (option) {
+          var group = option.parentElement.tagName === "OPTGROUP" ? option.parentElement.label : "";
+          return { value: option.value, label: (group ? group + " / " : "") + option.textContent };
+        }) : [],
+        safetyMode: safetyModeSelect ? safetyModeSelect.value : "backend",
+        stream: streamToggle ? streamToggle.checked : true,
+        saveError: !!defaultsSaveError
+      };
+    },
+    preferencesReady: async function (refreshModels) {
+      await defaultsReady;
+      if (refreshModels || !modelCatalog) await loadModelCatalog(!!refreshModels);
+    },
+    savePreferences: async function (values) {
+      if (Object.prototype.hasOwnProperty.call(values, "modelValue")) llmModelInput.value = values.modelValue;
+      if (Object.prototype.hasOwnProperty.call(values, "safetyMode")) safetyModeSelect.value = values.safetyMode;
+      if (Object.prototype.hasOwnProperty.call(values, "stream")) streamToggle.checked = values.stream;
+      await saveDefaultPreferences();
+      if (defaultsSaveError) throw defaultsSaveError;
+    },
+    acceptAssistantSettings: function (value) {
+      var session = getActiveSession();
+      if (!isManagerSession(session) || !value || !value.session || value.session.session_id !== session.id || !value.controller) return;
+      if (quickAssistantManager && quickAssistantManager.controller.revision > value.controller.revision) return;
+      quickAssistantManager = value;
+      quickAssistantState({ loading: false, manager: value });
+    },
+    syncPanels: syncWorkbenchPanels,
+    restoreAssistantConversation: async function (id) {
+      var session = getSessionById(id), generation = activeAgentTurnGeneration;
+      if (!isManagerSession(session) || activeSessionId !== id || pendingState) return false;
+      if (session.multiAgentRunId && !isTerminalRunStatus(session.runControlStatus)) return false;
+      var candidate = Object.assign({}, session);
+      await recoverManagerRun(candidate);
+      if (activeSessionId !== id || generation !== activeAgentTurnGeneration || pendingState || !candidate.multiAgentRunId) return false;
+      session.multiAgentRunId = candidate.multiAgentRunId; session.multiAgentSequence = candidate.multiAgentSequence;
+      session.runControlStatus = candidate.runControlStatus; session.timelineState = candidate.timelineState;
+      saveRunCursor(session); persistSessions(); renderActiveMessages(); reconnectActiveSavedRun();
+      return true;
+    },
+    ensureAssistantWorkspace: function (manager) {
+      return prepareManagerConversation(manager.session.session_id, manager);
+    },
+    prepareAssistant: prepareAssistant,
+    openAssistant: openQuickAssistant,
+    assistantState: function () { return Object.assign({}, quickAssistantLastState); },
+    refreshConversation: refreshManagerConversation,
+    prepareMatterDraft: function (text) {
+      var session = getActiveSession();
+      var draft = safeText(input.value || readDraft(activeSessionId));
+      var next = (draft ? draft + "\n" : "") + text;
+      input.value = next; writeDraft(activeSessionId, next);
+      if (session) showDraftForSession(session);
+      input.dispatchEvent(new Event("input", { bubbles: true }));
+      focusComposer(true);
+    },
     setWorkspace: switchWorkspace,
     prepareWorkspace: async function (sessionId) {
       var session = getSessionById(sessionId);
@@ -4480,6 +5712,8 @@
         if (creating && session.id.indexOf("conv_") !== 0) throw new Error("会话已失效，请刷新后重新选择。");
       }
       assertCurrent();
+      if (isManagerSession(session)) throw new Error("真理不绑定工作目录，请通过附件按钮上传文件。");
+      if (managerEmbedding) throw new Error("真理会话尚未载入。");
       fileWorkspacePreparations.push(session);
       try {
         if (!await workspaceSwitchPromise) throw new Error("请先完成工作区切换。");
@@ -4505,14 +5739,16 @@
     prepareAttachments: async function (sessionId) {
       var session = getSessionById(sessionId);
       if (!session || deletedSessionIds[sessionId]) throw new Error("会话已关闭，请重新选择图片。");
+      if (isManagerSession(session)) return session.id;
+      if (managerEmbedding) throw new Error("真理会话尚未载入。");
       if (!await workspaceSwitchPromise) throw new Error("请先完成工作区切换。");
       await ensureSessionWorkspace(session);
       return bindSessionWorkspace(session);
     },
     get: function () {
       var session = getActiveSession();
-      return { backend: backendBaseUrl, workMode: workMode, sessionId: session ? session.id : "",
-        workspace: session ? session.workspace || "" : "", projectId: session ? session.project_id || "" : "", busy: !!pendingState };
+      return { backend: backendBaseUrl, workMode: workMode, sessionId: session ? session.id : "", kind: session ? session.kind : "",
+        workspace: session ? session.workspace || "" : "", projectId: session ? session.project_id || "" : "", busy: !!pendingState || !!(session && session.multiAgentRunId && ["queued", "running", "waiting_confirmation", "waiting_user"].indexOf(session.runControlStatus) >= 0) };
     },
     startProjectDraft: function (project) {
       if (pendingState) throw new Error("请等待当前任务完成后选择项目。");
@@ -4588,10 +5824,20 @@
   });
   window.setInterval(function () {
     if (document.hidden) return;
+    refreshActiveRunState();
+    var selected = getActiveSession(), prepared = getSessionById(preparedAssistantId);
+    if (isManagerSession(selected)) refreshManagerInputs(selected);
+    if (isManagerSession(prepared) && (!selected || selected.id !== prepared.id)) refreshManagerInputs(prepared);
+  }, 2500);
+
+  window.setInterval(function () {
+    if (document.hidden) return;
     syncSessionsFromBackend();
     loadHistoryPage(true);
     refreshActiveRunState();
   }, 15000);
+
+  window.addEventListener("lka-global-assistant-layout", syncWorkbenchPanels);
 
   window.addEventListener("load", function () {
     focusComposer();

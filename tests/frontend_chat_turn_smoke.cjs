@@ -69,6 +69,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { project_id: 'synthetic-project' });
   }
   if (url.pathname === '/agent/turn/stream') {
+    if (failAgentTurn) return json(res, 502, { detail: 'synthetic_agent_failure' });
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
     res.write('event: llm_started\ndata: {"stage":"synthetic"}\n\n');
     pushStreamEvent = (event, data) => res.write('event: ' + event + '\ndata: ' + JSON.stringify(Object.assign({ type: event }, data)) + '\n\n');
@@ -410,7 +411,11 @@ const server = http.createServer(async (req, res) => {
     assert.equal(await quick.locator('#messages .message').count(), 0, 'quick mode has no greeting occupying space');
     assert.equal(await quick.locator('.context-strip').isVisible(), false, 'workspace controls are not in the resting quick window');
     assert.equal(await quick.locator('#questionInput').isVisible(), true);
-    assert(await quick.evaluate(() => window.__panelHeights.at(-1) <= 45), 'native content starts with only the compact toolbar');
+    await quick.locator('#quickAssistantBar').waitFor();
+    await quick.waitForFunction(() => window.__panelHeights.at(-1) >= document.getElementById('quickAssistantBar').getBoundingClientRect().height + 25);
+    const emptyPanelHeight = await quick.evaluate(() => window.__panelHeights.at(-1));
+    const quickIdentityHeight = await quick.locator('#quickAssistantBar').evaluate(el => Math.ceil(el.getBoundingClientRect().height));
+    assert(emptyPanelHeight <= 100, 'empty quick mode stays compact with its identity bar and toolbar');
     await quick.screenshot({ path: path.resolve(ROOT, '../../../.runtime/quick-chat-preview/empty.png') });
     const createsBeforeEmptyHandoff = requests.filter(r => r.method === 'POST' && r.path === '/sessions').length;
     assert.equal(await quick.evaluate(() => window.__petChatOpenWorkbench()), true);
@@ -435,7 +440,7 @@ const server = http.createServer(async (req, res) => {
     await quick.locator('#questionInput').press('Enter');
     await quick.waitForFunction(() => window.__sentPayload);
     assert.equal(await quick.locator('#messages .message.user').count(), 1);
-    await quick.waitForFunction(() => window.__panelHeights.at(-1) > 45);
+    await quick.waitForFunction(height => window.__panelHeights.at(-1) > height, emptyPanelHeight);
     await quick.locator('#questionInput').fill('下一条草稿');
     assert.equal(await quick.locator('#questionInput').isEnabled(), true, 'busy quick mode keeps input editable');
     assert.equal(await quick.locator('#sendButton').isDisabled(), true);
@@ -459,7 +464,7 @@ const server = http.createServer(async (req, res) => {
       approval.innerHTML = '<h3>需要确认</h3><p>合成操作说明</p><button>允许执行</button>'; approval.hidden = false;
     });
     await quick.waitForFunction(() => window.__panelHeights.at(-1) >= 310);
-    await quick.setViewportSize({ width: 420, height: 552 });
+    await quick.setViewportSize({ width: 420, height: 552 + quickIdentityHeight });
     assert.equal(await quick.locator('#approvalQueueStatus button').isVisible(), true, 'quick approval is visible in the expanded window');
     await quick.evaluate(() => {
       document.getElementById('approvalQueueStatus').hidden = true;
@@ -499,7 +504,7 @@ const server = http.createServer(async (req, res) => {
     await quick.screenshot({ path: path.resolve(ROOT, '../../../.runtime/quick-chat-preview/short.png') });
     const beforeResize = await quick.locator('#messages').evaluate(el => el.clientHeight);
     const preferenceBeforeResize = await quick.evaluate(() => window.__panelHeights.at(-1));
-    await quick.setViewportSize({ width: 520, height: 702 });
+    await quick.setViewportSize({ width: 520, height: 702 + quickIdentityHeight });
     await quick.waitForTimeout(80);
     assert(await quick.locator('#messages').evaluate((el, previous) => el.clientHeight >= previous + 145, beforeResize), 'dragging taller gives the space to the transcript');
     assert(await quick.locator('#questionInput').evaluate(el => el.getBoundingClientRect().bottom <= innerHeight), 'composer stays visible after resizing');
@@ -539,7 +544,7 @@ const server = http.createServer(async (req, res) => {
     await quick.waitForFunction(() => document.getElementById('quickButtonTooltip').hidden);
 
     await quick.locator('#newQuickSessionButton').click();
-    await quick.waitForFunction(() => window.__panelHeights.at(-1) <= 45);
+    await quick.waitForFunction(height => window.__panelHeights.at(-1) <= height + 2, emptyPanelHeight);
     assert.equal(await quick.locator('#messages .message').count(), 0, 'new task collapses the conversation');
     await quick.evaluate(() => window.__petChatBridgeReady());
     assert.equal(await quick.locator('#questionInput').isVisible(), false, 'native mode uses the native IME composer');
@@ -610,7 +615,8 @@ const server = http.createServer(async (req, res) => {
     assert.equal(await quickStream.locator('#runTimelineList').evaluate(el => getComputedStyle(el).maxHeight), 'none', 'process text uses the full transcript rather than a second tiny scroll box');
     await quickStream.evaluate(() => window.__petChatReceiveStream('llm_delta', { payload: { display_target: 'assistant_answer', content_snapshot: '**先到的文字**' } }));
     await quickStream.waitForFunction(() => document.querySelector('#messages .agent-live-output .message-content')?.innerText.includes('先到的文字'));
-    assert.equal(await quickStream.locator('#sendButton').isDisabled(), true);
+    assert.equal(await quickStream.locator('#sendButton').getAttribute('data-action'), 'pause', 'running task without a new draft exposes pause through the composer button');
+    assert.equal(await quickStream.locator('#sendButton').isDisabled(), false);
     // Simulate a view replacement while a stream still owns its old body reference.
     await quickStream.evaluate(() => {
       document.querySelector('#messages .agent-live-output').remove();
@@ -662,6 +668,27 @@ const server = http.createServer(async (req, res) => {
     assert((await destination.locator('#messages').innerText()).includes('已有会话里的合成问题'));
     assert.equal(await destination.locator('#messages .message.assistant .markdown-body strong').innerText(), '已有会话里的合成回答');
     assert.equal(requests.filter(r => r.method === 'POST' && r.path === '/sessions').length, createsBeforeExisting);
+    const fixedLayout = await destination.evaluate(() => {
+      const tools = document.querySelector('.sidebar-tools').getBoundingClientRect();
+      const first = document.querySelector('#sessionList .session-item').getBoundingClientRect();
+      const user = document.querySelector('#messages .message.user'), row = user.getBoundingClientRect(), bubble = user.querySelector('.bubble').getBoundingClientRect();
+      return { historyGap: first.top - tools.bottom, userRightGap: row.right - bubble.right };
+    });
+    assert(fixedLayout.historyGap >= 0 && fixedLayout.historyGap < 24, 'history begins below search; the assistant navigation row cannot stretch search to the bottom');
+    assert(Math.abs(fixedLayout.userRightGap) < 2, 'memory action cannot push the user bubble left');
+    await destination.route('**/__layoutfont', route => route.fulfill({ path:'/mnt/c/Windows/Fonts/msyh.ttc', contentType:'font/collection' }));
+    await destination.addStyleTag({ content:"@font-face{font-family:LayoutChinese;src:url('/__layoutfont')}body,button,input,select,textarea{font-family:LayoutChinese,sans-serif!important}" });
+    await destination.evaluate(() => document.fonts.ready);
+    await destination.screenshot({ path:'/tmp/lka-workbench-aligned.png' });
+    for (const [width,height] of [[1440,900],[1180,760],[900,700],[390,844]]) {
+      await destination.setViewportSize({width,height});
+      const fitted = await destination.evaluate(() => {
+        const main = document.querySelector('.chat-main'), toolbar = document.querySelector('.chat-topbar'), composer = document.querySelector('#chatForm');
+        const box = composer.getBoundingClientRect();
+        return main.scrollWidth <= main.clientWidth + 1 && toolbar.scrollWidth <= toolbar.clientWidth + 1 && box.bottom <= innerHeight + 1 && document.getElementById('questionInput').getBoundingClientRect().width > 60;
+      });
+      assert(fitted, 'workbench toolbar and composer fit '+width+'x'+height);
+    }
     assert.equal(failures.length, 0, failures.join('\n'));
     await sourceContext.close(); await destinationContext.close();
 

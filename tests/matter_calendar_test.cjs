@@ -1,0 +1,64 @@
+const assert = require('node:assert/strict');
+const fs = require('node:fs');
+const path = require('node:path');
+const vm = require('node:vm');
+const originalTimezone = process.env.TZ;
+function runTimezone(timezone) {
+process.env.TZ = timezone;
+const window = {};
+vm.runInNewContext(fs.readFileSync(path.join(__dirname, '../app/web/pet/matter-calendar.js'), 'utf8'), { window });
+const c = window.LkaMatterCalendar;
+const plain = x => JSON.parse(JSON.stringify(x));
+assert.equal(c.dateFromKey('2026-02-30'), null);
+assert.equal(c.dateFromKey('not-a-date'), null);
+assert.equal(c.dayKey(c.dateFromKey('2026-10-19')), '2026-10-19');
+let range = c.range('week', '2026-10-21');
+assert.equal(range.start, '2026-10-19'); assert.equal(range.end, '2026-10-26'); assert.equal(range.days.length, 7);
+range = c.range('month', '2026-10-21');
+assert.equal(range.start, '2026-09-28'); assert.equal(range.end, '2026-11-09'); assert.equal(range.days.length, 42);
+assert.equal(c.range('agenda', '2026-10-21').days.length, 14);
+let patch = c.schedulePatch({}, '2026-10-21', '09:30');
+assert.equal(new Date(patch.scheduled_start).getHours(), 9);
+assert.equal(new Date(patch.scheduled_start).getMinutes(), 30);
+assert.equal(new Date(patch.scheduled_end) - new Date(patch.scheduled_start), 30 * 60000);
+assert.equal(patch.scheduled_on, null);
+assert.deepEqual(plain(c.schedulePatch({}, '2026-10-21')), { scheduled_on: '2026-10-21', scheduled_start: null, scheduled_end: null });
+const task = { matter_id: 'timed', kind: 'action', ...patch, due_at: '2026-10-23T12:00:00+08:00' };
+let moved = c.schedulePatch(task, '2026-10-22');
+assert.equal(c.dayKey(new Date(moved.scheduled_start)), '2026-10-22');
+assert.equal(new Date(moved.scheduled_start).getHours(), 9);
+assert.equal(new Date(moved.scheduled_end) - new Date(moved.scheduled_start), 30 * 60000);
+assert.equal(Object.hasOwn(moved, 'due_at'), false, 'drag does not rewrite deadlines');
+assert.equal(Object.hasOwn(moved, 'title'), false);
+assert.deepEqual(plain(c.schedulePatch(task, '2026-10-23', null)), { scheduled_on: '2026-10-23', scheduled_start: null, scheduled_end: null });
+assert.throws(() => c.schedulePatch(task, '2026-10-23', '10:00', 0), /greater than zero/);
+assert.throws(() => c.schedulePatch(task, '2026-10-23', '25:00'), /Invalid calendar time/);
+assert.throws(() => c.schedulePatch(task, '2026-02-30', '10:00'), /Invalid calendar date/);
+const zeroLength = { scheduled_start: '2026-10-21T09:00:00', scheduled_end: '2026-10-21T09:00:00' };
+patch = c.schedulePatch(zeroLength, '2026-10-22');
+assert.equal(new Date(patch.scheduled_end) - new Date(patch.scheduled_start), 30 * 60000, 'legacy zero duration receives explicit default');
+const precision = { scheduled_start: '2026-10-21T09:01:22.123', scheduled_end: '2026-10-21T10:03:44.567' };
+patch = c.schedulePatch(precision, '2026-10-22');
+assert.equal(new Date(patch.scheduled_end) - new Date(patch.scheduled_start), new Date(precision.scheduled_end) - new Date(precision.scheduled_start));
+assert.equal(new Date(patch.scheduled_start).getSeconds(), 22);
+const beforeDst = { scheduled_start: '2026-03-07T09:30:00', scheduled_end: '2026-03-07T11:00:00' };
+patch = c.schedulePatch(beforeDst, '2026-03-08');
+assert.equal(new Date(patch.scheduled_start).getHours(), 9, 'moving across DST retains local wall clock');
+assert.equal(new Date(patch.scheduled_end) - new Date(patch.scheduled_start), 90 * 60000, 'moving across DST retains elapsed duration');
+const dueOnly = { matter_id: 'due', due_at: '2026-10-21' };
+const allDay = { matter_id: 'all-day', scheduled_on: '2026-10-21', due_at: '2026-10-22' };
+let items = c.visibleItems([task, dueOnly, allDay], 'week', '2026-10-21');
+assert.equal(items.filter(i => i.record.matter_id === 'due').length, 1);
+assert.equal(items.find(i => i.record.matter_id === 'due').type, 'deadline', 'deadline alone never creates a scheduled block');
+assert.equal(items.filter(i => i.record.matter_id === 'all-day').length, 2, 'scheduled time and deadline remain distinct markers');
+const many = Array.from({ length: 100 }, (_, i) => ({ matter_id: 'a' + i, scheduled_on: '2026-10-21' }));
+assert.equal(c.visibleItems(many, 'week', '2026-10-21').length, 100, 'calendar does not truncate complete cache');
+assert.equal(c.visibleItems([{ ...allDay, project_id: 'other' }], 'week', '2026-10-21', 'selected').length, 0);
+const overnight = { matter_id: 'overnight', scheduled_start: '2026-10-21T23:30:00', scheduled_end: '2026-10-22T01:00:00' };
+items = c.visibleItems([overnight], 'week', '2026-10-21');
+assert.deepEqual(plain(items.map(i => i.day)), ['2026-10-21', '2026-10-22']);
+console.log(`matter_calendar_test (${process.env.TZ}): all assertions passed`);
+
+}
+try { for (const timezone of ['Asia/Shanghai', 'America/Los_Angeles']) runTimezone(timezone); }
+finally { if (originalTimezone === undefined) delete process.env.TZ; else process.env.TZ = originalTimezone; }

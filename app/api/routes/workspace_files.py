@@ -37,8 +37,8 @@ class _ClosingStreamingResponse(StreamingResponse):
         finally:
             self._close_callback()
 
-_MAX_UPLOAD_BYTES = 64 * 1024 * 1024
-_MAX_DOWNLOAD_BYTES = 128 * 1024 * 1024
+_MAX_UPLOAD_BYTES = 256 * 1024 * 1024
+_MAX_DOWNLOAD_BYTES = 256 * 1024 * 1024
 _MAX_SESSION_RESPONSE = 16 * 1024 * 1024
 _CHUNK_SIZE = 256 * 1024
 _DEVICE_NAMES = {"con", "prn", "aux", "nul", *(f"com{i}" for i in range(1, 10)),
@@ -179,7 +179,7 @@ class _SafeDirectory:
                 return self
             except OSError as exc:
                 self.close()
-                if exc.errno in {2, 20}:
+                if exc.errno == 2:
                     raise HTTPException(404, "Workspace directory not found") from None
                 if exc.errno in {13, 40, _not_a_directory_errno()}:
                     raise HTTPException(409, "Workspace path is unsafe or unavailable") from None
@@ -414,7 +414,7 @@ async def upload_workspace_file(
         async for chunk in request.stream():
             size += len(chunk)
             if size > _MAX_UPLOAD_BYTES:
-                raise HTTPException(413, "File exceeds the 64 MiB upload limit")
+                raise HTTPException(413, "File exceeds the 256 MiB upload limit")
             await _critical_to_thread(_write_all, stream, chunk)
         await _critical_to_thread(stream.flush)
         await _critical_to_thread(os.fsync, stream.fileno())
@@ -487,7 +487,7 @@ async def download_workspace_file(
         if not stat.S_ISREG(metadata.st_mode):
             raise HTTPException(404, "Workspace file not found")
         if metadata.st_size > _MAX_DOWNLOAD_BYTES:
-            raise HTTPException(413, "File exceeds the 128 MiB download limit")
+            raise HTTPException(413, "File exceeds the 256 MiB download limit")
         file_stream = os.fdopen(fd, "rb", buffering=0)
         fd = None
         filename = relative_parts[-1]

@@ -36,7 +36,8 @@ const server=http.createServer((req,res)=>{
  if(!file.startsWith(ROOT+path.sep)){res.writeHead(403);return res.end();}
  if(url.pathname==='/chat.html'){
   let text=fs.readFileSync(file,'utf8').replace(/<script src="\.\/(chat|memory|projects)\.js[^>]*><\/script>/g,'');
-  text=text.replace(/<script src="\.\/message-ui-api\.js[^>]*><\/script>/,'<script>('+bootstrap.toString()+')();</script>');
+  text=text.replace(/<script src="\.\/message-ui-api\.js[^>]*><\/script>/,'');
+  text=text.replace('<script src="./matters-host.js', '<script>('+bootstrap.toString()+')();</script><script src="./matters-host.js');
   res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(text);
  }
  if(fs.existsSync(file)&&fs.statSync(file).isFile()){res.writeHead(200,{'content-type':({'.js':'text/javascript','.css':'text/css','.svg':'image/svg+xml','.woff2':'font/woff2'})[path.extname(file)]||'application/octet-stream'});return fs.createReadStream(file).pipe(res);}

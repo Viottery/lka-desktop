@@ -17,7 +17,7 @@ const statuses = [];
 const context = {
   runProcesses: {}, activeSessionId: 's', Date, Array, Number, String, isFinite,
   safeText: value => value == null ? '' : String(value),
-  getSessionById: () => live, renderRunTimeline: () => {}, persistSessions: () => {},
+  getSessionById: () => live, renderRunTimeline: () => {}, renderRunControls: () => {}, persistSessions: () => {},
   setRunStatus: (message, status) => statuses.push({message, status}),
 };
 vm.createContext(context);

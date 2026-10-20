@@ -1,12 +1,15 @@
 (function () {
   'use strict';
-  var MAX_BYTES = 10 * 1024 * 1024, MAX_SOURCE_BYTES = 20 * 1024 * 1024, MAX_ATTACHMENTS = 4, MAX_PIXELS = 4000000, MAX_DOCUMENT_BYTES = 64 * 1024 * 1024;
+  var MAX_BYTES = 256 * 1024 * 1024, MAX_SOURCE_BYTES = 256 * 1024 * 1024, MAX_ATTACHMENTS = 4, MAX_PIXELS = 4000000, MAX_DOCUMENT_BYTES = 256 * 1024 * 1024, MAX_AUDIO_BYTES = 256 * 1024 * 1024, MAX_AUDIO_IMAGE_BYTES = 12 * 1024 * 1024;
   var types = ['image/png', 'image/jpeg', 'image/webp'];
   var drafts = Object.create(null), items = Object.create(null), metadataCache = Object.create(null);
   var documentExtensions = ['.txt', '.text', '.md', '.pdf', '.docx', '.pptx', '.xlsx', '.xls', '.html', '.htm', '.epub', '.csv', '.json', '.xml', '.msg'];
+  var audioExtensions = ['.wav', '.mp3', '.m4a'];
   var catalogPromise = null;
   function sendable(item) { return item.kind !== 'file' && !item.cache_id; }
-  function kindOf(value) { return value.kind === 'document' ? 'document' : value.kind === 'image' || types.indexOf(value.media_type) >= 0 ? 'image' : 'unknown'; }
+  function kindOf(value) { return value.kind === 'audio' ? 'audio' : value.kind === 'document' ? 'document' : value.kind === 'image' || types.indexOf(value.media_type) >= 0 ? 'image' : 'unknown'; }
+  function audioImageBytes(sessionId) { return list(sessionId).reduce(function (total, item) { return total + (item.kind === 'audio' ? Number(item.input_size_bytes) || Number(item.size_bytes) || 0 : item.kind === 'image' ? Number(item.size_bytes) || 0 : 0); }, 0); }
+  function hasAudio(sessionId) { return list(sessionId).some(function (item) { return item.kind === 'audio'; }); }
   function warnings(value) { var data = value && value.extraction && value.extraction.warnings; return (Array.isArray(data) ? data : []).slice(0, 8).map(function (text) { return String(text).slice(0, 300); }); }
   function sizeLabel(size) { return size >= 1048576 ? (size / 1048576).toFixed(1) + ' MiB' : Math.max(1, Math.ceil(size / 1024)) + ' KiB'; }
   function ensureCatalog() {
@@ -18,7 +21,7 @@
       documentExtensions = data.file_types.filter(function (item) { return item.index_supported === true; }).reduce(function (all, item) {
         return all.concat((Array.isArray(item.extensions) ? item.extensions : []).filter(function (extension) { return /^\.[a-z0-9]{1,12}$/.test(extension); }));
       }, []);
-      fileInput.accept = ['.png', '.jpg', '.jpeg', '.webp'].concat(documentExtensions).join(',');
+      fileInput.accept = ['.png', '.jpg', '.jpeg', '.webp'].concat(audioExtensions, documentExtensions).join(',');
     }).catch(function () {});
     return catalogPromise;
   }
@@ -40,7 +43,8 @@
       if (!attachmentId && !localId) return null;
       return { attachment_id: attachmentId, local_id: localId, filename: String(value.filename || '附件').slice(0, 120),
         kind: kindOf(value), media_type: String(value.media_type || '').slice(0, 128), size_bytes: Math.max(0, Number(value.size_bytes) || 0),
-        total_chars: Math.max(0, Number(value.total_chars) || 0), extraction: { warnings: warnings(value) } };
+        audio_format: ['wav', 'mp3'].indexOf(value.audio_format) >= 0 ? value.audio_format : '', source_format: ['wav', 'mp3', 'm4a'].indexOf(value.source_format) >= 0 ? value.source_format : '', duration_ms: Math.max(0, Number(value.duration_ms) || 0),
+        input_size_bytes: Math.max(0, Number(value.input_size_bytes) || 0), sample_rate: Math.max(0, Number(value.sample_rate) || 0), channels: Math.max(0, Number(value.channels) || 0), total_chars: Math.max(0, Number(value.total_chars) || 0), extraction: { warnings: warnings(value) } };
     }).filter(Boolean);
   }
   function fromIds(ids) { return normalize((Array.isArray(ids) ? ids : []).map(function (value) { return { attachment_id: value, filename: '附件' }; })); }
@@ -49,7 +53,7 @@
     Object.keys(drafts).slice(-24).forEach(function (sessionId) {
       var values = list(sessionId).filter(function (item) { return item.attachment_id || item.cache_id; }).map(function (item) {
         return { attachment_id: item.attachment_id || '', cache_id: item.cache_id || '', filename: item.filename,
-          media_type: item.media_type, size_bytes: item.size_bytes, kind: item.kind };
+          media_type: item.media_type, size_bytes: item.size_bytes, kind: item.kind, audio_format: item.audio_format, source_format: item.source_format, duration_ms: item.duration_ms, input_size_bytes: item.input_size_bytes, sample_rate: item.sample_rate, channels: item.channels };
       });
       if (values.length) saved[sessionId] = values;
     });
@@ -92,12 +96,16 @@
       'The document is unreadable or contains no extractable text.': '文档无法解析，可能已加密、损坏或没有可提取的文字。',
       'The PDF is unreadable or has no extractable text. Scanned PDFs require OCR.': 'PDF 没有可提取的文字，可能是扫描件；请先 OCR 或改为图片上传。',
       'The document contains too much extraction metadata.': '文档结构过于复杂，请拆分后上传。',
-      'Document exceeds the 64 MiB upload limit.': '文档超过 64 MiB，请拆分或缩小后上传。',
+      'Attachment exceeds the 256 MiB upload limit.': '附件超过 256 MiB，请拆分或缩小后上传。',
+      'Attachment exceeds 256 MiB.': '附件超过 256 MiB，请拆分或缩小后上传。',
+      'Normalized audio exceeds 12 MiB.': '转换后的音频超过 12 MiB，请缩短后上传。',
+      'Normalized audio exceeds 12 MiB or is empty.': '转换后的音频为空或超过 12 MiB，请检查文件。',
+      'Document exceeds the 256 MiB upload limit.': '文档超过 256 MiB，请拆分或缩小后上传。',
       'Unsupported attachment file type.': '暂不支持这个文件类型，请选择文档或图片。',
       'Document media type does not match its filename.': '文件内容类型和名称不匹配，请检查格式。',
       'Invalid, encrypted or unreadable document, or no extractable text.': '文档无法解析，可能已加密、损坏或没有可提取的文字。',
       'Invalid, encrypted or unreadable document, or no extractable text. PDF text-layer extraction only; scanned PDFs require separate OCR.': 'PDF 没有可提取的文字，可能是扫描件；请先 OCR 或改为图片上传。',
-      'Image exceeds the 10 MiB upload limit.': '图片超过 10 MiB，请缩小后再上传。',
+      'Image exceeds the 256 MiB upload limit.': '图片超过 256 MiB，请缩小后再上传。',
       'Image exceeds the four million pixel limit.': '图片超过 400 万像素，请缩小后再上传。',
       'Animated or multi-frame images are not supported.': '当前只支持静态图片，请选择一张单帧图片。',
       'Choose a PNG, JPEG, or WebP image.': '请选择 PNG、JPEG 或 WebP 图片。',
@@ -108,7 +116,7 @@
     };
     if (explanations[detail]) return explanations[detail];
     if (detail && detail !== 'workbench_request_failed') return detail;
-    if (response.status === 413) return '附件太大：文档最多 64 MiB，图片上传最多 10 MiB、400 万像素。';
+    if (response.status === 413) return '附件太大：文档最多 256 MiB，图片上传最多 256 MiB、400 万像素。';
     if (response.status === 415) return '请选择支持的文档格式，或 PNG、JPEG、WebP 图片。';
     if (response.status === 422) return '附件无法使用，请检查文件格式、加密状态和图片模型能力。';
     if (response.status === 404) return '会话或附件不存在，请确认后端已更新并重新选择文件。';
@@ -118,13 +126,13 @@
   async function upload(item, sessionId) {
     if (item.attachment_id) return item;
     if (!item.file) throw new Error('这个附件的本地草稿已失效，请重新选择。');
-    item.status = item.kind === 'document' ? '上传并解析…' : '上传中…'; refresh();
+    item.status = item.kind === 'audio' ? '上传并处理音频…' : item.kind === 'document' ? '上传并解析…' : '上传中…'; refresh();
     // JavaFX 21's HTTP2Loader cannot open the file-backed body produced for
     // an in-memory File. Send byte-array form data in the native WebView instead.
     // Ordinary browsers keep their streaming File upload to avoid a second copy.
     var controller = typeof AbortController === 'function' ? new AbortController() : null;
     var timer, response, data;
-    var timeout = item.kind === 'document' ? 240000 : 60000;
+    var timeout = 600000;
     try {
       var result = await Promise.race([
         (async function () {
@@ -172,15 +180,21 @@
         image.src = item.preview || (item.attachment_id ? rawUrl(sessionId, item.attachment_id) : '');
         card.appendChild(image);
       }
-      if (item.kind === 'document') { var icon = document.createElement('span'); icon.className = 'attachment-file-type'; icon.textContent = (item.filename.split('.').pop() || '文件').toUpperCase().slice(0, 6); card.appendChild(icon); }
+      if (item.kind === 'document' || item.kind === 'audio') { var icon = document.createElement('span'); icon.className = 'attachment-file-type'; icon.textContent = (item.filename.split('.').pop() || '文件').toUpperCase().slice(0, 6); card.appendChild(icon); }
       var name = document.createElement('strong'); name.textContent = item.filename; name.title = item.filename; card.appendChild(name);
-      var status = document.createElement('small'); status.textContent = (item.size_bytes ? sizeLabel(item.size_bytes) + ' · ' : '') + (item.status || '待发送'); status.title = warnings(item).join('\n'); card.appendChild(status);
+      var status = document.createElement('small'); var audioInfo = item.kind === 'audio' ? [item.duration_ms ? Math.floor(item.duration_ms / 60000) + ':' + String(Math.floor(item.duration_ms / 1000) % 60).padStart(2, '0') : '', item.sample_rate ? item.sample_rate + ' Hz' : '', item.channels ? item.channels + ' 声道' : ''].filter(Boolean).join(' · ') : ''; status.textContent = (item.size_bytes ? sizeLabel(item.size_bytes) + ' · ' : '') + (audioInfo ? audioInfo + ' · ' : '') + (item.status || '待发送'); status.title = warnings(item).join('\n'); card.appendChild(status);
       var remove = document.createElement('button'); remove.type = 'button'; remove.className = 'attachment-remove'; remove.textContent = '×';
       remove.setAttribute('aria-label', '移除 ' + item.filename); remove.title = '从本次输入移除';
       remove.addEventListener('click', function () { drafts[sessionId] = list(sessionId).filter(function (value) { return value !== item; }); persist(); refresh(); });
       card.appendChild(remove); panel.appendChild(card);
     });
     window.dispatchEvent(new CustomEvent('lka-attachments-changed'));
+  }
+  function audioType(file) {
+    var extension = (file.name || '').split('.').pop().toLowerCase();
+    var expected = { wav: 'audio/wav', mp3: 'audio/mpeg', m4a: 'audio/mp4' }[extension];
+    var aliases = { wav: ['audio/wav', 'audio/x-wav'], mp3: ['audio/mpeg', 'audio/mp3'], m4a: ['audio/mp4', 'audio/x-m4a', 'audio/m4a'] }[extension] || [];
+    return expected && (!file.type || aliases.indexOf(file.type) >= 0 || file.type === 'application/octet-stream') ? expected : '' ;
   }
   function fileType(file) {
     if (types.indexOf(file.type) >= 0) return file.type;
@@ -194,7 +208,7 @@
     try {
       var image = await new Promise(function (resolve, reject) { var value = new Image(); value.onload = function () { resolve(value); }; value.onerror = function () { reject(new Error('图片无法打开，请换一张有效的图片。')); }; value.src = url; });
       if (image.naturalWidth * image.naturalHeight <= MAX_PIXELS && file.size <= MAX_BYTES) return file;
-      if (type === 'image/webp') throw new Error('WebP 需不超过 400 万像素和 10 MiB，请缩小后再上传。');
+      if (type === 'image/webp') throw new Error('WebP 需不超过 400 万像素和 256 MiB，请缩小后再上传。');
       if (type === 'image/png') {
         var bytes = await new Promise(function (resolve, reject) { var reader = new FileReader(); reader.onload = function () { resolve(reader.result); }; reader.onerror = function () { reject(new Error('无法读取图片。')); }; reader.readAsArrayBuffer(file); });
         var view = new DataView(bytes), offset = 8;
@@ -220,7 +234,7 @@
     var type = fileType(file);
     if (list(sessionId).filter(sendable).length >= MAX_ATTACHMENTS) { say('每条消息最多发送 4 个附件（图片和文件合计）。', true, sessionId); return false; }
     if (!type) { say('图片支持 PNG、JPEG 和 WebP。其他文件请用“上传文件”。', true, sessionId); return false; }
-    if (!file.size || file.size > MAX_SOURCE_BYTES) { say('原始图片最多 20 MiB，请缩小后再上传。', true, sessionId); return false; }
+    if (!file.size || file.size > MAX_SOURCE_BYTES) { say('原始图片最多 256 MiB，请缩小后再上传。', true, sessionId); return false; }
     var item = { local_id: id(), filename: file.name || '粘贴的图片.png', media_type: type, size_bytes: file.size,
       kind: 'image', file: file, preview: URL.createObjectURL(file), sessionId: sessionId, status: '读取图片…' };
     items[item.local_id] = item; list(sessionId).push(item); refresh(); say('', false, sessionId);
@@ -228,11 +242,16 @@
       var prepared;
       try {
         prepared = await normalizeImage(file, type);
-        if (prepared.size > MAX_BYTES) throw new Error('缩小后的图片仍超过 10 MiB，请降低图片质量后重试。');
+        if (prepared.size > MAX_BYTES) throw new Error('缩小后的图片仍超过 256 MiB，请降低图片质量后重试。');
       } catch (error) {
         item.validationError = error.message; item.status = '图片无法使用';
         drafts[item.sessionId] = list(item.sessionId).filter(function (value) { return value !== item; });
         say(error.message, true, item.sessionId); refresh(); return item;
+      }
+      if (hasAudio(item.sessionId) && audioImageBytes(item.sessionId) - item.size_bytes + prepared.size > MAX_AUDIO_IMAGE_BYTES) {
+        item.validationError = '图片与音频合计不能超过 12 MiB。'; item.status = '图片超出合计大小限制';
+        drafts[item.sessionId] = list(item.sessionId).filter(function (value) { return value !== item; });
+        say(item.validationError, true, item.sessionId); refresh(); return item;
       }
       if (prepared !== file) {
         URL.revokeObjectURL(item.preview); item.preview = URL.createObjectURL(prepared);
@@ -250,18 +269,19 @@
   }
   async function addFile(file, sessionId) {
     if (fileType(file)) return addImage(file, sessionId);
+    var audioMediaType = audioType(file);
     sessionId = sessionId || activeId();
     while (aliases[sessionId]) sessionId = aliases[sessionId];
     if (!sessionId) { say('页面尚未准备好，请稍后选择文件。', true); return false; }
     if (list(sessionId).filter(sendable).length >= MAX_ATTACHMENTS) { say('每条消息最多发送 4 个附件（图片和文件合计）。', true, sessionId); return false; }
-    if (!file.size || file.size > MAX_DOCUMENT_BYTES) { say('单个文档需不超过 64 MiB。', true, sessionId); return false; }
-    var item = { local_id: id(), kind: 'document', filename: file.name || '文件', size_bytes: file.size, media_type: 'application/octet-stream',
+    if (!file.size || (audioMediaType ? file.size > MAX_AUDIO_BYTES : file.size > MAX_DOCUMENT_BYTES)) { say(audioMediaType ? '单个音频需不超过 256 MiB。' : '单个文档需不超过 256 MiB。', true, sessionId); return false; }
+    var item = { local_id: id(), kind: audioMediaType ? 'audio' : 'document', filename: file.name || '文件', size_bytes: file.size, media_type: audioMediaType || 'application/octet-stream', audio_format: audioMediaType === 'audio/wav' ? 'wav' : audioMediaType === 'audio/mpeg' ? 'mp3' : '', source_format: audioMediaType === 'audio/mp4' ? 'm4a' : '',
       file: file, sessionId: sessionId, status: '准备上传…' };
     items[item.local_id] = item; list(sessionId).push(item); refresh(); say('', false, sessionId);
     item.ready = (async function () {
-      await ensureCatalog();
+      if (!audioMediaType) await ensureCatalog();
       var extension = '.' + item.filename.split('.').pop().toLowerCase();
-      if (documentExtensions.indexOf(extension) < 0) {
+      if (!audioMediaType && documentExtensions.indexOf(extension) < 0) {
         item.validationError = '暂不支持这个文件类型。可上传文档、表格、PDF 或文字文件；旧版 DOC/PPT 请先转换格式。';
         drafts[item.sessionId] = list(item.sessionId).filter(function (value) { return value !== item; });
         say(item.validationError, true, item.sessionId); refresh(); return item;
@@ -282,6 +302,8 @@
       if (item.validationError) throw new Error(item.validationError);
       await upload(item, sessionId); Object.assign(selected[i], normalize([item])[0]);
     }
+    var mediaBytes = selected.reduce(function (total, item) { return total + (item.kind === 'audio' ? Number(item.input_size_bytes) || Number(item.size_bytes) || 0 : item.kind === 'image' ? Number(item.size_bytes) || 0 : 0); }, 0);
+    if (mediaBytes > MAX_AUDIO_IMAGE_BYTES) throw new Error('图片与转换后的音频合计不能超过 12 MiB。');
     return selected.map(function (item) { return item.attachment_id; });
   }
   var aliases = Object.create(null);
@@ -339,7 +361,7 @@
           image.addEventListener('error', function () { link.classList.add('image-unavailable'); name.textContent = '图片暂时不可用 · 点击重试'; }); link.appendChild(image);
         } else {
           link.setAttribute('download', value.filename || '附件'); var icon = document.createElement('b'); icon.className = 'attachment-file-type'; icon.textContent = kind === 'unknown' ? '文件' : (value.filename.split('.').pop() || '文件').toUpperCase().slice(0, 6); link.appendChild(icon);
-          var detail = document.createElement('small'); detail.textContent = kind === 'unknown' ? '正在读取附件信息…' : sizeLabel(value.size_bytes) + ' · 下载原文件'; link.appendChild(detail);
+          var detail = document.createElement('small'); detail.textContent = kind === 'unknown' ? '正在读取附件信息…' : sizeLabel(value.size_bytes) + (kind === 'audio' ? [value.duration_ms ? Math.floor(value.duration_ms / 60000) + ':' + String(Math.floor(value.duration_ms / 1000) % 60).padStart(2, '0') : '', value.sample_rate ? value.sample_rate + ' Hz' : '', value.channels ? value.channels + ' 声道' : ''].filter(Boolean).map(function (part) { return ' · ' + part; }).join('') : '') + ' · 下载原文件'; link.appendChild(detail);
         }
         link.appendChild(name); link.title = warnings(value).join('\n');
         if (warnings(value).length) { var hint = document.createElement('small'); hint.className = 'attachment-extraction-hint'; hint.textContent = '部分内容可能未提取'; link.appendChild(hint); }
@@ -364,6 +386,13 @@
   document.addEventListener('keydown', function (event) { if (event.key === 'Escape' && !menu.hidden) { setMenu(false); uploadButton.focus(); } });
   imageInput.addEventListener('change', function () { var sessionId = activeId(), files = Array.from(imageInput.files || []); imageInput.value = ''; files.forEach(function (file) { addImage(file, sessionId); }); });
   fileInput.addEventListener('change', function () { var sessionId = activeId(), files = Array.from(fileInput.files || []); fileInput.value = ''; files.forEach(function (file) { addFile(file, sessionId); }); });
+  document.getElementById('questionInput').addEventListener('dragover', function (event) {
+    if (event.dataTransfer && event.dataTransfer.files && event.dataTransfer.files.length) event.preventDefault();
+  });
+  document.getElementById('questionInput').addEventListener('drop', function (event) {
+    var files = Array.from(event.dataTransfer && event.dataTransfer.files || []);
+    if (!files.length) return; event.preventDefault(); var sessionId = activeId(); files.forEach(function (file) { addFile(file, sessionId); });
+  });
   document.getElementById('questionInput').addEventListener('paste', function (event) {
     var data = event.clipboardData; if (!data) return;
     var files = Array.from(data.files || []);
@@ -383,17 +412,18 @@
     hasImages: function (sessionId) { return list(sessionId).some(sendable); },
     hasAttachments: function (sessionId) { return list(sessionId).some(sendable); },
     hasDocuments: function (sessionId) { return list(sessionId).some(function (item) { return item.kind === 'document'; }); },
+    hasAudios: function (sessionId) { return list(sessionId).some(function (item) { return item.kind === 'audio'; }); },
     explainEmpty: function () { if (list(activeId()).some(function (item) { return item.kind === 'file'; })) say('这是旧版缓存文件，请重新选择文件后发送。', false); },
     errorText: function (message) { say(message, true); },
     addNativeFile: async function (filename, mediaType, encoded, originSessionId) {
       var sessionId = originSessionId || activeId();
-      if (typeof encoded !== 'string' || encoded.length > Math.ceil(MAX_DOCUMENT_BYTES / 3) * 4) { say('文件超过 64 MiB，请缩小后再粘贴。', true); return false; }
+      if (typeof encoded !== 'string' || encoded.length > Math.ceil(MAX_DOCUMENT_BYTES / 3) * 4) { say('文件超过 256 MiB，请缩小后再粘贴。', true); return false; }
       try { var bytes = atob(encoded), raw = new Uint8Array(bytes.length); for (var i = 0; i < bytes.length; i++) raw[i] = bytes.charCodeAt(i);
         return await addFile(new File([raw], filename, { type: mediaType }), sessionId);
       } catch (error) { say('无法读取粘贴的附件，请重新复制。', true, sessionId); return false; }
     }
   };
   window.LkaImageComposer.addNativeImage = window.LkaImageComposer.addNativeFile;
-  fileInput.accept = ['.png', '.jpg', '.jpeg', '.webp'].concat(documentExtensions).join(',');
+  fileInput.accept = ['.png', '.jpg', '.jpeg', '.webp'].concat(audioExtensions, documentExtensions).join(',');
   setTimeout(ensureCatalog, 0);
 }());

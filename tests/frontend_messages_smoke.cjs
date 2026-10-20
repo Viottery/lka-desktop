@@ -63,7 +63,7 @@ const server=http.createServer(async(req,res)=>{
  let file=path.resolve(ROOT,'.'+(url.pathname==='/'?'/chat.html':url.pathname));if(!file.startsWith(path.resolve(ROOT)+path.sep)){res.writeHead(403);return res.end();}
  if(url.pathname==='/chat.html'){
   let html=fs.readFileSync(file,'utf8');html=html.replace(/<script src="\.\/(chat|memory|projects)\.js[^>]*><\/script>/g,'');
-  html=html.replace('<script src="./qq-reader.js',`<script>window.LkaChatContext={get:()=>({workMode:new URLSearchParams(location.search).get('mode')==='work',backend:'http://unused.invalid',sessionId:'',workspace:''})};window.__lkaMemoryBridgeReceive=()=>{};</script><script src="./qq-reader.js`);
+  html=html.replace('<script src="./matters-host.js',`<script>window.LkaChatContext={get:()=>({workMode:new URLSearchParams(location.search).get('mode')==='work',backend:'http://unused.invalid',sessionId:'',workspace:''})};window.__lkaMemoryBridgeReceive=()=>{};</script><script src="./matters-host.js`);
   res.writeHead(200,{'content-type':'text/html; charset=utf-8'});return res.end(html);
  }
  try{const data=fs.readFileSync(file);res.writeHead(200,{'content-type':({'.js':'text/javascript','.css':'text/css','.png':'image/png'})[path.extname(file)]||'application/octet-stream'});res.end(data);}catch(_){res.writeHead(404);res.end();}

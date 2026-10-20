@@ -51,8 +51,10 @@ class ComposerFileCacheTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual((self.root / (cache_id + ".json")).exists(), True)
 
     async def test_limits_types_and_filename_controls(self):
-        too_big = await self.post(b"x" * (10 * 1024 * 1024 + 1))
+        with patch("app.api.routes.composer_files._MAX_COMPOSER_FILE", 8):
+            too_big = await self.post(b"x" * 9)
         self.assertEqual(too_big.status_code, 413)
+        self.assertEqual(too_big.json()["detail"], "File exceeds the 256 MiB cache limit")
         wrong_type = await self.post(headers={"Content-Type": "image/png"})
         self.assertEqual(wrong_type.status_code, 415)
         for name in ("", "%00bad", "%2E%2E", "x" * 241):

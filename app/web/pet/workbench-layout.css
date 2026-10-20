@@ -1,0 +1,13 @@
+/* The assistant adds a navigation row; only the history owns the remaining height. */
+body.work-mode .session-sidebar { grid-template-rows:auto auto auto minmax(0,1fr) auto; }
+body.work-mode .session-list { align-content:start; }
+body.work-mode .session-item { flex:0 0 auto; }
+body.work-mode .chat-topbar { flex:0 0 auto; }
+body.work-mode .topbar-actions { flex:0 0 auto; }
+body.work-mode .context-strip { flex:0 0 auto; }
+/* A trailing memory action must not push the user's bubble to the opposite edge. */
+body.work-mode .message.user { flex-direction:column; align-items:flex-end; justify-content:flex-start; }
+body.work-mode .message.user .memory-message-action { margin:3px 1px 0 0; padding:2px 5px; }
+body.work-mode .context-rail-header, body.work-mode .rail-tabs { flex:0 0 auto; }
+body.work-mode .rail-panel { min-width:0; min-height:0; }
+body.work-mode .ga-workspace { transition:none; }

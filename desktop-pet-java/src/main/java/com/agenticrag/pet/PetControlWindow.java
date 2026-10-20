@@ -6,6 +6,7 @@ import javafx.application.Platform;
 import javafx.concurrent.Worker;
 import javafx.geometry.Rectangle2D;
 import javafx.geometry.Pos;
+import javafx.geometry.Insets;
 import javafx.scene.Scene;
 import javafx.scene.Node;
 import javafx.geometry.Bounds;
@@ -13,6 +14,10 @@ import javafx.geometry.Point2D;
 import javafx.scene.control.Button;
 import javafx.scene.control.ButtonBase;
 import javafx.scene.control.CheckMenuItem;
+import javafx.scene.control.CheckBox;
+import javafx.scene.control.ScrollPane;
+import javafx.scene.control.TitledPane;
+import javafx.scene.control.Separator;
 import javafx.scene.control.ComboBox;
 import javafx.scene.control.CustomMenuItem;
 import javafx.scene.control.Label;
@@ -50,7 +55,9 @@ import netscape.javascript.JSObject;
 
 import java.io.IOException;
 import java.io.ByteArrayOutputStream;
+import java.io.BufferedReader;
 import java.io.InputStream;
+import java.io.InputStreamReader;
 import java.awt.Desktop;
 import javax.imageio.ImageIO;
 import javafx.embed.swing.SwingFXUtils;
@@ -72,6 +79,8 @@ import java.util.Objects;
 import java.util.Base64;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Future;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
@@ -111,14 +120,24 @@ final class PetControlWindow {
     private static final double RESIZE_HANDLE_SIZE = 10;
     private static final double MIN_QUICK_WIDTH = 340;
     private static final double MIN_QUICK_HEIGHT = 118;
-    private static final long MAX_NATIVE_IMAGE_BYTES = 20L * 1024 * 1024;
-    private static final long MAX_NATIVE_DOCUMENT_BYTES = 64L * 1024 * 1024;
+    private static final long MAX_NATIVE_IMAGE_BYTES = 256L * 1024 * 1024;
+    private static final long MAX_NATIVE_DOCUMENT_BYTES = 256L * 1024 * 1024;
     private static final int MAX_NATIVE_ATTACHMENTS_PER_PASTE = 4;
     private static final ExecutorService IMAGE_WORKER = Executors.newSingleThreadExecutor(task -> {
         Thread thread = new Thread(task, "pet-native-image");
         thread.setDaemon(true);
         return thread;
     });
+    private static final ExecutorService SAVED_RUN_STREAM_WORKER = Executors.newCachedThreadPool(task -> {
+        Thread thread = new Thread(task, "pet-saved-run-stream");
+        thread.setDaemon(true);
+        return thread;
+    });
+    private static final class SavedRunStream {
+        volatile InputStream body;
+        volatile Future<?> worker;
+        volatile boolean cancelled;
+    }
     private record NativeImageTarget(WebView view, String sessionId) {}
     private static final AtomicBoolean FX_STARTED = new AtomicBoolean(false);
     private static final Map<String, Font> QUICK_FONTS = new HashMap<>();
@@ -131,11 +150,14 @@ final class PetControlWindow {
     private final AtomicBoolean visible = new AtomicBoolean(false);
     private final AtomicBoolean backendStartInProgress = new AtomicBoolean(false);
     private final AtomicBoolean shutdownInProgress = new AtomicBoolean(false);
+    private final Map<String, SavedRunStream> savedRunStreams = new ConcurrentHashMap<>();
     private Stage stage;
     private WebView webView;
     private PetChatBridge chatBridge;
+    private PetMatterWindow matterWindow;
     private TextArea nativeInput;
     private Button nativeSendButton;
+    private String nativeComposerAction = "send";
     private Label nativeImageStatus;
     private BorderPane quickCard;
     private ResizeEdge activeResizeEdge = ResizeEdge.NONE;
@@ -150,6 +172,20 @@ final class PetControlWindow {
     private boolean manualSizePreferred;
     private boolean nativeImeComposing;
     private MenuButton settingsMenuButton;
+    private record QuickSettingChoice(String value, String label) {
+        @Override public String toString() { return label; }
+    }
+    private ComboBox<QuickSettingChoice> quickSettingsModel;
+    private ComboBox<QuickSettingChoice> quickSettingsSafety;
+    private CheckBox quickSettingsStream;
+    private Label quickSettingsScope;
+    private Label quickSettingsStatus;
+    private Button quickSettingsApply;
+    private Button quickSettingsRefresh;
+    private boolean syncingQuickSettings;
+    private boolean quickSettingsDirty;
+    private String quickSettingsSessionId = "";
+
     private ComboBox<PetModelOption> modelCombo;
     private CheckMenuItem randomBehaviorItem;
     private MenuItem specialInteractionItem;
@@ -199,14 +235,7 @@ final class PetControlWindow {
                 }
                 stage.show();
                 stage.toFront();
-                if (webView != null) {
-                    try {
-                        webView.getEngine().executeScript(
-                                "window.__petChatOpenFreshTask && window.__petChatOpenFreshTask()");
-                    } catch (RuntimeException error) {
-                        System.err.println("[pet-chat] fresh task open failed: " + error.getMessage());
-                    }
-                }
+                openAssistant();
                 focusChatInput();
             }
         });
@@ -235,7 +264,12 @@ final class PetControlWindow {
     }
 
     void dispose() {
+        cancelAllSavedRunStreams();
         Platform.runLater(() -> {
+            if (matterWindow != null) {
+                matterWindow.dispose();
+                matterWindow = null;
+            }
             if (stage != null) {
                 stage.close();
                 stage = null;
@@ -298,23 +332,13 @@ final class PetControlWindow {
         quickCard.setCenter(buildWebView());
         quickCard.setBottom(buildTools());
 
-        Region spine = new Region();
-        spine.getStyleClass().add("pet-quick-spine");
-        spine.setPrefSize(3, 30);
-        spine.setMinSize(3, 30);
-        spine.setMaxSize(3, 30);
-        spine.setMouseTransparent(true);
-        StackPane.setAlignment(spine, Pos.TOP_LEFT);
-        spine.setTranslateX(12);
-        spine.setTranslateY(18);
-
         SVGPath resizeGrip = iconGraphic("M0 8L8 0 M4 8L8 4");
         resizeGrip.setOpacity(0.45);
         resizeGrip.setMouseTransparent(true);
         StackPane.setAlignment(resizeGrip, Pos.BOTTOM_RIGHT);
         resizeGrip.setTranslateX(-7);
         resizeGrip.setTranslateY(-7);
-        StackPane frame = new StackPane(quickCard, spine, resizeGrip);
+        StackPane frame = new StackPane(quickCard, resizeGrip);
         frame.setStyle("-fx-background-color: transparent;");
         return frame;
     }
@@ -412,26 +436,27 @@ final class PetControlWindow {
             }
         });
         nativeSendButton = new Button();
-        SVGPath sendIcon = iconGraphic("M3 11L21 3L13 21L10 13Z M10 13L21 3");
-        sendIcon.setStroke(Color.WHITE);
-        sendIcon.setStrokeWidth(1.5);
-        nativeSendButton.setGraphic(sendIcon);
         nativeSendButton.getStyleClass().addAll("pet-native-send", "pet-quick-native-send");
-        nativeSendButton.setTooltip(quickTooltip("发送任务 · Enter 发送，Shift + Enter 换行"));
-        nativeSendButton.setAccessibleText("发送");
+        setNativeComposerAction(nativeComposerAction);
         nativeSendButton.setDisable(true);
         nativeSendButton.setOnAction(event -> submitNativeInput());
         Button nativeImageButton = iconButton(
                 "M4 4h16v16H4z M4 15l4-4 4 4 3-3 5 5 M15 8h.01",
-                "上传图片或文件 · 图片支持 PNG、JPEG、WebP；文件支持 TXT、MD、PDF、Office、HTML、EPUB、CSV、JSON、XML、MSG",
+                "添加图片或文件 · 也可粘贴",
                 this::chooseNativeImages);
         nativeImageButton.getStyleClass().add("pet-native-image-button");
+        nativeImageButton.setMinSize(32, 32);
+        nativeImageButton.setPrefSize(32, 32);
+        nativeImageButton.setMaxSize(32, 32);
         nativeImageStatus = new Label();
         nativeImageStatus.getStyleClass().add("pet-native-image-status");
         nativeImageStatus.setMaxWidth(Double.MAX_VALUE);
         nativeImageStatus.setManaged(false);
         nativeImageStatus.setVisible(false);
-        HBox composerRow = new HBox(6, nativeInput, nativeImageButton, nativeSendButton);
+        HBox composerRow = new HBox(6, nativeImageButton, nativeInput, nativeSendButton);
+        composerRow.setAlignment(Pos.TOP_LEFT);
+        HBox.setMargin(nativeImageButton, new Insets(4, 0, 0, 0));
+        HBox.setMargin(nativeSendButton, new Insets(4, 0, 0, 0));
         VBox composer = new VBox(2, composerRow, nativeImageStatus);
         composer.getStyleClass().add("pet-native-composer");
         composer.getStyleClass().add("pet-quick-composer");
@@ -439,16 +464,20 @@ final class PetControlWindow {
 
         Button sessionsButton = iconButton("M4 6h16 M4 12h16 M4 18h16", "选择会话", () -> clickPageButton("toggleSidebarButton"));
         Button projectsButton = iconButton("M3 6.5h7l2 2h9v10H3z M3 6.5v-2h7l2 2", "选择项目", () -> clickPageButton("quickProjectsButton"));
-        HBox leftActions = new HBox(2, sessionsButton, projectsButton);
+        Button mattersButton = iconButton("M3 6l2 2 3-4 M12 6h9 M3 13l2 2 3-4 M12 13h9 M3 20h18", "待办与规划", () -> openMatters("{}"));
+        Button globalAssistantButton = iconButton("M12 3 14.4 9.6 21 12 14.4 14.4 12 21 9.6 14.4 3 12 9.6 9.6Z", "打开真理", this::openAssistant);
+        globalAssistantButton.setId("quickGlobalAssistantButton");
+        HBox leftActions = new HBox(2, sessionsButton, projectsButton, mattersButton, globalAssistantButton);
         leftActions.setAlignment(Pos.CENTER_LEFT);
 
-        Button newSessionButton = iconButton("M12 5v14 M5 12h14", "新建会话", () -> clickPageButton("newQuickSessionButton"));
+        Button newSessionButton = iconButton("M12 4v16 M4 12h16", "新任务", () -> clickPageButton("newQuickSessionButton"));
+        newSessionButton.setId("quickNewTaskButton");
         Button workbenchButton = iconButton("M4 5h11v14H4z M10 14 20 4 M14 4h6v6", "打开工作台", this::openWorkbench);
         settingsMenuButton = buildSettingsMenu();
         settingsMenuButton.setText("");
         settingsMenuButton.setGraphic(iconGraphic("M19.14 12.94c.04-.3.06-.61.06-.94s-.02-.64-.07-.94l2.03-1.58a.5.5 0 0 0 .12-.64l-1.92-3.32a.5.5 0 0 0-.61-.22l-2.39.96a7.28 7.28 0 0 0-1.63-.94l-.36-2.54a.49.49 0 0 0-.49-.42h-3.84a.49.49 0 0 0-.49.42l-.36 2.54c-.59.23-1.14.55-1.63.94l-2.39-.96a.5.5 0 0 0-.61.22L2.63 8.84a.5.5 0 0 0 .12.64l2.03 1.58c-.05.3-.08.62-.08.94s.03.64.08.94l-2.03 1.58a.5.5 0 0 0-.12.64l1.92 3.32c.12.2.37.29.61.22l2.39-.96c.49.39 1.04.71 1.63.94l.36 2.54c.04.24.24.42.49.42h3.84c.25 0 .45-.18.49-.42l.36-2.54c.59-.23 1.14-.55 1.63-.94l2.39.96c.24.07.49-.02.61-.22l1.92-3.32a.5.5 0 0 0-.12-.64l-2.03-1.58ZM12 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7Z"));
         settingsMenuButton.getStyleClass().add("pet-compact-settings");
-        styleFooterButton(settingsMenuButton, "桌宠设置");
+        styleFooterButton(settingsMenuButton, "设置");
         Button closeButton = iconButton("M6 6l12 12 M18 6 6 18", "关闭快速会话", () -> stage.hide());
         HBox rightActions = new HBox(2, newSessionButton, workbenchButton, settingsMenuButton, closeButton);
         rightActions.setAlignment(Pos.CENTER_RIGHT);
@@ -553,12 +582,13 @@ final class PetControlWindow {
     private void submitNativeInput() {
         if (nativeInput == null || nativeSendButton == null || nativeSendButton.isDisabled()
                 || webView == null) return;
+        if ("wait".equals(nativeComposerAction)) return;
         String text = nativeInput.getText();
         if (text == null) text = "";
         try {
             Object accepted = webView.getEngine().executeScript(
                     "window.__petChatSubmitText && window.__petChatSubmitText(" + jsonString(text) + ")");
-            if (Boolean.TRUE.equals(accepted)) nativeInput.clear();
+            if (Boolean.TRUE.equals(accepted) && "send".equals(nativeComposerAction)) nativeInput.clear();
         } catch (RuntimeException error) {
             System.err.println("[pet-chat] native input submit failed: " + error.getMessage());
         }
@@ -658,7 +688,7 @@ final class PetControlWindow {
                 long size = Files.size(path);
                 if (size <= 0 || size > sizeLimit) {
                     showNativeImageErrorLater(size > sizeLimit
-                            ? mediaType.startsWith("image/") ? "原始图片超过 20 MiB，未添加" : "文件超过 64 MiB，未添加"
+                            ? mediaType.startsWith("image/") ? "原始图片超过 256 MiB，未添加" : "文件超过 256 MiB，未添加"
                             : "文件为空，未添加");
                     return;
                 }
@@ -698,7 +728,7 @@ final class PetControlWindow {
                 }
                 byte[] bytes = output.toByteArray();
                 if (bytes.length > MAX_NATIVE_IMAGE_BYTES) {
-                    showNativeImageErrorLater("原始图片超过 20 MiB，未添加");
+                    showNativeImageErrorLater("原始图片超过 256 MiB，未添加");
                     return;
                 }
                 dispatchNativeImage("clipboard.png", "image/png", bytes, target);
@@ -778,6 +808,44 @@ final class PetControlWindow {
         });
     }
 
+    private void setNativeComposerAction(String action) {
+        if (action == null || !List.of("send", "pause", "resume", "wait").contains(action)) return;
+        if (action.equals(nativeComposerAction) && nativeSendButton != null && nativeSendButton.getGraphic() != null) return;
+        nativeComposerAction = action;
+        if (nativeSendButton == null) return;
+        String path;
+        String tooltip;
+        String accessibleText;
+        switch (action) {
+            case "pause" -> {
+                path = "M8 5v14M16 5v14";
+                tooltip = "暂停任务，当前步骤结束后生效";
+                accessibleText = "暂停任务";
+            }
+            case "resume" -> {
+                path = "M9 5L20 12L9 19Z";
+                tooltip = "继续这次任务，从暂停的位置恢复";
+                accessibleText = "继续任务";
+            }
+            case "wait" -> {
+                path = "M6 3H18M6 21H18M7 3C7 8 10 10 12 12C14 10 17 8 17 3M17 21C17 16 14 14 12 12C10 14 7 16 7 21";
+                tooltip = "请稍候";
+                accessibleText = "请稍候";
+            }
+            default -> {
+                path = "M3 11L21 3L13 21L10 13Z M10 13L21 3";
+                tooltip = "发送任务 · Enter 发送，Shift + Enter 换行";
+                accessibleText = "发送";
+            }
+        }
+        SVGPath icon = iconGraphic(path);
+        icon.setStroke(Color.WHITE);
+        icon.setStrokeWidth(1.5);
+        nativeSendButton.setGraphic(icon);
+        nativeSendButton.setTooltip(quickTooltip(tooltip));
+        nativeSendButton.setAccessibleText(accessibleText);
+    }
+
     private void setNativeComposerDraft(String draft) {
         Platform.runLater(() -> {
             if (nativeInput == null) return;
@@ -846,7 +914,6 @@ final class PetControlWindow {
 
         VBox modelBox = new VBox(6, libraryLabel, modelCombo);
         modelBox.setStyle("-fx-padding: 4 6 4 6;");
-        CustomMenuItem modelItem = new CustomMenuItem(modelBox, false);
 
         randomBehaviorItem = new CheckMenuItem("自动动作与移动");
         randomBehaviorItem.selectedProperty().addListener((observable, oldValue, newValue) -> {
@@ -881,29 +948,199 @@ final class PetControlWindow {
         shutdownAllItem.getStyleClass().add("danger-menu-item");
         shutdownAllItem.setOnAction(event -> shutdownDesktopAndBackend());
 
-        menuButton.getItems().addAll(
-                modelItem,
-                new SeparatorMenuItem(),
-                randomBehaviorItem,
-                new SeparatorMenuItem(),
-                greetItem,
-                specialInteractionItem,
-                sitItem,
-                sleepItem,
-                wakeItem,
-                new SeparatorMenuItem(),
-                reloadItem,
-                scalePlusItem,
-                scaleMinusItem,
-                raiseItem,
-                lowerItem,
-                new SeparatorMenuItem(),
-                shutdownAllItem
-        );
-        menuButton.setOnShowing(event -> refreshSettingsState());
+        CheckBox randomToggle = new CheckBox("自动动作与移动");
+        randomToggle.selectedProperty().bindBidirectional(randomBehaviorItem.selectedProperty());
+        javafx.scene.layout.FlowPane interactions = new javafx.scene.layout.FlowPane(6, 6);
+        for (MenuItem action : List.of(greetItem, specialInteractionItem, sitItem, sleepItem, wakeItem,
+                scalePlusItem, scaleMinusItem, raiseItem, lowerItem, reloadItem, shutdownAllItem)) {
+            Button button = new Button(action.getText());
+            button.getStyleClass().add(action == shutdownAllItem ? "quick-settings-danger" : "quick-settings-pet-action");
+            button.disableProperty().bind(action.disableProperty());
+            button.setOnAction(event -> action.fire());
+            interactions.getChildren().add(button);
+        }
+        VBox petOptions = new VBox(10, modelBox, randomToggle, interactions);
+        TitledPane petSection = new TitledPane("桌宠外观与行为", petOptions);
+        petSection.setId("quickSettingsPetSection");
+        petSection.setExpanded(false);
+        petSection.setAnimated(false);
+        petSection.getStyleClass().add("quick-settings-pet-section");
+        VBox settings = buildQuickSettingsPanel();
+        settings.getChildren().addAll(new Separator(), petSection);
+        ScrollPane scroll = new ScrollPane(settings);
+        scroll.setFitToWidth(true);
+        scroll.setHbarPolicy(ScrollPane.ScrollBarPolicy.NEVER);
+        scroll.setPrefViewportWidth(300);
+        scroll.setPrefViewportHeight(Region.USE_COMPUTED_SIZE);
+        scroll.setMaxHeight(540);
+        scroll.getStyleClass().add("quick-settings-scroll");
+        Runnable resizeSettings = () -> {
+            List<Screen> screens = stage == null ? List.of() : Screen.getScreensForRectangle(stage.getX(), stage.getY(), stage.getWidth(), stage.getHeight());
+            double available = Math.max(180, (screens.isEmpty() ? Screen.getPrimary() : screens.getFirst()).getVisualBounds().getHeight() - 80);
+            scroll.setMaxHeight(Math.min(540, available));
+            scroll.setPrefViewportHeight(petSection.isExpanded() ? Math.min(510, available - 24) : Region.USE_COMPUTED_SIZE);
+        };
+        petSection.expandedProperty().addListener((observable, oldValue, expanded) -> resizeSettings.run());
+
+        CustomMenuItem panelItem = new CustomMenuItem(scroll, false);
+        panelItem.getStyleClass().add("quick-settings-menu-item");
+        menuButton.getItems().setAll(panelItem);
+        menuButton.setOnShowing(event -> {
+            refreshSettingsState();
+            resizeSettings.run();
+            refreshQuickSettings(false);
+        });
 
         refreshSettingsState();
         return menuButton;
+    }
+
+    private VBox buildQuickSettingsPanel() {
+        Label title = new Label("设置");
+        title.getStyleClass().add("quick-settings-title");
+        quickSettingsScope = new Label("正在读取当前会话…");
+        quickSettingsScope.setWrapText(true);
+        quickSettingsScope.getStyleClass().add("quick-settings-muted");
+        Label modelLabel = new Label("对话模型");
+        quickSettingsModel = new ComboBox<>();
+        quickSettingsModel.setId("quickSettingsModel");
+        quickSettingsModel.setMaxWidth(Double.MAX_VALUE);
+        quickSettingsModel.setMinWidth(0);
+        HBox.setHgrow(quickSettingsModel, Priority.ALWAYS);
+        quickSettingsRefresh = new Button("刷新");
+        quickSettingsRefresh.setId("quickSettingsRefresh");
+        quickSettingsRefresh.setOnAction(event -> refreshQuickSettings(true));
+        HBox modelRow = new HBox(8, quickSettingsModel, quickSettingsRefresh);
+        Label safetyLabel = new Label("安全审查");
+        quickSettingsSafety = new ComboBox<>();
+        quickSettingsSafety.setId("quickSettingsSafety");
+        quickSettingsSafety.getItems().setAll(new QuickSettingChoice("backend", "跟随后端配置"),
+                new QuickSettingChoice("llm", "模型审查"), new QuickSettingChoice("manual", "每次确认"),
+                new QuickSettingChoice("skip", "请求自动通过"));
+        quickSettingsSafety.setMaxWidth(Double.MAX_VALUE);
+        quickSettingsSafety.getSelectionModel().selectFirst();
+        Label safetyHint = new Label("后端策略可能要求更严格的审查。");
+        safetyHint.setWrapText(true);
+        safetyHint.getStyleClass().add("quick-settings-muted");
+        quickSettingsStream = new CheckBox("实时显示回复");
+        quickSettingsStream.setId("quickSettingsStream");
+        quickSettingsStatus = new Label("打开设置后读取配置。");
+        quickSettingsStatus.setId("quickSettingsStatus");
+        quickSettingsStatus.setWrapText(true);
+        quickSettingsStatus.getStyleClass().add("quick-settings-muted");
+        quickSettingsApply = new Button("应用更改");
+        quickSettingsApply.setId("quickSettingsApply");
+        quickSettingsApply.getStyleClass().add("quick-settings-apply");
+        quickSettingsApply.setMaxWidth(Double.MAX_VALUE);
+        quickSettingsApply.setDisable(true);
+        quickSettingsApply.setOnAction(event -> applyQuickSettings());
+        quickSettingsModel.valueProperty().addListener((obs, old, value) -> markQuickSettingsDirty());
+        quickSettingsSafety.valueProperty().addListener((obs, old, value) -> markQuickSettingsDirty());
+        quickSettingsStream.selectedProperty().addListener((obs, old, value) -> markQuickSettingsDirty());
+        VBox panel = new VBox(12, new VBox(3, title, quickSettingsScope), new VBox(6, modelLabel, modelRow),
+                new VBox(6, safetyLabel, quickSettingsSafety, safetyHint), quickSettingsStream, quickSettingsStatus, quickSettingsApply);
+        panel.setId("quickSettingsPanel");
+        panel.getStyleClass().add("quick-settings-panel");
+        panel.setPrefWidth(300);
+        panel.setMinWidth(280);
+        panel.setMaxWidth(300);
+        return panel;
+    }
+
+    private void markQuickSettingsDirty() {
+        if (!syncingQuickSettings) {
+            quickSettingsDirty = true;
+            quickSettingsStatus.setText("更改尚未应用。");
+        }
+    }
+
+    private void refreshQuickSettings(boolean refreshModels) {
+        if (webView == null || !isChatPageLocation(webView.getEngine().getLocation())) return;
+        try {
+            Object available = webView.getEngine().executeScript("Boolean(window.LkaChatContext && window.LkaChatContext.refreshQuickSettings)");
+            if (!Boolean.TRUE.equals(available)) {
+                quickSettingsStatus.setText("对话尚未准备好，请稍后重新打开设置。");
+                quickSettingsApply.setDisable(true);
+                return;
+            }
+            webView.getEngine().executeScript("Promise.resolve(window.LkaChatContext.refreshQuickSettings(" + refreshModels + ")).catch(function(){});");
+        } catch (RuntimeException error) {
+            quickSettingsStatus.setText("读取设置失败，请重新打开后重试。");
+        }
+    }
+
+    private void applyQuickSettings() {
+        if (quickSettingsApply.isDisabled() || quickSettingsModel.getValue() == null || quickSettingsSafety.getValue() == null) return;
+        JsonObject options = new JsonObject();
+        options.addProperty("modelValue", quickSettingsModel.getValue().value());
+        options.addProperty("safetyMode", quickSettingsSafety.getValue().value());
+        options.addProperty("stream", quickSettingsStream.isSelected());
+        try {
+            quickSettingsDirty = false;
+            quickSettingsApply.setDisable(true);
+            quickSettingsStatus.setText("正在保存…");
+            webView.getEngine().executeScript("Promise.resolve(window.LkaChatContext.updateQuickSettings(" + options + ")).catch(function(){});");
+        } catch (RuntimeException error) {
+            quickSettingsDirty = true;
+            quickSettingsApply.setDisable(false);
+            quickSettingsStatus.setText("保存失败，请重试。");
+        }
+    }
+
+    private static String quickSettingText(JsonObject state, String key) {
+        return state.has(key) && state.get(key).isJsonPrimitive() ? state.get(key).getAsString() : "";
+    }
+
+    private static boolean quickSettingFlag(JsonObject state, String key) {
+        return state.has(key) && state.get(key).isJsonPrimitive() && state.get(key).getAsBoolean();
+    }
+
+    private void setQuickSettingsState(String json) {
+        if (!Platform.isFxApplicationThread()) { Platform.runLater(() -> setQuickSettingsState(json)); return; }
+        if (quickSettingsModel == null) return;
+        try {
+            JsonObject state = JsonParser.parseString(json).getAsJsonObject();
+            String sessionId = quickSettingText(state, "sessionId");
+            if (!sessionId.equals(quickSettingsSessionId)) quickSettingsDirty = false;
+            quickSettingsSessionId = sessionId;
+            String modelValue = quickSettingsDirty && quickSettingsModel.getValue() != null
+                    ? quickSettingsModel.getValue().value() : quickSettingText(state, "modelValue");
+            syncingQuickSettings = true;
+            quickSettingsModel.getItems().clear();
+            if (state.has("models") && state.get("models").isJsonArray()) {
+                for (var entry : state.getAsJsonArray("models")) {
+                    if (!entry.isJsonObject()) continue;
+                    JsonObject model = entry.getAsJsonObject();
+                    quickSettingsModel.getItems().add(new QuickSettingChoice(quickSettingText(model, "value"), quickSettingText(model, "label")));
+                }
+            }
+            QuickSettingChoice selected = quickSettingsModel.getItems().stream().filter(option -> option.value().equals(modelValue)).findFirst().orElse(null);
+            if (selected == null && !modelValue.isEmpty()) {
+                selected = new QuickSettingChoice(modelValue, "已选择的模型（目录未列出）");
+                quickSettingsModel.getItems().add(selected);
+            }
+            quickSettingsModel.setValue(selected);
+            if (!quickSettingsDirty) {
+                String safety = quickSettingText(state, "safetyMode");
+                quickSettingsSafety.getSelectionModel().select(quickSettingsSafety.getItems().stream().filter(option -> option.value().equals(safety)).findFirst().orElse(quickSettingsSafety.getItems().get(0)));
+                quickSettingsStream.setSelected(quickSettingFlag(state, "stream"));
+            }
+            quickSettingsScope.setText(quickSettingText(state, "scopeLabel"));
+            boolean locked = quickSettingFlag(state, "loading") || quickSettingFlag(state, "busy") || !quickSettingFlag(state, "ready");
+            quickSettingsModel.setDisable(locked);
+            quickSettingsSafety.setDisable(locked);
+            quickSettingsStream.setDisable(locked);
+            quickSettingsRefresh.setDisable(quickSettingFlag(state, "loading") || quickSettingFlag(state, "busy"));
+            quickSettingsApply.setDisable(locked || selected == null || sessionId.isEmpty());
+            String error = quickSettingText(state, "error"), notice = quickSettingText(state, "notice");
+            quickSettingsStatus.setText(!error.isEmpty() ? error : quickSettingFlag(state, "loading") ? "正在读取设置…"
+                    : quickSettingFlag(state, "busy") ? "正在保存…" : quickSettingsDirty ? "更改尚未应用。" : !notice.isEmpty() ? notice : "更改将用于之后的新运行。");
+            quickSettingsStatus.getStyleClass().remove("quick-settings-error");
+            if (!error.isEmpty()) quickSettingsStatus.getStyleClass().add("quick-settings-error");
+        } catch (RuntimeException error) {
+            quickSettingsStatus.setText("设置暂时不可用，请重新打开后重试。");
+            quickSettingsApply.setDisable(true);
+        } finally { syncingQuickSettings = false; }
     }
 
     private void styleMenuButton(MenuButton button) {
@@ -965,7 +1202,35 @@ final class PetControlWindow {
         }
     }
 
+    private void openAssistant() {
+        if (webView == null || !isChatPageLocation(webView.getEngine().getLocation())) return;
+        try {
+            // The page owns the asynchronous manager lookup and preserves its current draft/run.
+            webView.getEngine().executeScript("window.__petChatOpenAssistant && window.__petChatOpenAssistant()");
+        } catch (RuntimeException error) {
+            System.err.println("[pet-chat] assistant open failed: " + error.getMessage());
+        }
+    }
+
+    private boolean isManagerSession() {
+        if (webView == null) return false;
+        try {
+            return Boolean.TRUE.equals(webView.getEngine().executeScript(
+                    "Boolean(window.LkaChatContext && window.LkaChatContext.get && window.LkaChatContext.get().kind === 'manager')"));
+        } catch (RuntimeException error) {
+            return false;
+        }
+    }
+
     private void openWorkbench() {
+        openWorkbench(isManagerSession());
+    }
+
+    private void openWorkbench(boolean globalAssistant) {
+        if (globalAssistant) {
+            openWorkbenchSession("", "", true);
+            return;
+        }
         if (webView == null) return;
         try {
             webView.getEngine().executeScript(
@@ -975,17 +1240,22 @@ final class PetControlWindow {
         }
     }
 
+    static String workbenchPageUrl(String chatUrl, String backendBaseUrl, String sessionId, String runId, boolean globalAssistant) {
+        String page = chatUrl.split("\\?", 2)[0] + "?mode=work&backend="
+                + URLEncoder.encode(backendBaseUrl, StandardCharsets.UTF_8);
+        if (globalAssistant) return page + "&assistant=global";
+        if (sessionId != null && !sessionId.isBlank()) page += "&session_id=" + URLEncoder.encode(sessionId, StandardCharsets.UTF_8);
+        if (runId != null && !runId.isBlank()) page += "&run_id=" + URLEncoder.encode(runId, StandardCharsets.UTF_8);
+        return page;
+    }
+
     private void openWorkbenchSession(String sessionId, String runId) {
+        openWorkbenchSession(sessionId, runId, false);
+    }
+
+    private void openWorkbenchSession(String sessionId, String runId, boolean globalAssistant) {
         try {
-            String page = chatUrl.split("\\?", 2)[0] + "?mode=work&backend="
-                    + URLEncoder.encode(backendBaseUrl, StandardCharsets.UTF_8);
-            if (sessionId != null && !sessionId.isBlank()) {
-                page += "&session_id=" + URLEncoder.encode(sessionId, StandardCharsets.UTF_8);
-            }
-            if (runId != null && !runId.isBlank()) {
-                page += "&run_id=" + URLEncoder.encode(runId, StandardCharsets.UTF_8);
-            }
-            Desktop.getDesktop().browse(URI.create(page));
+            Desktop.getDesktop().browse(URI.create(workbenchPageUrl(chatUrl, backendBaseUrl, sessionId, runId, globalAssistant)));
             // Hiding keeps the current stream alive while the workbench reconnects.
             if (stage != null) stage.hide();
         } catch (Exception error) {
@@ -1016,6 +1286,19 @@ final class PetControlWindow {
         }
     }
 
+    void openMatters(String optionsJson) {
+        if (!Platform.isFxApplicationThread()) {
+            Platform.runLater(() -> openMatters(optionsJson));
+            return;
+        }
+        if (matterWindow == null) {
+            String pageUrl = URI.create(chatUrl).resolve("matters.html").toString()
+                    + "?backend=" + URLEncoder.encode(backendBaseUrl, StandardCharsets.UTF_8) + "&native=1";
+            matterWindow = new PetMatterWindow(pageUrl, this::handleMemoryRequest);
+        }
+        matterWindow.open(optionsJson);
+    }
+
     private void installChatBridge() {
         if (webView == null) {
             return;
@@ -1042,8 +1325,13 @@ final class PetControlWindow {
                         this::openExternalUrl
                 );
                 chatBridge.setMemoryRequestHandler(this::handleMemoryRequest);
+                chatBridge.setOpenMattersHandler(this::openMatters);
                 chatBridge.setQQReaderStatusRequestHandler(this::handleQQReaderStatusRequest);
+                chatBridge.setSavedRunStreamRequestHandler(this::handleSavedRunStreamRequest);
+                chatBridge.setSavedRunStreamCancelHandler(this::cancelSavedRunStream);
+                chatBridge.setComposerActionHandler(action -> Platform.runLater(() -> setNativeComposerAction(action)));
                 chatBridge.setQuickPanelHeightHandler(this::setQuickContentHeight);
+                chatBridge.setQuickSettingsStateHandler(this::setQuickSettingsState);
             }
             JSObject window = (JSObject) webView.getEngine().executeScript("window");
             window.setMember("petBridge", chatBridge);
@@ -1276,7 +1564,7 @@ final class PetControlWindow {
         }
     }
 
-    private String queryParam(URI uri, String key) {
+    private static String queryParam(URI uri, String key) {
         String query = uri.getRawQuery();
         if (query == null || query.isBlank()) {
             return "";
@@ -1301,11 +1589,26 @@ final class PetControlWindow {
         return rawUrl + separator + "desktopTs=" + System.currentTimeMillis();
     }
 
+    static String quickAssistantPageUrl(String rawUrl) {
+        try {
+            URI uri = URI.create(rawUrl);
+            if (!queryParam(uri, "session_id").isBlank() || !queryParam(uri, "run_id").isBlank()
+                    || !queryParam(uri, "assistant").isBlank() || queryParam(uri, "mode").equals("work")) return rawUrl;
+            int fragment = rawUrl.indexOf('#');
+            String base = fragment < 0 ? rawUrl : rawUrl.substring(0, fragment);
+            String suffix = fragment < 0 ? "" : rawUrl.substring(fragment);
+            return base + (uri.getRawQuery() == null ? "?" : "&") + "assistant=quick" + suffix;
+        } catch (RuntimeException error) {
+            return rawUrl;
+        }
+    }
+
     private void loadChatPage() {
         if (webView == null) {
             return;
         }
-        String targetUrl = cacheBustedUrl(chatUrl);
+        cancelAllSavedRunStreams();
+        String targetUrl = cacheBustedUrl(quickAssistantPageUrl(chatUrl));
         System.out.println("[pet-chat] loading chat page url=" + targetUrl);
         webView.getEngine().load(targetUrl);
     }
@@ -1327,7 +1630,7 @@ final class PetControlWindow {
         System.err.println("[pet-chat] chat page load failed: " + compact(reason, 260));
         setNativeComposerBusy(true);
         setQuickContentHeight(260);
-        String retryUrl = cacheBustedUrl(chatUrl);
+        String retryUrl = cacheBustedUrl(quickAssistantPageUrl(chatUrl));
         String fallbackHtml = buildChatUnavailableHtml(compact(reason, 180), retryUrl);
         webView.getEngine().loadContent(fallbackHtml, "text/html");
     }
@@ -1685,10 +1988,11 @@ final class PetControlWindow {
             String mode = payload.has("mode") ? payload.get("mode").getAsString() : "wait";
             String safetyMode = payload.has("safety_review_mode") ? payload.get("safety_review_mode").getAsString() : "";
             String attachmentIds = payload.has("attachment_ids") ? payload.get("attachment_ids").toString() : "[]";
+            Boolean resumable = bridgeResumable(payload);
             System.out.println("[pet-chat] bridge parsed questionLength=" + question.length() + " conversationId=" + conversationId + " mode=" + mode);
             String model = payload.has("llm_model") ? payload.get("llm_model").getAsString() : "";
             String client = payload.has("llm_client") ? payload.get("llm_client").getAsString() : "";
-            sendChatRequest(question, conversationId, mode, safetyMode, client, model, attachmentIds);
+            sendChatRequest(question, conversationId, mode, safetyMode, client, model, attachmentIds, resumable);
         } catch (RuntimeException error) {
             System.err.println("[pet-chat] bridge parse failed: " + error.getMessage());
             deliverChatResponse(jsonObject("error", "Desktop bridge parse failed: " + error.getMessage()));
@@ -1696,30 +2000,53 @@ final class PetControlWindow {
     }
 
     private void handleBridgeStreamPayload(String payloadJson) {
+        String requestId = "", conversationId = "";
         try {
             JsonObject payload = JsonParser.parseString(payloadJson).getAsJsonObject();
             String question = payload.has("question") ? payload.get("question").getAsString() : "";
-            String conversationId = payload.has("conversation_id") ? payload.get("conversation_id").getAsString() : "";
+            conversationId = payload.has("conversation_id") ? payload.get("conversation_id").getAsString() : "";
+            if (payload.has("request_id")) {
+                if (!payload.get("request_id").isJsonPrimitive() || !payload.getAsJsonPrimitive("request_id").isString()) throw new IllegalArgumentException("Invalid request_id");
+                requestId = payload.get("request_id").getAsString();
+                if (!requestId.matches("[A-Za-z0-9._:-]{1,128}")) throw new IllegalArgumentException("Invalid request_id");
+            }
             String model = payload.has("llm_model") ? payload.get("llm_model").getAsString() : "";
             String client = payload.has("llm_client") ? payload.get("llm_client").getAsString() : "";
             String safetyMode = payload.has("safety_review_mode") ? payload.get("safety_review_mode").getAsString() : "";
             String attachmentIds = payload.has("attachment_ids") ? payload.get("attachment_ids").toString() : "[]";
-            Thread worker = new Thread(() -> sendChatStreamRequest(question, conversationId, client, model, safetyMode, attachmentIds), "pet-chat-stream");
+            String responseMode = "stream";
+            if (payload.has("llm_response_mode") && payload.get("llm_response_mode").isJsonPrimitive()) {
+                String requestedMode = payload.get("llm_response_mode").getAsString().trim().toLowerCase();
+                if (requestedMode.equals("text") || requestedMode.equals("stream")) responseMode = requestedMode;
+                else if (!requestedMode.isEmpty() && !requestedMode.equals("defaultstream")) {
+                    throw new IllegalArgumentException("llm_response_mode must be text, stream, or defaultstream");
+                }
+            }
+            Boolean resumable = bridgeResumable(payload);
+            String selectedResponseMode = responseMode, callbackId = requestId, sessionId = conversationId;
+            Thread worker = new Thread(() -> sendChatStreamRequest(question, sessionId, client, model, safetyMode, attachmentIds, resumable, selectedResponseMode, callbackId), "pet-chat-stream");
             worker.setDaemon(true);
             worker.start();
         } catch (RuntimeException error) {
-            deliverChatResponse(jsonObject("error", "Desktop stream bridge parse failed: " + error.getMessage()));
+            deliverChatStreamFailure("Desktop stream bridge parse failed: " + error.getMessage(), conversationId, requestId);
         }
     }
 
-    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String safetyMode, String attachmentIds) {
+    private Boolean bridgeResumable(JsonObject payload) {
+        if (payload == null || !payload.has("resumable") || !payload.get("resumable").isJsonPrimitive()
+                || !payload.getAsJsonPrimitive("resumable").isBoolean()) return null;
+        return payload.get("resumable").getAsBoolean();
+    }
+
+    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String safetyMode, String attachmentIds, Boolean resumable, String responseMode, String requestId) {
         String requestJson = "{\"session_id\":" + jsonString(conversationId == null ? "" : conversationId)
                 + ",\"user_input\":" + jsonString(question == null ? "" : question)
                 + ",\"attachment_ids\":" + (attachmentIds == null ? "[]" : attachmentIds)
-                + ",\"llm\":{\"response_mode\":\"stream\""
+                + ",\"llm\":{\"response_mode\":" + jsonString(responseMode)
                 + (client == null || client.isBlank() ? "" : ",\"client_name\":" + jsonString(client))
                 + (model == null || model.isBlank() ? "" : ",\"model\":" + jsonString(model)) + "}"
-                + (safetyMode == null || safetyMode.isBlank() ? "" : ",\"safety_review_mode\":" + jsonString(safetyMode)) + "}";
+                + (safetyMode == null || safetyMode.isBlank() ? "" : ",\"safety_review_mode\":" + jsonString(safetyMode))
+                + (resumable == null ? "" : ",\"resumable\":" + resumable) + "}";
         try {
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(backendBaseUrl + "/agent/turn/stream"))
@@ -1732,7 +2059,7 @@ final class PetControlWindow {
             HttpResponse<Stream<String>> response = httpClient.send(request, HttpResponse.BodyHandlers.ofLines());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
                 String error = response.body().reduce("", (a, b) -> a + b);
-                deliverChatResponse(jsonObject("error", "HTTP " + response.statusCode() + ": " + error));
+                deliverChatStreamFailure("HTTP " + response.statusCode() + ": " + error, conversationId, requestId);
                 return;
             }
             String eventName = "message";
@@ -1742,15 +2069,172 @@ final class PetControlWindow {
                     if (line.startsWith("event:")) eventName = line.substring(6).trim();
                     else if (line.startsWith("data:")) { if (data.length() > 0) data.append('\n'); data.append(line.substring(5).trim()); }
                     else if (line.isBlank() && data.length() > 0) {
-                        deliverChatStreamEvent(eventName, data.toString());
+                        deliverChatStreamEvent(eventName, data.toString(), requestId);
                         eventName = "message"; data.setLength(0);
                     }
                 }
             }
-            if (data.length() > 0) deliverChatStreamEvent(eventName, data.toString());
+            if (data.length() > 0) deliverChatStreamEvent(eventName, data.toString(), requestId);
         } catch (Exception error) {
-            deliverChatResponse(jsonObject("error", "Desktop stream bridge failed: " + error.getMessage()));
+            deliverChatStreamFailure("Desktop stream bridge failed: " + error.getMessage(), conversationId, requestId);
         }
+    }
+
+    private void deliverChatStreamFailure(String error, String sessionId, String requestId) {
+        JsonObject result = new JsonObject();
+        result.addProperty("error", error);
+        result.addProperty("session_id", sessionId == null ? "" : sessionId);
+        if (requestId != null && !requestId.isEmpty()) result.addProperty("request_id", requestId);
+        deliverChatResponse(result.toString());
+    }
+
+    private void handleSavedRunStreamRequest(String payloadJson) {
+        String requestId = "";
+        try {
+            JsonObject payload = JsonParser.parseString(payloadJson).getAsJsonObject();
+            String runId = payload.has("run_id") && payload.get("run_id").isJsonPrimitive()
+                    ? payload.get("run_id").getAsString() : "";
+            requestId = payload.has("request_id") && payload.get("request_id").isJsonPrimitive()
+                    ? payload.get("request_id").getAsString() : "";
+            if (!runId.matches("[A-Za-z0-9_-]{1,128}")) {
+                throw new IllegalArgumentException("Invalid run_id");
+            }
+            if (!requestId.matches("[A-Za-z0-9._:-]{1,128}")) {
+                throw new IllegalArgumentException("Invalid request_id");
+            }
+            if (!payload.has("after_sequence") || !payload.get("after_sequence").isJsonPrimitive()
+                    || !payload.getAsJsonPrimitive("after_sequence").isNumber()
+                    || !payload.get("after_sequence").getAsString().matches("0|[1-9][0-9]*")) {
+                throw new IllegalArgumentException("Invalid after_sequence");
+            }
+            long afterSequence = payload.get("after_sequence").getAsLong();
+            if (afterSequence < 0) throw new IllegalArgumentException("Invalid after_sequence");
+
+            SavedRunStream subscription = new SavedRunStream();
+            SavedRunStream previous = savedRunStreams.put(requestId, subscription);
+            if (previous != null) stopSavedRunStream(previous);
+            final String callbackId = requestId;
+            final String eventRunId = runId;
+            final long eventAfterSequence = afterSequence;
+            subscription.worker = SAVED_RUN_STREAM_WORKER.submit(() -> readSavedRunStream(
+                    callbackId, eventRunId, eventAfterSequence, subscription));
+        } catch (Exception error) {
+            if (requestId.matches("[A-Za-z0-9._:-]{1,128}")) {
+                deliverSavedRunStreamClosed(requestId, error.getMessage());
+            }
+        }
+    }
+
+    private void readSavedRunStream(String requestId, String runId, long afterSequence,
+                                    SavedRunStream subscription) {
+        String terminalError = "";
+        try {
+            if (subscription.cancelled) return;
+            URI backend = URI.create(backendBaseUrl);
+            if (backend.getScheme() == null || !(backend.getScheme().equalsIgnoreCase("http")
+                    || backend.getScheme().equalsIgnoreCase("https")) || backend.getUserInfo() != null) {
+                throw new IllegalArgumentException("Configured backend URL is invalid");
+            }
+            String path = "/agent/runs/" + runId + "/stream?after_sequence=" + afterSequence;
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(backendBaseUrl + path))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .header("Accept", "text/event-stream")
+                    .GET()
+                    .build();
+            if (subscription.cancelled) return;
+            HttpResponse<InputStream> response = httpClient.send(request, HttpResponse.BodyHandlers.ofInputStream());
+            subscription.body = response.body();
+            if (subscription.cancelled) return;
+            if (response.statusCode() < 200 || response.statusCode() >= 300) {
+                byte[] errorBody = response.body().readNBytes(4096);
+                terminalError = "HTTP " + response.statusCode() + ": "
+                        + new String(errorBody, StandardCharsets.UTF_8);
+                return;
+            }
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
+                String eventName = "message";
+                String lastEventId = "";
+                StringBuilder data = new StringBuilder();
+                String line;
+                while (!subscription.cancelled && (line = reader.readLine()) != null) {
+                    if (line.isEmpty()) {
+                        if (data.length() > 0) deliverSavedRunStreamEvent(requestId, eventName, data.toString(), lastEventId);
+                        eventName = "message";
+                        data.setLength(0);
+                    } else if (line.charAt(0) != ':') {
+                        int separator = line.indexOf(':');
+                        String field = separator < 0 ? line : line.substring(0, separator);
+                        String value = separator < 0 ? "" : line.substring(separator + 1);
+                        if (value.startsWith(" ")) value = value.substring(1);
+                        if (field.equals("event")) eventName = value;
+                        else if (field.equals("id") && value.indexOf('\0') < 0) lastEventId = value;
+                        else if (field.equals("data")) {
+                            if (data.length() > 0) data.append('\n');
+                            data.append(value);
+                        }
+                    }
+                }
+                if (!subscription.cancelled && data.length() > 0) {
+                    deliverSavedRunStreamEvent(requestId, eventName, data.toString(), lastEventId);
+                }
+            }
+        } catch (Exception error) {
+            if (!subscription.cancelled) terminalError = error.getMessage() == null
+                    ? error.getClass().getSimpleName() : error.getMessage();
+        } finally {
+            if (savedRunStreams.remove(requestId, subscription) && !subscription.cancelled) {
+                deliverSavedRunStreamClosed(requestId, terminalError);
+            }
+            closeSavedRunBody(subscription);
+        }
+    }
+
+    private void cancelSavedRunStream(String requestId) {
+        if (requestId == null || !requestId.matches("[A-Za-z0-9._:-]{1,128}")) return;
+        SavedRunStream subscription = savedRunStreams.remove(requestId);
+        if (subscription != null) {
+            stopSavedRunStream(subscription);
+            deliverSavedRunStreamClosed(requestId, "cancelled");
+        }
+    }
+
+    private void cancelAllSavedRunStreams() {
+        for (String requestId : List.copyOf(savedRunStreams.keySet())) cancelSavedRunStream(requestId);
+    }
+
+    private static void stopSavedRunStream(SavedRunStream subscription) {
+        subscription.cancelled = true;
+        closeSavedRunBody(subscription);
+        Future<?> worker = subscription.worker;
+        if (worker != null) worker.cancel(true);
+    }
+
+    private static void closeSavedRunBody(SavedRunStream subscription) {
+        InputStream body = subscription.body;
+        subscription.body = null;
+        if (body != null) {
+            try { body.close(); } catch (IOException ignored) { }
+        }
+    }
+
+    private void deliverSavedRunStreamEvent(String requestId, String eventName, String data, String eventId) {
+        String script = "window.__petChatReceiveSavedRunStream && window.__petChatReceiveSavedRunStream("
+                + jsonString(requestId) + "," + jsonString(eventName) + "," + jsonString(data) + ","
+                + jsonString(eventId) + ");";
+        Platform.runLater(() -> {
+            try { if (webView != null) webView.getEngine().executeScript(script); }
+            catch (RuntimeException ignored) { /* The page may have switched since this event was read. */ }
+        });
+    }
+
+    private void deliverSavedRunStreamClosed(String requestId, String error) {
+        String script = "window.__petChatSavedRunStreamClosed && window.__petChatSavedRunStreamClosed("
+                + jsonString(requestId) + "," + jsonString(error == null ? "" : error) + ");";
+        Platform.runLater(() -> {
+            try { if (webView != null) webView.getEngine().executeScript(script); }
+            catch (RuntimeException ignored) { /* The page may have switched since this stream ended. */ }
+        });
     }
 
     private String decideSafetyReview(String reviewId, String decision) {
@@ -2014,6 +2498,59 @@ final class PetControlWindow {
                 }
                 return false;
             }
+            String managerId = "[A-Za-z0-9_-]{1,200}";
+            if (route.startsWith("/managers/")) {
+                boolean goals = route.matches("/managers/" + managerId + "/goals");
+                boolean feed = route.matches("/managers/" + managerId + "/(?:events|executions|deliveries)");
+                if (goals || feed) {
+                    if (!method.equals("GET")) return false;
+                    if (uri.getRawQuery() != null) {
+                        List<String> queryNames = goals ? List.of("limit", "offset") : List.of("after", "limit");
+                        for (String part : uri.getRawQuery().split("&", -1)) {
+                            if (!queryNames.contains(part.split("=", 2)[0])) return false;
+                        }
+                    }
+                    return true;
+                }
+                if (uri.getRawQuery() != null) return false;
+                return method.equals("POST") && route.equals("/managers/default")
+                        || (method.equals("GET") || method.equals("PATCH")) && route.matches("/managers/" + managerId);
+            }
+            if (route.matches("/sessions/" + managerId + "/inputs(?:/resume)?")) {
+                if (uri.getRawQuery() != null) return false;
+                return method.equals("POST") || method.equals("GET") && !route.endsWith("/resume");
+            }
+            if (route.matches("/sessions/" + managerId + "/runs")) {
+                if (!method.equals("GET")) return false;
+                if (uri.getRawQuery() != null) {
+                    for (String part : uri.getRawQuery().split("&", -1)) {
+                        if (!List.of("limit", "offset").contains(part.split("=", 2)[0])) return false;
+                    }
+                }
+                return true;
+            }
+            if (route.equals("/matters/sync")) {
+                if (!method.equals("GET")) return false;
+                if (uri.getRawQuery() != null) {
+                    for (String part : uri.getRawQuery().split("&", -1)) {
+                        if (!List.of("after", "limit").contains(part.split("=", 2)[0])) return false;
+                    }
+                }
+                return true;
+            }
+            if (route.equals("/matters") || route.matches("/matters/" + segment)) {
+                if (!(method.equals("GET") || method.equals("POST") && route.equals("/matters")
+                        || method.equals("PATCH") && !route.equals("/matters"))) return false;
+                if (uri.getRawQuery() != null) {
+                    if (!method.equals("GET") || !route.equals("/matters")) return false;
+                    for (String part : uri.getRawQuery().split("&", -1)) {
+                        if (!List.of("limit", "offset", "status", "q", "kind", "parent_matter_id",
+                                "project_id", "due_before", "due_after", "unscheduled", "scheduled_on",
+                                "scheduled_before", "scheduled_after", "inbox", "section", "visibility").contains(part.split("=", 2)[0])) return false;
+                    }
+                }
+                return true;
+            }
             if (uri.getRawQuery() != null) {
                 for (String part : uri.getRawQuery().split("&")) {
                     String name = part.split("=", 2)[0];
@@ -2047,6 +2584,10 @@ final class PetControlWindow {
     }
 
     private void handleMemoryRequest(String payloadJson) {
+        handleMemoryRequest(payloadJson, webView);
+    }
+
+    private void handleMemoryRequest(String payloadJson, WebView target) {
         String requestId = "";
         try {
             JsonObject payload = JsonParser.parseString(payloadJson).getAsJsonObject();
@@ -2055,7 +2596,7 @@ final class PetControlWindow {
             String method = payload.get("method").getAsString();
             String path = payload.get("path").getAsString();
             if (!allowedMemoryRequest(method, path)) {
-                deliverMemoryResponse(requestId, 403, jsonObject("detail", "unsupported memory request"));
+                deliverMemoryResponse(target, requestId, 403, jsonObject("detail", "unsupported memory request"));
                 return;
             }
             String body = payload.has("body") ? payload.get("body").getAsString() : "";
@@ -2077,19 +2618,19 @@ final class PetControlWindow {
             String callbackId = requestId;
             httpClient.sendAsync(builder.build(), HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8))
                     .whenComplete((response, error) -> {
-                        if (error != null) deliverMemoryResponse(callbackId, 0, "{}");
-                        else deliverMemoryResponse(callbackId, response.statusCode(), response.body());
+                        if (error != null) deliverMemoryResponse(target, callbackId, 0, "{}");
+                        else deliverMemoryResponse(target, callbackId, response.statusCode(), response.body());
                     });
         } catch (RuntimeException error) {
-            if (requestId.matches("memory-[a-z0-9]+-[0-9]+")) deliverMemoryResponse(requestId, 0, "{}");
+            if (requestId.matches("memory-[a-z0-9]+-[0-9]+")) deliverMemoryResponse(target, requestId, 0, "{}");
         }
     }
 
-    private void deliverMemoryResponse(String requestId, int status, String body) {
+    private void deliverMemoryResponse(WebView target, String requestId, int status, String body) {
         String script = "window.__lkaMemoryBridgeReceive && window.__lkaMemoryBridgeReceive("
                 + jsonString(requestId) + "," + status + "," + jsonString(body) + ");";
         Platform.runLater(() -> {
-            try { if (webView != null) webView.getEngine().executeScript(script); }
+            try { if (target != null) target.getEngine().executeScript(script); }
             catch (RuntimeException ignored) { /* A closed or reloaded page drops its own pending requests. */ }
         });
     }
@@ -2123,8 +2664,9 @@ final class PetControlWindow {
         });
     }
 
-    private void deliverChatStreamEvent(String eventName, String dataJson) {
-        String script = "window.__petChatReceiveStream && window.__petChatReceiveStream(" + jsonString(eventName) + "," + dataJson + ");";
+    private void deliverChatStreamEvent(String eventName, String dataJson, String requestId) {
+        String script = "window.__petChatReceiveStream && window.__petChatReceiveStream(" + jsonString(eventName) + "," + dataJson
+                + (requestId == null || requestId.isEmpty() ? "" : "," + jsonString(requestId)) + ");";
         Platform.runLater(() -> {
             try { webView.getEngine().executeScript(script); }
             catch (RuntimeException error) {
@@ -2133,7 +2675,7 @@ final class PetControlWindow {
         });
     }
 
-    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model, String attachmentIds) {
+    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model, String attachmentIds, Boolean resumable) {
         Thread worker = new Thread(() -> {
             String responseJson;
             try {
@@ -2142,6 +2684,7 @@ final class PetControlWindow {
                 requestBody.addProperty("user_input", question == null ? "" : question);
                 requestBody.add("attachment_ids", JsonParser.parseString(attachmentIds == null ? "[]" : attachmentIds));
                 if (safetyMode != null && !safetyMode.isBlank()) requestBody.addProperty("safety_review_mode", safetyMode);
+                if (resumable != null) requestBody.addProperty("resumable", resumable);
                 if ((client != null && !client.isBlank()) || (model != null && !model.isBlank())) {
                     JsonObject llm = new JsonObject();
                     if (client != null && !client.isBlank()) llm.addProperty("client_name", client);

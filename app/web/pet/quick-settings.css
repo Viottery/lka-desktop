@@ -1,0 +1,27 @@
+/* Quick settings: one quiet sheet, with controls aligned to the conversation. */
+body.quick-mode #openGlobalAssistantQuick,
+body.quick-mode #newQuickSessionButton { width: 28px; min-width: 28px; height: 28px; padding: 5px; color: #53756f; }
+body.quick-mode #openGlobalAssistantQuick svg,
+body.quick-mode #newQuickSessionButton svg { width: 18px; height: 18px; }
+.qs-panel { position: fixed; z-index: 70; bottom: 48px; right: 10px; width: min(320px, calc(100vw - 20px)); max-height: calc(100dvh - 58px); overflow-y: auto; padding: 20px; background: #f8fcfb; color: #203c3a; border: 1px solid #dbe8e5; border-radius: 15px; box-shadow: 0 12px 36px #203c3a24; font: 13px/1.5 'Noto Sans SC', 'Microsoft YaHei UI', sans-serif; color-scheme: light; }
+.qs-panel[hidden] { display: none; }
+.qs-panel header { display: flex; justify-content: space-between; align-items: flex-start; margin-bottom: 22px; }
+.qs-panel h2 { margin: 0; font-size: 16px; font-weight: 600; letter-spacing: .04em; }
+.qs-panel header p { margin: 3px 0 0; font-size: 11px; color: #789491; }
+.qs-panel .qs-icon { display: inline-grid; place-items: center; flex: 0 0 30px; width: 30px; height: 30px; padding: 0; border: 0; border-radius: 7px; color: #53756f; background: transparent; font-size: 20px; cursor: pointer; }
+.qs-panel .qs-icon:hover { background: #e8f2ef; }
+.qs-field { display: grid; gap: 7px; margin-bottom: 19px; }
+.qs-field label { font-size: 12px; font-weight: 500; }
+.qs-model-row { display: flex; gap: 6px; align-items: center; }
+.qs-panel select { width: 100%; min-width: 0; height: 37px; padding: 6px 9px; border: 1px solid #dbe8e5; border-radius: 8px; background: white; color: #203c3a; font: inherit; font-size: 12px; text-overflow: ellipsis; }
+.qs-panel small, .qs-help { color: #789491; font-size: 11px; line-height: 1.6; }
+.qs-switch { display: flex; align-items: center; justify-content: space-between; padding-top: 16px; border-top: 1px solid #dbe8e5; }
+.qs-switch input { accent-color: #53756f; width: 16px; height: 16px; }
+.qs-help { margin: 6px 0 0; }
+#qsStatus { min-height: 18px; margin: 18px 0 10px; color: #789491; font-size: 11px; }
+#qsStatus.qs-error { color: #a8453e; }
+#qsApply { width: 100%; height: 36px; border: 0; border-radius: 8px; background: #53756f; color: white; font: inherit; font-size: 12px; cursor: pointer; }
+.qs-panel :focus-visible { outline: 2px solid #2b7d70; outline-offset: 2px; }
+.qs-panel :disabled { opacity: .55; cursor: default; }
+
+body.quick-mode:not(.native-composer) #toggleSettingsButton { display: inline-flex !important; }

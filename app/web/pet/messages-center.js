@@ -358,7 +358,7 @@
   async function onFile(event) {
     if(!maySend())return;const file=event.target.files[0];if(!file)return;
     const kind=event.target.dataset.kind,key=state.selected?.conversation_key,draft=getDraft();
-    const limit=kind==='video'?state.caps?.video_max_bytes||209715200:state.caps?.image_max_bytes||20971520;
+    const limit=kind==='video'?state.caps?.video_max_bytes||268435456:state.caps?.image_max_bytes||268435456;
     if(file.size>limit){notice('文件超出限制：'+Math.round(limit/1048576)+' MB。',true);return;}
     if((kind==='video'&&(draft.files.length||draft.text.trim()))||draft.files.some(v=>v.kind==='video'||v.kind==='custom_face')){notice('视频和收藏表情需要单独发送。请先移除当前草稿内容。',true);return;}
     state.uploading=true;updateSend();

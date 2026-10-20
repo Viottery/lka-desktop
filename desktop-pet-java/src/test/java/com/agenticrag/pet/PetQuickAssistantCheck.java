@@ -1,0 +1,234 @@
+package com.agenticrag.pet;
+
+import com.sun.net.httpserver.HttpServer;
+import javafx.application.Platform;
+import javafx.scene.control.Button;
+import javafx.scene.control.TextArea;
+import javafx.scene.web.WebView;
+import javafx.stage.Stage;
+
+import java.lang.reflect.Field;
+import java.lang.reflect.Method;
+import java.net.InetSocketAddress;
+import java.nio.charset.StandardCharsets;
+import java.util.List;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
+
+/** Isolated native quick assistant lifecycle/actions; never opens a browser or a real backend. */
+public final class PetQuickAssistantCheck {
+    private static WebView view;
+    private static double collapsedSettingsHeight;
+    public static void main(String[] args) throws Exception {
+        String page = "http://127.0.0.1:8780/desktop-pet/chat.html";
+        check(PetControlWindow.quickAssistantPageUrl(page).equals(page + "?assistant=quick"), "default native quick URL selects assistant");
+        check(PetControlWindow.quickAssistantPageUrl(page + "?mode=quick&backend=encoded").endsWith("&assistant=quick"), "default quick URL keeps existing query");
+        for (String query : List.of("session_id=ordinary-1", "run_id=ordinary-run", "assistant=global", "mode=work")) {
+            check(PetControlWindow.quickAssistantPageUrl(page + "?" + query).equals(page + "?" + query), "explicit session/run/assistant/work entry retained");
+        }
+        check(PetControlWindow.workbenchPageUrl(page + "?assistant=quick", "http://127.0.0.1:8765", "ordinary-session", "ordinary-run", true)
+                .equals(page + "?mode=work&backend=http%3A%2F%2F127.0.0.1%3A8765&assistant=global"), "global workbench URL has no inherited ordinary identity or quick mode");
+        String html = """
+            <!doctype html><html><body><button id="newQuickSessionButton" onclick="window.newTasks++;window.fixtureKind='ordinary'">新任务</button><script>
+            window.assistantOpens=0;window.freshOpens=0;window.newTasks=0;window.workbenchOpens=0;window.fixtureKind='ordinary';
+            window.localManagerDraft='保留助手草稿';
+            window.__petChatOpenAssistant=function(){window.assistantOpens++;window.fixtureKind='manager';return Promise.resolve(true);};
+            window.__petChatOpenFreshTask=function(){window.freshOpens++;window.localManagerDraft='不应清除';};
+            window.__petChatOpenWorkbench=function(){window.workbenchOpens++;};
+            window.settingsRefreshes=[];window.settingsUpdates=[];
+            window.fixtureSettings={sessionId:'manager-one',kind:'manager',scopeLabel:'真理模型',modelValue:'default',models:[{value:'default',label:'跟随后端默认模型'},{value:'alternate',label:'合成服务商 / 模型 B'}],safetyMode:'backend',stream:true,ready:true,loading:false,busy:false,error:'',notice:''};
+            window.publishFixture=function(){petBridge.setQuickSettingsState(JSON.stringify(window.fixtureSettings));};
+            window.LkaChatContext={get:function(){return {kind:window.fixtureKind};},
+              quickSettings:function(){return window.fixtureSettings;},
+              refreshQuickSettings:function(force){window.settingsRefreshes.push(!!force);window.publishFixture();return Promise.resolve(window.fixtureSettings);},
+              updateQuickSettings:function(draft){window.settingsUpdates.push(draft);Object.assign(window.fixtureSettings,draft,{busy:true});window.publishFixture();return new Promise(function(resolve){setTimeout(function(){Object.assign(window.fixtureSettings,{busy:false,notice:'已保存，下次新运行生效'});window.publishFixture();resolve(window.fixtureSettings);},50);});}};
+
+            if(new URLSearchParams(location.search).get('assistant')==='quick')window.__petChatOpenAssistant();
+            </script></body></html>
+            """;
+        HttpServer server = HttpServer.create(new InetSocketAddress("127.0.0.1", 0), 0);
+        server.createContext("/", exchange -> {
+            byte[] bytes = html.getBytes(StandardCharsets.UTF_8);
+            exchange.getResponseHeaders().set("Content-Type", "text/html; charset=utf-8");
+            exchange.sendResponseHeaders(200, bytes.length); exchange.getResponseBody().write(bytes); exchange.close();
+        });
+        server.start();
+        String base = "http://127.0.0.1:" + server.getAddress().getPort();
+        PetControlActions actions = new PetControlActions() {
+            public List<PetModelOption> listModels() { return List.of(); }
+            public String getActiveModelId() { return ""; }
+            public void switchModel(String id) {}
+            public boolean isRandomBehaviorEnabled() { return false; }
+            public void setRandomBehaviorEnabled(boolean enabled) {}
+            public void playInteraction(String action) {}
+            public boolean hasInteraction(String action) { return false; }
+            public void reloadModel() {}
+            public void increaseScale() {}
+            public void decreaseScale() {}
+            public void raiseModel() {}
+            public void lowerModel() {}
+            public void shutdownDesktopPet() {}
+        };
+        PetControlWindow control = new PetControlWindow(actions, base + "/desktop-pet/chat.html?mode=quick&backend=" + base, ".", List.of());
+        try {
+            control.toggle(100, 100);
+            waitFor(() -> {
+                view = (WebView) field(control, "webView");
+                return view != null && Boolean.TRUE.equals(view.getEngine().executeScript("Boolean(window.petBridge && window.__petChatOpenAssistant)"));
+            });
+            Stage stage = (Stage) fx(() -> field(control, "stage"));
+            TextArea composer = (TextArea) fx(() -> field(control, "nativeInput"));
+            int before = ((Number) fx(() -> script("window.assistantOpens"))).intValue();
+            check(before >= 1, "initial default URL bootstraps assistant");
+            fx(() -> {
+                check(view.getEngine().getLocation().contains("assistant=quick"), "actual native WebView URL selects quick assistant");
+                check(!view.getEngine().getLocation().contains("session_id="), "default native URL does not inherit ordinary session");
+                composer.setText("保留原生输入草稿");
+                script("window.localManagerDraft='保留助手草稿';window.managerRoot='same-root'");
+                return null;
+            });
+            control.toggle(100, 100);
+            waitFor(() -> !stage.isShowing());
+            control.toggle(100, 100);
+            waitFor(() -> stage.isShowing() && ((Number) script("window.assistantOpens")).intValue() == before + 1);
+            fx(() -> {
+                check(field(control, "webView") == view && field(control, "nativeInput") == composer, "reopen reuses main WebView and native composer");
+                check("保留原生输入草稿".equals(composer.getText()), "reopen preserves native composer draft");
+                check("保留助手草稿".equals(script("window.localManagerDraft")) && "same-root".equals(script("window.managerRoot")), "reopen preserves existing manager draft/root");
+                check(((Number) script("window.freshOpens")).intValue() == 0, "show/reopen never opens fresh task");
+                stage.setWidth(340);
+                return null;
+            });
+            waitFor(() -> Math.abs(stage.getWidth() - 340) < 1);
+            fx(() -> {
+                stage.getScene().getRoot().applyCss(); stage.getScene().getRoot().layout();
+                Button assistant = (Button) stage.getScene().lookup("#quickGlobalAssistantButton");
+                Button task = (Button) stage.getScene().lookup("#quickNewTaskButton");
+                check(assistant != null && assistant.getText().isEmpty() && assistant.getGraphic() != null && "打开真理".equals(assistant.getAccessibleText()), "accessible assistant icon entry");
+                check(task != null && task.getText().isEmpty() && task.getGraphic() != null && "新任务".equals(task.getAccessibleText()), "accessible independent task icon entry");
+                check(task.localToScene(task.getBoundsInLocal()).getMaxX() <= stage.getWidth(), "new task text fits minimum quick width");
+                check(assistant.localToScene(assistant.getBoundsInLocal()).getMaxX() <= stage.getWidth(), "assistant text fits minimum quick width");
+                task.fire();
+                check(((Number) script("window.newTasks")).intValue() == 1, "native new task invokes existing page button");
+                check("ordinary".equals(script("window.fixtureKind")), "new task stays independent from manager");
+                assistant.fire();
+                check(((Number) script("window.assistantOpens")).intValue() == before + 2 && stage.isShowing(), "assistant action dispatches into same visible window");
+                Method manager = PetControlWindow.class.getDeclaredMethod("isManagerSession"); manager.setAccessible(true);
+                check(Boolean.TRUE.equals(manager.invoke(control)), "workbench dispatch recognizes active manager context");
+                script("window.fixtureKind='ordinary'");
+                check(Boolean.FALSE.equals(manager.invoke(control)), "ordinary context retains normal workbench dispatch");
+                Button workbench = stage.getScene().getRoot().lookupAll(".button").stream()
+                        .filter(node -> node instanceof Button b && b.getTooltip() != null && b.getTooltip().getText().equals("打开工作台"))
+                        .map(node -> (Button) node).findFirst().orElseThrow();
+                workbench.fire();
+                check(((Number) script("window.workbenchOpens")).intValue() == 1, "ordinary workbench still follows existing JS session handoff");
+                check(((Number) script("document.querySelectorAll('iframe').length")).intValue() == 0, "composer remains in main WebView");
+                return null;
+            });
+            testQuickSettings(control, stage);
+            System.out.println("PASS: default quick assistant URL; reusable manager draft/root and native composer; visible assistant/new-task actions at 340px; manager/ordinary workbench dispatch");
+        } finally { control.dispose(); server.stop(0); Platform.exit(); }
+    }
+    private static void testQuickSettings(PetControlWindow control, Stage stage) throws Exception {
+        fx(() -> {
+            javafx.scene.control.MenuButton menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
+            check(menu.getItems().size() == 1 && menu.getItems().getFirst() instanceof javafx.scene.control.CustomMenuItem item && !item.isHideOnClick(), "one persistent custom settings sheet");
+            menu.show();
+            return null;
+        });
+        waitFor(() -> ((Number) script("window.settingsRefreshes.length")).intValue() == 1);
+        fx(() -> {
+            check(Boolean.FALSE.equals(script("window.settingsRefreshes[0]")), "opening refreshes scope without forcing model discovery");
+            var model = (javafx.scene.control.ComboBox<?>) field(control, "quickSettingsModel");
+            var safety = (javafx.scene.control.ComboBox<?>) field(control, "quickSettingsSafety");
+            var apply = (Button) field(control, "quickSettingsApply");
+            var refresh = (Button) field(control, "quickSettingsRefresh");
+            var stream = (javafx.scene.control.CheckBox) field(control, "quickSettingsStream");
+            check(!apply.isDisabled() && model.getItems().size() == 2, "validated model snapshot enables apply");
+            var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
+            var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
+            var pet = (javafx.scene.control.TitledPane) scroll.getContent().lookup("#quickSettingsPetSection");
+            check(pet != null && !pet.isExpanded(), "pet controls collapsed by default");
+            check(scroll.getHbarPolicy() == javafx.scene.control.ScrollPane.ScrollBarPolicy.NEVER, "sheet fits narrow quick window");
+            check(scroll.getWidth() <= 320, "settings sheet stays within 340px window width");
+            model.getSelectionModel().select(1);
+            safety.getSelectionModel().select(2);
+            stream.setSelected(false);
+            script("window.publishFixture()");
+            check(model.getSelectionModel().getSelectedIndex() == 1 && safety.getSelectionModel().getSelectedIndex() == 2 && !stream.isSelected(), "unsaved selection survives incoming same-session snapshot");
+            apply.fire();
+            check(apply.isDisabled(), "save disables apply while busy");
+            check("alternate".equals(script("window.settingsUpdates[0].modelValue")) && "manual".equals(script("window.settingsUpdates[0].safetyMode")) && Boolean.FALSE.equals(script("window.settingsUpdates[0].stream")), "apply delegates complete draft to JS without native HTTP");
+            return null;
+        });
+        waitFor(() -> !((Button) field(control, "quickSettingsApply")).isDisabled());
+        fx(() -> {
+            check(((javafx.scene.control.Label) field(control, "quickSettingsStatus")).getText().contains("下次新运行生效"), "save acknowledgement shown");
+            ((Button) field(control, "quickSettingsRefresh")).fire();
+            check(Boolean.TRUE.equals(script("window.settingsRefreshes[1]")), "model refresh requests forced discovery");
+            script("Object.assign(window.fixtureSettings,{error:'设置已变化，请重新应用',modelValue:'alternate'});window.publishFixture()");
+            var model = (javafx.scene.control.ComboBox<?>) field(control, "quickSettingsModel");
+            check(model.getSelectionModel().getSelectedIndex() == 1, "error preserves submitted model");
+            script("window.fixtureSettings.ready=false;window.publishFixture()");
+            check(((Button) field(control, "quickSettingsApply")).isDisabled(), "unready manager cannot apply");
+            script("Object.assign(window.fixtureSettings,{sessionId:'ordinary-two',kind:'ordinary',scopeLabel:'独立任务默认模型',modelValue:'default',ready:true,error:''});window.publishFixture()");
+            check(model.getSelectionModel().getSelectedIndex() == 0, "new session resets prior scope selection");
+            check("独立任务默认模型".equals(((javafx.scene.control.Label) field(control, "quickSettingsScope")).getText()), "scope changes with selected session");
+            var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
+            var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
+            var pet = (javafx.scene.control.TitledPane) scroll.getContent().lookup("#quickSettingsPetSection");
+            pet.setExpanded(true);
+            check(pet.getContent().lookupAll(".button").size() == 11, "all legacy pet actions retained in expandable section");
+            pet.setExpanded(false);
+            String output = System.getProperty("lka.quickSettingsShots", "");
+            if (!output.isBlank()) {
+                java.nio.file.Path directory = java.nio.file.Path.of(output);
+                java.nio.file.Files.createDirectories(directory);
+                javafx.stage.Window popup = javafx.stage.Window.getWindows().stream().filter(w -> w.isShowing() && w != stage && w.getScene() != null && w.getScene().getRoot().lookup("#quickSettingsPanel") != null).findFirst().orElseThrow();
+                popup.getScene().getRoot().applyCss(); popup.getScene().getRoot().layout();
+                javax.imageio.ImageIO.write(javafx.embed.swing.SwingFXUtils.fromFXImage(popup.getScene().snapshot(null), null), "png", directory.resolve("quick-settings-340.png").toFile());
+            }
+            collapsedSettingsHeight = scroll.getHeight();
+            pet.setExpanded(true);
+            return null;
+        });
+        waitFor(() -> {
+            var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
+            var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
+            return scroll.getHeight() > collapsedSettingsHeight + 30;
+        });
+        fx(() -> {
+            var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
+            var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
+            check(scroll.getHeight() <= 540, "expanded pet actions stay bounded and scroll");
+            check(scroll.getContent().getBoundsInLocal().getHeight() > scroll.getViewportBounds().getHeight(), "expanded content remains accessible through vertical scroll");
+            String output = System.getProperty("lka.quickSettingsShots", "");
+            if (!output.isBlank()) {
+                javafx.stage.Window popup = javafx.stage.Window.getWindows().stream().filter(w -> w.isShowing() && w != stage && w.getScene() != null && w.getScene().getRoot().lookup("#quickSettingsPanel") != null).findFirst().orElseThrow();
+                javax.imageio.ImageIO.write(javafx.embed.swing.SwingFXUtils.fromFXImage(popup.getScene().snapshot(null), null), "png", java.nio.file.Path.of(output).resolve("quick-settings-expanded-340.png").toFile());
+            }
+            ((javafx.scene.control.TitledPane) scroll.getContent().lookup("#quickSettingsPetSection")).setExpanded(false);
+            return null;
+        });
+        waitFor(() -> {
+            var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
+            var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
+            return Math.abs(scroll.getHeight() - collapsedSettingsHeight) < 2;
+        });
+        fx(() -> { ((javafx.scene.control.MenuButton) field(control, "settingsMenuButton")).hide(); return null; });
+        System.out.println("PASS: native settings sheet, JS bridge snapshots, explicit apply, refresh modes, dirty selection, ready/busy guards, scope switch, collapsed pet actions");
+    }
+    private static Object script(String code) { return view.getEngine().executeScript(code); }
+    private static Object field(Object object, String name) throws Exception { Field f = object.getClass().getDeclaredField(name); f.setAccessible(true); return f.get(object); }
+    private static void waitFor(java.util.concurrent.Callable<Boolean> condition) throws Exception {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(20);
+        while (System.nanoTime() < deadline) { if (Boolean.TRUE.equals(fx(condition))) return; Thread.sleep(50); }
+        throw new AssertionError("Timed out waiting for quick assistant fixture");
+    }
+    private static Object fx(java.util.concurrent.Callable<?> action) throws Exception {
+        CompletableFuture<Object> result = new CompletableFuture<>();
+        Platform.runLater(() -> { try { result.complete(action.call()); } catch (Throwable error) { result.completeExceptionally(error); } });
+        return result.get(8, TimeUnit.SECONDS);
+    }
+    private static void check(boolean condition, String label) { if (!condition) throw new AssertionError(label); }
+}

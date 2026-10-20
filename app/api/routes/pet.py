@@ -6,6 +6,7 @@ import ntpath
 import os
 import re
 import string
+import sys
 from pathlib import Path
 from urllib.parse import urlsplit
 
@@ -234,13 +235,15 @@ def _default_session_workspace_root() -> Path:
     return Path.home() / "Documents" / "Local Knowledge Agent" / "Workspaces"
 
 
-@router.post("/session-workspace")
-def create_session_workspace(payload: SessionWorkspaceCreateRequest, request: Request) -> dict[str, str]:
-    """Create a local, isolated folder for one desktop session."""
+class SessionWorkspaceParentRequest(BaseModel):
+    base_path: str = Field(default="", max_length=1000)
+
+
+def _session_workspace_parent(base_path: str, request: Request) -> Path:
     from app.api.routes.workbench_proxy import require_workbench_page, is_local_page
     require_workbench_page(request)
     local = is_local_page(request)
-    requested_root = payload.base_path.strip()
+    requested_root = base_path.strip()
     if requested_root and not Path(requested_root).is_absolute():
         raise HTTPException(status_code=422, detail="Workspace base path must be absolute")
     default_root = _default_session_workspace_root().resolve()
@@ -251,6 +254,24 @@ def create_session_workspace(payload: SessionWorkspaceCreateRequest, request: Re
             for item in os.environ.get("LKA_REMOTE_WORKSPACE_ROOTS", "").split(";") if item.strip())
         if root not in allowed_roots:
             raise HTTPException(status_code=403, detail="Remote workspace root is not enabled")
+    return root
+
+
+@router.post("/session-workspace-parent")
+def ensure_session_workspace_parent(payload: SessionWorkspaceParentRequest, request: Request) -> dict[str, str]:
+    """Resolve the desktop's default task parent without allocating a session folder."""
+    root = _session_workspace_parent(payload.base_path, request)
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError as exc:
+        raise HTTPException(status_code=500, detail=f"Cannot create workspace parent: {exc}") from exc
+    return {"path": root.as_posix(), "platform": "windows" if os.name == "nt" else "macos" if sys.platform == "darwin" else "linux"}
+
+
+@router.post("/session-workspace")
+def create_session_workspace(payload: SessionWorkspaceCreateRequest, request: Request) -> dict[str, str]:
+    """Create a local, isolated folder for one desktop session."""
+    root = _session_workspace_parent(payload.base_path, request)
     workspace = root / _workspace_folder_name(payload.session_id)
     try:
         workspace.mkdir(parents=True, exist_ok=True)
