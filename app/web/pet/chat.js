@@ -613,6 +613,9 @@
       workspace_is_custom: !!rawSession.workspace_is_custom,
       project_id: rawSession.kind === "manager" ? "" : safeText(rawSession.project_id).trim(),
       backendWorkspace: rawSession.kind === "manager" ? "" : safeText(rawSession.backendWorkspace).trim(),
+      // "reserved": the default folder is allocated by path only; the backend creates it on first write.
+      workspaceState: rawSession.workspaceState === "reserved" ? "reserved" : "",
+      workspaceReserved: !!rawSession.workspaceReserved,
       multiAgentRunId: savedRunId || safeText(rawSession.multiAgentRunId || rawSession.multi_agent_run_id).trim(),
       multiAgentSequence: savedRunId
         ? savedSequence
@@ -1054,6 +1057,7 @@
       workspace: rawSession.workspace && rawSession.workspace.path || "",
       project_id: rawSession.project_id || "",
       backendWorkspace: rawSession.workspace && rawSession.workspace.path || "",
+      workspaceState: rawSession.workspace && rawSession.workspace.state === "reserved" ? "reserved" : "",
       workspace_is_custom: !!(rawSession.metadata && (rawSession.metadata.explicit_workspace || rawSession.metadata.project_session || rawSession.metadata.workspace_is_custom)),
       messages: normalizedMessages.length ? normalizedMessages : [defaultGreetingMessage()]
     });
@@ -1108,6 +1112,7 @@
     if (!pendingState && (!existing.backendWorkspace || existing.workspace === existing.backendWorkspace)) {
       existing.workspace = remoteSession.workspace;
       existing.backendWorkspace = remoteSession.backendWorkspace;
+      existing.workspaceState = remoteSession.workspaceState;
       existing.project_id = remoteSession.project_id;
     }
     applySessionTitle(existing);
@@ -1839,7 +1844,7 @@
       var folderName = parts.pop() || "";
       var isDefaultFolder = folderName === (session && session.id) ||
         (/^session-[0-9a-f]{64}$/.test(folderName) && parts.slice(-2).join("/") === "Local Knowledge Agent/Workspaces");
-      workspaceSummary.textContent = isManagerSession(session) ? "真理 · 按授权范围处理任务" : !path ? (getSessionMessageCount(session) ? "正在准备独立工作区…" : "新任务 · 发送后创建工作区") : isDefaultFolder ? "默认任务工作区" : folderName;
+      workspaceSummary.textContent = isManagerSession(session) ? "真理 · 按授权范围处理任务" : !path ? (getSessionMessageCount(session) ? "正在准备独立工作区…" : "新任务 · 发送后创建工作区") : isDefaultFolder ? (session.workspaceState === "reserved" ? "默认任务工作区 · 写入文件时创建" : "默认任务工作区") : folderName;
       workspaceSummary.title = path || "尚未设置工作区";
     }
     var managerView = isManagerSession(session);
@@ -1887,6 +1892,7 @@
         try {
           await ensureSessionWorkspace(session);
           await bindSessionWorkspace(session);
+          await materializeSessionWorkspace(getSessionById(session.id) || session);
           await loadFileList();
         } catch (error) {
           showFilePanelMessage("工作区载入失败：" + safeText(error.message || error), true);
@@ -1907,14 +1913,21 @@
     if (fileCurrentPath) fileCurrentPath.textContent = fileRelativePath || "当前工作区";
     if (fileUpButton) fileUpButton.disabled = !fileRelativePath;
     if (!session) { showFilePanelMessage("打开会话后查看工作区文件。", false); return; }
-    if (session.id.indexOf("conv_") === 0) {
-      showFilePanelMessage("这个新任务还没有工作区，发送第一条消息时会自动创建。", true);
+    if (session.id.indexOf("conv_") === 0 || session.workspaceState === "reserved") {
+      showFilePanelMessage("默认工作区会在第一次写入文件时自动创建；只是聊天或修改其他目录的文件不会创建它。", true);
       return;
     }
     showFilePanelMessage("正在读取文件…", false);
     try {
       var response = await fetch(fileApiUrl(session.id, "files", fileRelativePath));
-      if (response.status === 409) { showFilePanelMessage("会话还没有绑定工作区。", true); return; }
+      if (response.status === 409) {
+        var conflict = await response.json().catch(function () { return {}; });
+        if (conflict.detail === "session_workspace_reserved") {
+          session.workspaceState = "reserved"; renderWorkspaceSummary(session);
+          showFilePanelMessage("默认工作区会在第一次写入文件时自动创建；只是聊天或修改其他目录的文件不会创建它。", true);
+        } else showFilePanelMessage("会话还没有绑定工作区。", true);
+        return;
+      }
       if (!response.ok) throw new Error("HTTP " + response.status);
       var payload = await response.json();
       if (generation !== fileRequestGeneration || activeSessionId !== session.id) return;
@@ -2019,7 +2032,7 @@
         var response = await fetch("/pet/session-workspace", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ session_id: requestKey, base_path: runSettings.workspaceParent || "" })
+          body: JSON.stringify({ session_id: requestKey, base_path: runSettings.workspaceParent || "", reserve: true })
         });
         data = await response.json().catch(function () { return {}; });
         if (!response.ok) {
@@ -2034,8 +2047,9 @@
       if (!data.path) throw new Error("工作区服务没有返回目录路径");
       if (!session.workspace) {
         session.workspace = data.path;
+        session.workspaceReserved = true;
         var liveSession = getSessionById(requestKey);
-        if (liveSession && !liveSession.workspace) liveSession.workspace = data.path;
+        if (liveSession && !liveSession.workspace) { liveSession.workspace = data.path; liveSession.workspaceReserved = true; }
         persistSessions();
         if (activeSessionId === session.id) renderWorkspaceSummary(session);
       }
@@ -4492,6 +4506,26 @@
     persistSessions();
   }
 
+  // Explicit user actions (upload, "create now") need the reserved folder on disk.
+  async function materializeSessionWorkspace(session) {
+    if (!session || session.workspaceState !== "reserved") return;
+    var data;
+    if (window.petBridge && typeof window.petBridge.materializeSessionWorkspace === "function") {
+      data = JSON.parse(window.petBridge.materializeSessionWorkspace(session.id) || "{}");
+      if (data.error) throw new Error(data.error);
+    } else {
+      var response = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(session.id) + "/workspace/materialize", { method: "POST" });
+      data = await response.json().catch(function () { return {}; });
+      if (!response.ok) throw new Error("HTTP " + response.status + ": " + (data.detail || "无法创建工作区"));
+    }
+    session.workspaceState = "";
+    session.project_id = data.project_id || session.project_id || "";
+    var live = getSessionById(session.id);
+    if (live) { live.workspaceState = ""; live.project_id = session.project_id; }
+    persistSessions();
+    if (session.id === activeSessionId) renderWorkspaceSummary(session);
+  }
+
   async function bindSessionWorkspace(session, requestedWorkspace, assertCurrent) {
     if (isManagerSession(session)) { if (assertCurrent) assertCurrent(); return session.id; }
     if (managerEmbedding) throw new Error("真理会话尚未载入，请重试。");
@@ -4511,7 +4545,11 @@
     if (!workspace) return session.id;
     if (session.backendWorkspace === workspace) return session.id;
     if (window.petBridge && typeof window.petBridge.setSessionWorkspace === "function") {
-      var bridgeResult = JSON.parse(window.petBridge.setSessionWorkspace(session.id, workspace) || "{}");
+      var reserveBinding = !!session.workspaceReserved && workspace === session.workspace && typeof window.petBridge.reserveSessionWorkspace === "function";
+      var bindThroughBridge = function () {
+        return JSON.parse((reserveBinding ? window.petBridge.reserveSessionWorkspace(session.id, workspace) : window.petBridge.setSessionWorkspace(session.id, workspace)) || "{}");
+      };
+      var bridgeResult = bindThroughBridge();
       if (bridgeResult.error && bridgeResult.error.indexOf("HTTP 404") >= 0 && typeof window.petBridge.createSession === "function") {
         if (assertCurrent) assertCurrent(true);
         var createdByBridge = JSON.parse(window.petBridge.createSession(session.title || "新会话") || "{}");
@@ -4522,21 +4560,22 @@
           var renamedByBridge = JSON.parse(window.petBridge.renameSession(bridgeSessionId, session.title) || "{}");
           if (renamedByBridge.error) throw new Error(renamedByBridge.error);
         }
-        bridgeResult = JSON.parse(window.petBridge.setSessionWorkspace(session.id, workspace) || "{}");
+        bridgeResult = bindThroughBridge();
       }
       if (bridgeResult.error) throw new Error(bridgeResult.error);
       session.project_id = bridgeResult.project_id || "";
       session.backendWorkspace = workspace;
       session.workspace = workspace;
+      session.workspaceState = bridgeResult.workspace && bridgeResult.workspace.state === "reserved" ? "reserved" : "";
       var bridgeLiveSession = getSessionById(session.id);
-      if (bridgeLiveSession) { bridgeLiveSession.project_id = session.project_id; bridgeLiveSession.backendWorkspace = workspace; bridgeLiveSession.workspace = workspace; }
+      if (bridgeLiveSession) { bridgeLiveSession.project_id = session.project_id; bridgeLiveSession.backendWorkspace = workspace; bridgeLiveSession.workspace = workspace; bridgeLiveSession.workspaceState = session.workspaceState; }
       persistSessions();
       if (session.id === activeSessionId) renderWorkspaceSummary(session);
       return session.id;
     }
     var response = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(session.id) + "/workspace", {
       method: "PUT", headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ path: workspace, platform: workspace.charAt(0) === "/" ? "linux" : "windows" })
+      body: JSON.stringify({ path: workspace, platform: workspace.charAt(0) === "/" ? "linux" : "windows", reserve: !!session.workspaceReserved && workspace === session.workspace })
     });
     if (assertCurrent) assertCurrent();
     if (response.status === 404) {
@@ -4554,7 +4593,7 @@
       replaceSessionId(session, createdSessionId);
       response = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(session.id) + "/workspace", {
         method: "PUT", headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ path: workspace, platform: workspace.charAt(0) === "/" ? "linux" : "windows" })
+        body: JSON.stringify({ path: workspace, platform: workspace.charAt(0) === "/" ? "linux" : "windows", reserve: !!session.workspaceReserved && workspace === session.workspace })
       });
     }
     var data = await response.json();
@@ -4562,8 +4601,9 @@
     session.project_id = data.project_id || "";
     session.backendWorkspace = workspace;
     session.workspace = workspace;
+    session.workspaceState = data.workspace && data.workspace.state === "reserved" ? "reserved" : "";
     var liveSession = getSessionById(session.id);
-    if (liveSession) { liveSession.project_id = session.project_id; liveSession.backendWorkspace = workspace; liveSession.workspace = workspace; }
+    if (liveSession) { liveSession.project_id = session.project_id; liveSession.backendWorkspace = workspace; liveSession.workspace = workspace; liveSession.workspaceState = session.workspaceState; }
     persistSessions();
     if (session.id === activeSessionId) renderWorkspaceSummary(session);
     return session.id;
@@ -5950,7 +5990,11 @@
       var previousCustomWorkspace = session.workspace_is_custom;
       try {
         session.workspace_is_custom = true;
-        await bindSessionWorkspace(session, requestedWorkspace);
+        // A user-chosen directory is an explicit workspace, never a reserved default.
+        var previousReserved = session.workspaceReserved;
+        session.workspaceReserved = false;
+        try { await bindSessionWorkspace(session, requestedWorkspace); }
+        catch (bindError) { session.workspaceReserved = previousReserved; throw bindError; }
         session.workspace = requestedWorkspace;
         runSettings.workspace = requestedWorkspace;
         persistSessions();
@@ -6101,6 +6145,8 @@
         await ensureSessionWorkspace(session);
         assertCurrent();
         var boundId = await bindSessionWorkspace(session, undefined, assertCurrent);
+        assertCurrent();
+        await materializeSessionWorkspace(getSessionById(boundId) || session);
         assertCurrent();
         return boundId;
       } finally {

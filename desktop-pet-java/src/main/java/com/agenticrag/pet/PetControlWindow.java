@@ -1362,6 +1362,7 @@ final class PetControlWindow {
                 );
                 chatBridge.setMemoryRequestHandler(this::handleMemoryRequest);
                 chatBridge.setOpenMattersHandler(this::openMatters);
+                chatBridge.setWorkspaceReserveHandlers(this::reserveSessionWorkspace, this::materializeSessionWorkspace);
                 chatBridge.setQQReaderStatusRequestHandler(this::handleQQReaderStatusRequest);
                 chatBridge.setSavedRunStreamRequestHandler(this::handleSavedRunStreamRequest);
                 chatBridge.setSavedRunStreamCancelHandler(this::cancelSavedRunStream);
@@ -2400,8 +2401,34 @@ final class PetControlWindow {
     }
 
     private String setSessionWorkspace(String sessionId, String path) {
+        return bindSessionWorkspace(sessionId, path, false);
+    }
+
+    private String reserveSessionWorkspace(String sessionId, String path) {
+        return bindSessionWorkspace(sessionId, path, true);
+    }
+
+    private String materializeSessionWorkspace(String sessionId) {
         try {
-            String body = "{\"path\":" + jsonString(path) + ",\"platform\":" + jsonString(path.startsWith("/") ? "linux" : "windows") + "}";
+            HttpRequest request = HttpRequest.newBuilder()
+                    .uri(URI.create(backendBaseUrl + "/sessions/" + sessionId + "/workspace/materialize"))
+                    .version(HttpClient.Version.HTTP_1_1)
+                    .timeout(Duration.ofSeconds(20))
+                    .header("Content-Type", "application/json; charset=utf-8")
+                    .POST(HttpRequest.BodyPublishers.noBody())
+                    .build();
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
+            if (response.statusCode() < 200 || response.statusCode() >= 300) return jsonObject("error", "HTTP " + response.statusCode() + ": " + response.body());
+            return response.body();
+        } catch (Exception error) {
+            return jsonObject("error", "Workspace creation failed: " + error.getMessage());
+        }
+    }
+
+    private String bindSessionWorkspace(String sessionId, String path, boolean reserve) {
+        try {
+            String body = "{\"path\":" + jsonString(path) + ",\"platform\":" + jsonString(path.startsWith("/") ? "linux" : "windows")
+                    + (reserve ? ",\"reserve\":true" : "") + "}";
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(backendBaseUrl + "/sessions/" + sessionId + "/workspace"))
                     .version(HttpClient.Version.HTTP_1_1)
@@ -2419,8 +2446,9 @@ final class PetControlWindow {
 
     private String createSessionWorkspace(String sessionId, String basePath) {
         try {
+            // Only the path is allocated; the backend creates the folder on first write.
             String body = "{\"session_id\":" + jsonString(sessionId == null ? "" : sessionId)
-                    + ",\"base_path\":" + jsonString(basePath == null ? "" : basePath) + "}";
+                    + ",\"base_path\":" + jsonString(basePath == null ? "" : basePath) + ",\"reserve\":true}";
             HttpRequest request = HttpRequest.newBuilder()
                     .uri(URI.create(chatUrl).resolve("/pet/session-workspace"))
                     .version(HttpClient.Version.HTTP_1_1)

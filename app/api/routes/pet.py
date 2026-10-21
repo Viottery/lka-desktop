@@ -204,6 +204,8 @@ def browse_workspace_directories(
 class SessionWorkspaceCreateRequest(BaseModel):
     session_id: str = Field(min_length=1, max_length=200)
     base_path: str = Field(default="", max_length=1000)
+    # Allocate the folder path only; the backend creates it on the first write into it.
+    reserve: bool = False
 
 
 def _workspace_folder_name(session_id: str) -> str:
@@ -270,9 +272,13 @@ def ensure_session_workspace_parent(payload: SessionWorkspaceParentRequest, requ
 
 @router.post("/session-workspace")
 def create_session_workspace(payload: SessionWorkspaceCreateRequest, request: Request) -> dict[str, str]:
-    """Create a local, isolated folder for one desktop session."""
+    """Allocate (and unless reserving, create) a local folder for one desktop session."""
     root = _session_workspace_parent(payload.base_path, request)
     workspace = root / _workspace_folder_name(payload.session_id)
+    if payload.reserve:
+        if workspace.is_symlink():
+            raise HTTPException(status_code=409, detail="Workspace path is not inside the configured root")
+        return {"path": workspace.as_posix()}
     try:
         workspace.mkdir(parents=True, exist_ok=True)
     except OSError as exc:

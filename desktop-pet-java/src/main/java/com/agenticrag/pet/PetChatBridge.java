@@ -20,6 +20,8 @@ public final class PetChatBridge {
     private final BiFunction<String, String, String> safetyDecisionConsumer;
     private final BiFunction<String, String, String> workspaceConsumer;
     private final BiFunction<String, String, String> workspaceCreator;
+    private BiFunction<String, String, String> workspaceReserver;
+    private Function<String, String> workspaceMaterializer;
     private final Function<String, String> defaultsSaver;
     private final Function<String, String> sessionCreator;
     private final Function<String, String> sessionDeleter;
@@ -94,6 +96,23 @@ public final class PetChatBridge {
 
     public void setQuickContextLabel(String label) {
         if (quickContextLabelHandler != null) quickContextLabelHandler.accept(label);
+    }
+
+    void setWorkspaceReserveHandlers(BiFunction<String, String, String> reserver, Function<String, String> materializer) {
+        workspaceReserver = reserver;
+        workspaceMaterializer = materializer;
+    }
+
+    /** Bind a session to its default folder by path only; the backend creates it on first write. */
+    public String reserveSessionWorkspace(String sessionId, String path) {
+        if (workspaceReserver == null) return "{\"error\":\"workspace handler unavailable\"}";
+        return workspaceReserver.apply(sessionId, path);
+    }
+
+    /** Create a reserved session folder on explicit user request (upload, file panel). */
+    public String materializeSessionWorkspace(String sessionId) {
+        if (workspaceMaterializer == null) return "{\"error\":\"workspace handler unavailable\"}";
+        return workspaceMaterializer.apply(sessionId);
     }
 
     void setQuickPanelHeightHandler(Consumer<Double> handler) {
