@@ -61,6 +61,15 @@
   function time(value) { var d = new Date(value); return isNaN(d.getTime()) ? '' : d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
   function empty(title, description) { var n = node('div', 'ga-empty'); n.appendChild(node('strong', '', title)); n.appendChild(node('p', '', description)); return n; }
   function record(title, status, detail) { var row = node('article', 'ga-record'); var heading = node('div', 'ga-record-heading'); heading.appendChild(node('strong', '', title)); if (status) heading.appendChild(node('span', 'ga-record-status', status)); row.appendChild(heading); if (detail) row.appendChild(node('p', 'ga-record-detail', detail)); return row; }
+  // Goal objectives are long briefs; show only the leading name, e.g.
+  // "每日邮件整理工作线（用户…）：每天自动…" -> "每日邮件整理工作线".
+  function goalTitle(objective) {
+    var first = String(objective || '').split(/\r?\n/)[0].trim();
+    var cut = first.search(/[（(：:。；;]/);
+    var title = (cut > 0 ? first.slice(0, cut) : first).trim();
+    if (!title) title = first;
+    return Array.from(title).length > 28 ? Array.from(title).slice(0, 27).join('') + '…' : title;
+  }
   function runLink(row, sessionId, runId, title) { if (!sessionId || !runId) return; var link = node('a', 'ga-record-link', title); link.href = chatUrl(sessionId, runId); link.target = '_blank'; link.rel = 'noopener'; row.appendChild(link); }
   function render() {
     var list = el('gaRecords'); list.replaceChildren();
@@ -80,7 +89,9 @@
       goals.forEach(function (goal) {
         var finishedMatter = goal.matter_status === 'done' || goal.matter_status === 'cancelled';
         var label = finishedMatter ? goal.matter_status === 'done' ? '事项已完成' : '事项已取消' : labels[goal.status] || goal.status;
-        var row = record(goal.objective, label, !finishedMatter && goal.next_wake_at ? '下次跟进 ' + time(goal.next_wake_at) : '');
+        var row = record(goalTitle(goal.objective), label, '');
+        row.title = goal.objective;
+        if (!finishedMatter && goal.next_wake_at) row.querySelector('.ga-record-heading').appendChild(node('small', 'ga-record-when', time(goal.next_wake_at)));
         var button = node('button', 'ga-record-link', '和真理讨论'); button.type = 'button'; button.onclick = function () { draft('请帮我查看这个目标的进展，并讨论下一步：\n' + goal.objective + '\n目标编号：' + goal.goal_id); }; row.appendChild(button); list.appendChild(row);
       });
       if (nextGoalOffset !== null) { var more = node('button', 'ga-more', '加载更多目标'); more.type = 'button'; more.onclick = async function () { more.disabled = true; try { await loadGoals(false); render(); } catch (e) { notice(problem(e), true); more.disabled = false; } }; list.appendChild(more); }

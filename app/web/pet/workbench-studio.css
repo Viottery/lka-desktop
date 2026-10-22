@@ -250,3 +250,5 @@ body.mobile-workbench .ga-controller button { min-height: 36px; }
 body.mobile-workbench .ga-record:hover, body.mobile-workbench .run-controls > .side-action:hover { transform: none; }
 @media (hover: none) { body.work-mode .ga-record:hover, body.work-mode .run-controls > .side-action:hover { transform: none; } }
 @media (prefers-reduced-motion: reduce) { body.work-mode .ga-followup-heading button, body.work-mode .ga-record, body.work-mode .run-controls > .side-action { transition: none; } }
+body.work-mode .ga-record-when { flex: none; color: var(--rl-muted); font-size: 11px; white-space: nowrap; }
+body.work-mode .ga-record-heading strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
