@@ -186,3 +186,9 @@ body.matter-standalone{margin:0;background:var(--mw-paper);font:14px/1.55 'Micro
 @keyframes mw-sheet-in{from{transform:translateY(40px);opacity:.4}to{transform:none;opacity:1}}
 body.mobile-workbench .mw .mw-row:hover{transform:none}
 @media (prefers-reduced-motion:reduce){.mw .mw-feedback,.mw>.mw-editor,.mw>.mw-assistant{animation:none}}
+
+/* Collapsed rail / mobile tab bar: the hidden label must not keep its gap, or the + drifts left. */
+.mw[data-nav=rail] .mw-sidebar .mw-new-task{gap:0}
+.mw[data-nav=rail] #matterNav button{border-radius:12px}
+.mw[data-nav=rail] #matterNav button[aria-current=page] span{color:var(--mw-ink)}
+@media (max-width:650px){.mw .mw-sidebar .mw-new-task{gap:0}}
