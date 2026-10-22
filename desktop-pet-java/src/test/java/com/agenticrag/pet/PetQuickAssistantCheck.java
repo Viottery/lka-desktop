@@ -35,11 +35,12 @@ public final class PetQuickAssistantCheck {
             window.__petChatOpenAssistant=function(){window.assistantOpens++;window.fixtureKind='manager';return Promise.resolve(true);};
             window.__petChatOpenFreshTask=function(){window.freshOpens++;window.localManagerDraft='不应清除';};
             window.__petChatOpenWorkbench=function(){window.workbenchOpens++;};
-            window.settingsRefreshes=[];window.settingsUpdates=[];
-            window.fixtureSettings={sessionId:'manager-one',kind:'manager',scopeLabel:'真理模型',modelValue:'default',models:[{value:'default',label:'跟随后端默认模型'},{value:'alternate',label:'合成服务商 / 模型 B'}],safetyMode:'backend',stream:true,ready:true,loading:false,busy:false,error:'',notice:''};
+            window.settingsRefreshes=[];window.settingsUpdates=[];window.settingsPreviews=[];
+            window.fixtureSettings={sessionId:'manager-one',kind:'manager',scopeLabel:'真理模型',modelValue:'default',models:[{value:'default',label:'跟随后端默认模型'},{value:'alternate',label:'合成服务商 / 模型 B'}],safetyMode:'backend',stream:true,reasoningLevel:'low',reasoningLevels:[{value:'off',label:'关闭',available:true},{value:'low',label:'低',available:true},{value:'high',label:'高',available:true},{value:'max',label:'最高',available:true}],reasoningHint:'模型支持推理强度设置。',reasoningAvailable:true,reasoningValid:true,ready:true,loading:false,busy:false,error:'',notice:''};
             window.publishFixture=function(){petBridge.setQuickSettingsState(JSON.stringify(window.fixtureSettings));};
             window.LkaChatContext={get:function(){return {kind:window.fixtureKind};},
               quickSettings:function(){return window.fixtureSettings;},
+              previewQuickSettings:function(draft){window.settingsPreviews.push(draft);var supported=draft.modelValue==='default'?['low']:['off','low','high','max'];var valid=supported.indexOf(draft.reasoningLevel)>=0;Object.assign(window.fixtureSettings,{reasoningValid:valid,reasoningAvailable:true,reasoningHint:valid?'当前模型支持此推理档位':'当前模型不支持此推理档位',reasoningLevels:[{value:'off',label:'关闭',available:supported.includes('off')},{value:'low',label:'低',available:supported.includes('low')},{value:'high',label:'高',available:supported.includes('high')},{value:'max',label:'最高',available:supported.includes('max')}]});window.publishFixture();return window.fixtureSettings;},
               refreshQuickSettings:function(force){window.settingsRefreshes.push(!!force);window.publishFixture();return Promise.resolve(window.fixtureSettings);},
               updateQuickSettings:function(draft){window.settingsUpdates.push(draft);Object.assign(window.fixtureSettings,draft,{busy:true});window.publishFixture();return new Promise(function(resolve){setTimeout(function(){Object.assign(window.fixtureSettings,{busy:false,notice:'已保存，下次新运行生效'});window.publishFixture();resolve(window.fixtureSettings);},50);});}};
 
@@ -144,6 +145,7 @@ public final class PetQuickAssistantCheck {
             var apply = (Button) field(control, "quickSettingsApply");
             var refresh = (Button) field(control, "quickSettingsRefresh");
             var stream = (javafx.scene.control.CheckBox) field(control, "quickSettingsStream");
+            var reasoning = (javafx.scene.control.Slider) field(control, "quickSettingsReasoning");
             check(!apply.isDisabled() && model.getItems().size() == 2, "validated model snapshot enables apply");
             var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
             var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
@@ -154,11 +156,12 @@ public final class PetQuickAssistantCheck {
             model.getSelectionModel().select(1);
             safety.getSelectionModel().select(2);
             stream.setSelected(false);
+            reasoning.setValue(3);
             script("window.publishFixture()");
             check(model.getSelectionModel().getSelectedIndex() == 1 && safety.getSelectionModel().getSelectedIndex() == 2 && !stream.isSelected(), "unsaved selection survives incoming same-session snapshot");
             apply.fire();
             check(apply.isDisabled(), "save disables apply while busy");
-            check("alternate".equals(script("window.settingsUpdates[0].modelValue")) && "manual".equals(script("window.settingsUpdates[0].safetyMode")) && Boolean.FALSE.equals(script("window.settingsUpdates[0].stream")), "apply delegates complete draft to JS without native HTTP");
+            check("alternate".equals(script("window.settingsUpdates[0].modelValue")) && "manual".equals(script("window.settingsUpdates[0].safetyMode")) && Boolean.FALSE.equals(script("window.settingsUpdates[0].stream")) && "max".equals(script("window.settingsUpdates[0].reasoningLevel")), "apply delegates complete draft to JS without native HTTP");
             return null;
         });
         waitFor(() -> !((Button) field(control, "quickSettingsApply")).isDisabled());
@@ -169,6 +172,24 @@ public final class PetQuickAssistantCheck {
             script("Object.assign(window.fixtureSettings,{error:'设置已变化，请重新应用',modelValue:'alternate'});window.publishFixture()");
             var model = (javafx.scene.control.ComboBox<?>) field(control, "quickSettingsModel");
             check(model.getSelectionModel().getSelectedIndex() == 1, "error preserves submitted model");
+            script("Object.assign(window.fixtureSettings,{reasoningAvailable:false,reasoningValid:false,reasoningHint:'当前模型不支持此推理档位'});window.publishFixture()");
+            check(((javafx.scene.control.Slider) field(control, "quickSettingsReasoning")).isDisabled(), "unsupported reasoning capability disables slider per JS state");
+            check(((Button) field(control, "quickSettingsApply")).isDisabled(), "invalid reasoning state disables apply per JS state");
+            script("Object.assign(window.fixtureSettings,{reasoningAvailable:true,reasoningValid:true,reasoningHint:'档位已按当前模型调整'});window.publishFixture()");
+            var reasoning = (javafx.scene.control.Slider) field(control, "quickSettingsReasoning");
+            reasoning.setValue(1);
+            reasoning.requestFocus();
+            reasoning.fireEvent(new javafx.scene.input.KeyEvent(javafx.scene.input.KeyEvent.KEY_PRESSED, "", "", javafx.scene.input.KeyCode.RIGHT, false, false, false, false));
+            check(Math.abs(reasoning.getValue() - 2) < 0.01, "reasoning slider keyboard arrow advances exactly one level");
+            reasoning.setValue(3);
+            model.getSelectionModel().select(0);
+            check(((Button) field(control, "quickSettingsApply")).isDisabled(), "model preview disables apply for unsupported draft without saving");
+            reasoning.setValue(1);
+            check(!((Button) field(control, "quickSettingsApply")).isDisabled(), "choosing supported low level previews valid state and re-enables apply");
+            check(((Number) script("window.settingsUpdates.length")).intValue() == 1, "preview calls do not save settings");
+            reasoning.setValue(3);
+            check(((Button) field(control, "quickSettingsApply")).isDisabled(), "choosing unsupported level immediately disables apply");
+            check(((Number) script("window.settingsUpdates.length")).intValue() == 1, "unsupported preview sends no settings update");
             script("window.fixtureSettings.ready=false;window.publishFixture()");
             check(((Button) field(control, "quickSettingsApply")).isDisabled(), "unready manager cannot apply");
             script("Object.assign(window.fixtureSettings,{sessionId:'ordinary-two',kind:'ordinary',scopeLabel:'独立任务默认模型',modelValue:'default',ready:true,error:''});window.publishFixture()");
@@ -192,11 +213,8 @@ public final class PetQuickAssistantCheck {
             pet.setExpanded(true);
             return null;
         });
-        waitFor(() -> {
-            var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
-            var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
-            return scroll.getHeight() > collapsedSettingsHeight + 30;
-        });
+        waitFor(() -> ((javafx.scene.control.TitledPane) ((javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem)
+                ((javafx.scene.control.MenuButton) field(control, "settingsMenuButton")).getItems().getFirst()).getContent()).getContent().lookup("#quickSettingsPetSection")).isExpanded());
         fx(() -> {
             var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
             var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
@@ -215,7 +233,19 @@ public final class PetQuickAssistantCheck {
             var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
             return Math.abs(scroll.getHeight() - collapsedSettingsHeight) < 2;
         });
-        fx(() -> { ((javafx.scene.control.MenuButton) field(control, "settingsMenuButton")).hide(); return null; });
+        fx(() -> {
+            var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
+            var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
+            Button workbench = (Button) scroll.getContent().lookup("#quickSettingsWorkbench");
+            check(workbench != null && workbench.isVisible() && workbench.isManaged(), "workbench entry is available in the main settings sheet");
+            boolean bubble = (boolean) field(control, "bubbleMode");
+            int opens = ((Number) script("window.workbenchOpens")).intValue();
+            workbench.fire();
+            check(((Number) script("window.workbenchOpens")).intValue() == opens + 1, "settings uses the current conversation workbench handoff");
+            check((boolean) field(control, "bubbleMode") == bubble, "opening workbench keeps the current bubble/card mode");
+            check(!menu.isShowing(), "workbench action dismisses settings");
+            return null;
+        });
         System.out.println("PASS: native settings sheet, JS bridge snapshots, explicit apply, refresh modes, dirty selection, ready/busy guards, scope switch, collapsed pet actions");
     }
     private static Object script(String code) { return view.getEngine().executeScript(code); }

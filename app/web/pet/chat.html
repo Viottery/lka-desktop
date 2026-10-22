@@ -8,8 +8,8 @@
   <link rel="icon" type="image/png" href="./assets/ursus-student-emblem.png">
   <link rel="stylesheet" href="./chat.css?v=20261021-ui">
   <link rel="stylesheet" href="./markdown.css?v=20260930-markdown">
-  <link rel="stylesheet" href="./memory.css?v=20261021-ui">
-  <link rel="stylesheet" href="./matters.css?v=20261021-matters-fix">
+  <link rel="stylesheet" href="./memory.css?v=20261022-studio2">
+  <link rel="stylesheet" href="./matters.css?v=20261022-studio2">
   <link rel="stylesheet" href="./qq-reader.css?v=20261021-ui">
   <link rel="stylesheet" href="./messages-center.css?v=20261021-ui">
   <link rel="stylesheet" href="./mobile.css?v=20261021-bubble-padding">
@@ -18,9 +18,10 @@
   <link rel="stylesheet" href="./matter-calendar.css?v=20261021-matters-fix">
   <link rel="stylesheet" href="./global-assistant.css?v=20261021-ui">
   <link rel="stylesheet" href="./quick-assistant.css?v=20261021-ui">
-  <link rel="stylesheet" href="./quick-settings.css?v=20261021-ui">
+  <link rel="stylesheet" href="./quick-settings.css?v=20261022-reasoning">
   <link rel="stylesheet" href="./workbench-layout.css?v=20261020-reading">
-  <link rel="stylesheet" href="./workbench-theme.css?v=20261021-edge-shadow">
+  <link rel="stylesheet" href="./workbench-theme.css?v=20261022-bubble-reveal">
+  <link rel="stylesheet" href="./workbench-studio.css?v=20261022-rail1">
 </head>
 <body>
   <main class="chat-shell" id="chatShell">
@@ -109,17 +110,29 @@
       </div>
       <div class="rail-panel settings-panel" id="settingsPanel" role="tabpanel">
       <section class="run-controls" aria-label="Agent 运行设置">
-        <label class="run-control workspace-control"><span>工作目录</span><div class="workspace-input-row"><input id="workspaceInput" type="text" placeholder="C:/Users/…/Workspaces/…" autocomplete="off"><button id="browseWorkspaceButton" type="button" title="浏览电脑上的文件夹">浏览</button></div><small>新会话自动创建。输入已有目录可切换。</small></label>
-        <button id="indexWorkspaceButton" type="button" class="side-action">索引当前目录</button>
-        <div class="control-divider"></div>
-        <label class="run-control"><span>默认模型</span><select id="llmModelInput"><option value="">跟随后端默认模型</option></select></label>
-        <div class="model-catalog-row"><small id="modelCatalogStatus" role="status">正在读取可用模型…</small><button id="refreshModelsButton" type="button" class="text-action">刷新</button></div>
-        <label class="run-control compact-control"><span>安全审查</span><select id="safetyModeSelect"><option value="backend">跟随后端配置</option><option value="skip">自动通过</option><option value="llm">模型审查</option><option value="manual">每次确认</option></select></label>
-        <label class="stream-toggle"><input id="streamToggle" type="checkbox" checked><span>实时显示回复</span></label>
-        <div class="control-divider"></div>
-        <label class="run-control"><span>新会话工作区位置</span><input id="workspaceParentInput" type="text" placeholder="留空使用文档目录" autocomplete="off"><small>仅影响之后创建的新会话。</small></label>
-        <p id="defaultsSaveStatus" class="defaults-save-status" role="status">更改后自动保存默认设置</p>
-        <button id="resetDefaultsButton" type="button" class="text-action reset-defaults">恢复默认设置</button>
+        <div class="settings-group settings-group-model">
+          <header class="settings-group-head"><span class="settings-index">01</span><div><h3>模型与推理</h3><p>用于之后的新运行</p></div></header>
+          <label class="run-control"><span>默认模型</span><select id="llmModelInput"><option value="">跟随后端默认模型</option></select></label>
+          <div class="model-catalog-row"><small id="modelCatalogStatus" role="status">正在读取可用模型…</small><button id="refreshModelsButton" type="button" class="text-action">刷新</button></div>
+          <div class="reasoning-control" id="reasoningControl">
+            <div class="reasoning-heading"><label for="reasoningLevelInput">推理强度</label><output id="reasoningLevelValue" for="reasoningLevelInput">低</output></div>
+            <input id="reasoningLevelInput" class="reasoning-slider" type="range" min="0" max="3" step="1" value="1" aria-valuetext="低" aria-describedby="reasoningLevelHint">
+            <div class="reasoning-ticks" aria-hidden="true"><span>关闭</span><span>低</span><span>高</span><span>最高</span></div>
+            <small id="reasoningLevelHint">更改用于下一次新运行。</small>
+          </div>
+        </div>
+        <div class="settings-group">
+          <header class="settings-group-head"><span class="settings-index">02</span><div><h3>运行方式</h3><p>审查与回复显示</p></div></header>
+          <label class="run-control compact-control"><span>安全审查</span><select id="safetyModeSelect"><option value="backend">跟随后端配置</option><option value="skip">自动通过</option><option value="llm">模型审查</option><option value="manual">每次确认</option></select></label>
+          <label class="stream-toggle"><input id="streamToggle" type="checkbox" checked><span>实时显示回复</span></label>
+        </div>
+        <div class="settings-group">
+          <header class="settings-group-head"><span class="settings-index">03</span><div><h3>工作目录</h3><p>当前会话读写文件的位置</p></div></header>
+          <label class="run-control workspace-control"><span>当前目录</span><div class="workspace-input-row"><input id="workspaceInput" type="text" placeholder="C:/Users/…/Workspaces/…" autocomplete="off"><button id="browseWorkspaceButton" type="button" title="浏览电脑上的文件夹">浏览</button></div><small>新会话自动创建。输入已有目录可切换。</small></label>
+          <button id="indexWorkspaceButton" type="button" class="side-action">索引当前目录</button>
+          <label class="run-control"><span>新会话工作区位置</span><input id="workspaceParentInput" type="text" placeholder="留空使用文档目录" autocomplete="off"><small>仅影响之后创建的新会话。</small></label>
+        </div>
+        <footer class="settings-footer"><p id="defaultsSaveStatus" class="defaults-save-status" role="status">更改后自动保存默认设置</p><button id="resetDefaultsButton" type="button" class="text-action reset-defaults">恢复默认设置</button></footer>
         <div class="control-divider"></div>
         <button id="openMatterCenterButton" type="button" class="side-action">待办与项目规划</button>
         <button id="openProjectCenterButton" type="button" class="side-action">项目与会话</button>
@@ -171,19 +184,20 @@
   <script src="./mobile.js?v=20261021-followup-icon"></script>
   <script src="./image-composer.js?v=20261020-compat"></script>
   <script src="./conversation-position.js?v=20261020-reading"></script>
-  <script src="./chat.js?v=20261021-ui"></script>
-  <script src="./memory.js?v=20261020-compat"></script>
+  <script src="./chat.js?v=20261022-reserve"></script>
+  <script src="./memory.js?v=20261022-studio"></script>
   <script src="./matters-host.js?v=20261020-compat"></script>
   <script src="./global-assistant.js?v=20261021-assistant-sync"></script>
-  <script src="./matter-store.js?v=20261020-manager"></script>
+  <script src="./matter-store.js?v=20261022-delete"></script>
   <script src="./matter-calendar.js?v=20261019-layout"></script>
-  <script src="./matters.js?v=20261021-matters-fix"></script>
+  <script src="./matters.js?v=20261022-studio"></script>
   <script src="./projects.js?v=20261021-ui"></script>
-  <script src="./quick-chat.js?v=20261020-compact-approval"></script>
+  <script src="./quick-chat.js?v=20261022-reserve"></script>
   <script src="./quick-assistant.js?v=20261021-assistant-sync"></script>
-  <script src="./quick-presence.js?v=20261021-bubble2"></script>
-  <script src="./quick-bubble.js?v=20261021-bubble2"></script>
-  <script src="./quick-settings.js?v=20261021-quick-mobile"></script>
+  <script src="./quick-presence.js?v=20261022-bubble-reveal"></script>
+  <script src="./quick-bubble.js?v=20261022-bubble-reveal"></script>
+  <script src="./quick-settings.js?v=20261022-reasoning"></script>
+  <script src="./reasoning-dock.js?v=20261022-slider1"></script>
   <script src="./qq-reader.js?v=20261005"></script>
   <script src="./message-ui-api.js?v=20261005"></script>
   <script src="./message-content.js?v=20261006-people-names"></script>

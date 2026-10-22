@@ -280,6 +280,10 @@
     -fx-focus-color: #2b7d70;
     -fx-faint-focus-color: transparent;
 }
+.quick-settings-panel .slider .track { -fx-background-color: #dbe8e5; }
+.quick-settings-panel .slider .thumb { -fx-background-color: #2b7d70; }
+.quick-settings-panel .slider .axis .axis-tick-mark,
+.quick-settings-panel .slider .axis .axis-minor-tick-mark { -fx-stroke: #789491; }
 .quick-settings-panel .combo-box .list-cell {
     -fx-padding: 0;
     -fx-font-family: "Noto Sans SC";
@@ -319,6 +323,110 @@
 .quick-settings-panel .quick-settings-pet-action,
 .quick-settings-panel .quick-settings-danger { -fx-font-size: 12px; -fx-padding: 5 8; }
 .quick-settings-panel .quick-settings-danger { -fx-text-fill: #a04f45; }
+
+/* Studio refresh: paper sheet, gold eyebrow, card group and pill reasoning segments
+   (mirrors memory.css / workbench-studio.css). */
+.context-menu .quick-settings-menu-item,
+.context-menu .quick-settings-menu-item:focused,
+.quick-settings-scroll,
+.quick-settings-scroll > .viewport,
+.quick-settings-panel { -fx-background-color: #f4f6f3; }
+.quick-settings-panel { -fx-padding: 16 16 14 16; }
+.quick-settings-header {
+    -fx-padding: 12 14 12 14;
+    -fx-background-color: radial-gradient(center 100% 0%, radius 90%, #dcefe9 0%, transparent 60%), #ffffff;
+    -fx-background-radius: 14;
+    -fx-border-color: #e2e9e6;
+    -fx-border-radius: 14;
+}
+.context-menu .quick-settings-panel .quick-settings-eyebrow {
+    -fx-text-fill: #b98a3e;
+    -fx-font-family: "Noto Serif SC";
+    -fx-font-size: 10px;
+    -fx-font-weight: bold;
+}
+.context-menu .quick-settings-panel .quick-settings-title {
+    -fx-font-family: "Noto Serif SC";
+    -fx-font-size: 17px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #1b3137;
+}
+.quick-settings-card {
+    -fx-padding: 14;
+    -fx-background-color: #ffffff;
+    -fx-background-radius: 14;
+    -fx-border-color: #e2e9e6;
+    -fx-border-radius: 14;
+}
+.context-menu .quick-settings-panel .quick-settings-label {
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+    -fx-text-fill: #687c80;
+}
+.quick-settings-panel .combo-box,
+.quick-settings-panel .button {
+    -fx-background-color: #ffffff;
+    -fx-border-color: #d6e1de;
+    -fx-background-radius: 10;
+    -fx-border-radius: 10;
+    -fx-text-fill: #1b3137;
+}
+.quick-settings-panel .combo-box:focused,
+.quick-settings-panel .button:focused { -fx-border-color: #23767b; }
+.quick-settings-panel .button:hover { -fx-background-color: #f3f8f6; -fx-border-color: #c7d8d4; }
+.quick-reasoning-segments {
+    -fx-padding: 3;
+    -fx-background-color: #eaf0ee;
+    -fx-background-radius: 11;
+    -fx-border-color: #dbe5e2;
+    -fx-border-radius: 11;
+}
+.quick-settings-panel .quick-reasoning-segment,
+.quick-settings-panel .quick-reasoning-segment:hover {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-background-radius: 8;
+    -fx-border-radius: 8;
+    -fx-padding: 6 4;
+    -fx-text-fill: #4d666b;
+    -fx-font-size: 12px;
+    -fx-font-weight: bold;
+}
+.quick-settings-panel .quick-reasoning-segment:hover { -fx-background-color: rgba(255,255,255,0.55); -fx-text-fill: #1f5f63; }
+.quick-settings-panel .quick-reasoning-segment.is-selected,
+.quick-settings-panel .quick-reasoning-segment.is-selected:hover {
+    -fx-background-color: linear-gradient(to bottom, #2c8186, #1f6a6f);
+    -fx-text-fill: #ffffff;
+    -fx-effect: dropshadow(gaussian, rgba(19,74,78,0.35), 6, 0, 0, 2);
+}
+.quick-settings-panel .quick-reasoning-segment.is-unavailable { -fx-text-fill: #a8b6b3; -fx-strikethrough: true; }
+.quick-settings-panel .quick-reasoning-segment:focused { -fx-border-color: #2b7d70; }
+.quick-settings-panel .quick-reasoning-segment:disabled { -fx-opacity: 0.55; }
+.quick-settings-panel .quick-settings-apply,
+.quick-settings-panel .quick-settings-apply:hover {
+    -fx-background-color: #23767b;
+    -fx-border-color: #23767b;
+    -fx-text-fill: #ffffff;
+    -fx-background-radius: 999;
+    -fx-border-radius: 999;
+    -fx-padding: 9 12;
+    -fx-font-weight: bold;
+    -fx-effect: dropshadow(gaussian, rgba(23,85,90,0.35), 8, 0, 0, 3);
+}
+.quick-settings-panel .quick-settings-apply:hover { -fx-background-color: #17555a; -fx-border-color: #17555a; }
+.quick-settings-panel .quick-settings-workbench,
+.quick-settings-panel .quick-settings-workbench:hover {
+    -fx-background-color: transparent;
+    -fx-border-color: transparent;
+    -fx-text-fill: #23767b;
+    -fx-font-size: 12px;
+}
+.quick-settings-panel .quick-settings-workbench:hover { -fx-background-color: #e2f1ee; -fx-background-radius: 999; }
+.quick-settings-panel .check-box .box { -fx-background-color: #ffffff; -fx-border-color: #c4d4d0; -fx-border-radius: 5; -fx-background-radius: 5; }
+.quick-settings-panel .check-box:selected .box { -fx-background-color: #23767b; -fx-border-color: #23767b; }
+.quick-settings-panel .check-box:selected .mark { -fx-background-color: #ffffff; }
+.quick-settings-pet-section > .title { -fx-padding: 6 2; }
+.context-menu .quick-settings-pet-section > .title > .text { -fx-fill: #b98a3e; -fx-font-family: "Noto Serif SC"; -fx-font-weight: bold; }
 
 /* Bubble mode: no card, no footer; the composer is the user's always-present input bubble.
    Geometry mirrors the web user bubble (workbench-theme.css "Pet bubble mode"): 288px wide,

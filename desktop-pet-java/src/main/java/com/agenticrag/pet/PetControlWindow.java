@@ -2,6 +2,8 @@ package com.agenticrag.pet;
 
 import com.google.gson.JsonObject;
 import com.google.gson.JsonParser;
+import javafx.animation.FadeTransition;
+import javafx.animation.PauseTransition;
 import javafx.application.Platform;
 import javafx.concurrent.Worker;
 import javafx.geometry.Rectangle2D;
@@ -16,6 +18,7 @@ import javafx.scene.control.ButtonBase;
 import javafx.scene.control.CheckMenuItem;
 import javafx.scene.control.CheckBox;
 import javafx.scene.control.ScrollPane;
+import javafx.scene.control.Slider;
 import javafx.scene.control.TitledPane;
 import javafx.scene.control.Separator;
 import javafx.scene.control.ComboBox;
@@ -187,6 +190,11 @@ final class PetControlWindow {
     private ComboBox<QuickSettingChoice> quickSettingsModel;
     private ComboBox<QuickSettingChoice> quickSettingsSafety;
     private CheckBox quickSettingsStream;
+    private Slider quickSettingsReasoning;
+    private Label quickSettingsReasoningHint;
+    private final List<Button> quickReasoningSegments = new ArrayList<>();
+    private final List<Boolean> quickReasoningAvailable = new ArrayList<>(List.of(true, true, true, true));
+    private boolean quickSettingsReasoningValid;
     private Label quickSettingsScope;
     private Label quickSettingsStatus;
     private Button quickSettingsApply;
@@ -247,6 +255,7 @@ final class PetControlWindow {
                 refreshSettingsState();
                 if (bubbleMode) {
                     positionBubbleBesidePet(petX, petY);
+                    concealBubblePage();
                 } else if (!initialPositionInitialized) {
                     ensureInitialPositionNearPet(petX, petY);
                     stage.setX(petX + relativeX);
@@ -1032,11 +1041,20 @@ final class PetControlWindow {
     }
 
     private VBox buildQuickSettingsPanel() {
+        Label eyebrow = new Label("对话设置");
+        eyebrow.getStyleClass().add("quick-settings-eyebrow");
         Label title = new Label("设置");
         title.getStyleClass().add("quick-settings-title");
         quickSettingsScope = new Label("正在读取当前会话…");
         quickSettingsScope.setWrapText(true);
         quickSettingsScope.getStyleClass().add("quick-settings-muted");
+        Button workbench = new Button("打开工作台");
+        workbench.setId("quickSettingsWorkbench");
+        workbench.setMaxWidth(Double.MAX_VALUE);
+        workbench.setOnAction(event -> {
+            settingsMenuButton.hide();
+            openWorkbench();
+        });
         Label modelLabel = new Label("对话模型");
         quickSettingsModel = new ComboBox<>();
         quickSettingsModel.setId("quickSettingsModel");
@@ -1060,6 +1078,57 @@ final class PetControlWindow {
         safetyHint.getStyleClass().add("quick-settings-muted");
         quickSettingsStream = new CheckBox("实时显示回复");
         quickSettingsStream.setId("quickSettingsStream");
+        Label reasoningLabel = new Label("推理强度");
+        quickSettingsReasoning = new Slider(0, 3, 1);
+        quickSettingsReasoning.setId("quickSettingsReasoning");
+        quickSettingsReasoning.setMajorTickUnit(1);
+        quickSettingsReasoning.setBlockIncrement(1);
+        quickSettingsReasoning.setMinorTickCount(0);
+        quickSettingsReasoning.setSnapToTicks(true);
+        quickSettingsReasoning.setShowTickMarks(true);
+        quickSettingsReasoning.setShowTickLabels(true);
+        quickSettingsReasoning.setLabelFormatter(new javafx.util.StringConverter<Double>() {
+            private final List<String> labels = List.of("关闭", "低", "高", "最高");
+            @Override public String toString(Double value) { return labels.get(Math.max(0, Math.min(3, value.intValue()))); }
+            @Override public Double fromString(String value) { return (double) labels.indexOf(value); }
+        });
+        // The slider stays the single source of truth (keyboard, saving, tests); segments drive it.
+        quickSettingsReasoning.setVisible(false);
+        quickSettingsReasoning.setManaged(false);
+        HBox reasoningSegments = new HBox(0);
+        reasoningSegments.setId("quickSettingsReasoningSegments");
+        reasoningSegments.getStyleClass().add("quick-reasoning-segments");
+        quickReasoningSegments.clear();
+        List<String> segmentLabels = List.of("关闭", "低", "高", "最高");
+        for (int i = 0; i < segmentLabels.size(); i++) {
+            int level = i;
+            Button segment = new Button(segmentLabels.get(i));
+            segment.getStyleClass().add("quick-reasoning-segment");
+            segment.setMaxWidth(Double.MAX_VALUE);
+            segment.setFocusTraversable(true);
+            HBox.setHgrow(segment, Priority.ALWAYS);
+            segment.setOnAction(event -> {
+                if (quickSettingsReasoning.isDisabled() || !quickReasoningAvailable.get(level)) return;
+                quickSettingsReasoning.setValue(level);
+            });
+            segment.setOnKeyPressed(event -> {
+                int step = event.getCode() == javafx.scene.input.KeyCode.RIGHT ? 1 : event.getCode() == javafx.scene.input.KeyCode.LEFT ? -1 : 0;
+                if (step == 0) return;
+                event.consume();
+                for (int next = (int) Math.round(quickSettingsReasoning.getValue()) + step; next >= 0 && next < 4; next += step) {
+                    if (quickReasoningAvailable.get(next)) { quickSettingsReasoning.setValue(next); quickReasoningSegments.get(next).requestFocus(); return; }
+                }
+            });
+            quickReasoningSegments.add(segment);
+            reasoningSegments.getChildren().add(segment);
+        }
+        quickSettingsReasoning.valueProperty().addListener((obs, old, value) -> paintReasoningSegments());
+        quickSettingsReasoning.disabledProperty().addListener((obs, old, value) -> paintReasoningSegments());
+        paintReasoningSegments();
+        quickSettingsReasoningHint = new Label("");
+        quickSettingsReasoningHint.setId("quickSettingsReasoningHint");
+        quickSettingsReasoningHint.setWrapText(true);
+        quickSettingsReasoningHint.getStyleClass().add("quick-settings-muted");
         quickSettingsStatus = new Label("打开设置后读取配置。");
         quickSettingsStatus.setId("quickSettingsStatus");
         quickSettingsStatus.setWrapText(true);
@@ -1070,11 +1139,19 @@ final class PetControlWindow {
         quickSettingsApply.setMaxWidth(Double.MAX_VALUE);
         quickSettingsApply.setDisable(true);
         quickSettingsApply.setOnAction(event -> applyQuickSettings());
-        quickSettingsModel.valueProperty().addListener((obs, old, value) -> markQuickSettingsDirty());
-        quickSettingsSafety.valueProperty().addListener((obs, old, value) -> markQuickSettingsDirty());
-        quickSettingsStream.selectedProperty().addListener((obs, old, value) -> markQuickSettingsDirty());
-        VBox panel = new VBox(12, new VBox(3, title, quickSettingsScope), new VBox(6, modelLabel, modelRow),
-                new VBox(6, safetyLabel, quickSettingsSafety, safetyHint), quickSettingsStream, quickSettingsStatus, quickSettingsApply);
+        quickSettingsModel.valueProperty().addListener((obs, old, value) -> quickSettingsChanged());
+        quickSettingsSafety.valueProperty().addListener((obs, old, value) -> quickSettingsChanged());
+        quickSettingsStream.selectedProperty().addListener((obs, old, value) -> quickSettingsChanged());
+        quickSettingsReasoning.valueProperty().addListener((obs, old, value) -> quickSettingsChanged());
+        for (Label label : List.of(modelLabel, safetyLabel, reasoningLabel)) label.getStyleClass().add("quick-settings-label");
+        VBox header = new VBox(2, eyebrow, title, quickSettingsScope);
+        header.getStyleClass().add("quick-settings-header");
+        VBox conversation = new VBox(14, new VBox(6, modelLabel, modelRow),
+                new VBox(7, reasoningLabel, reasoningSegments, quickSettingsReasoning, quickSettingsReasoningHint),
+                new VBox(6, safetyLabel, quickSettingsSafety, safetyHint), quickSettingsStream);
+        conversation.getStyleClass().add("quick-settings-card");
+        workbench.getStyleClass().add("quick-settings-workbench");
+        VBox panel = new VBox(12, header, conversation, quickSettingsStatus, quickSettingsApply, workbench);
         panel.setId("quickSettingsPanel");
         panel.getStyleClass().add("quick-settings-panel");
         panel.setPrefWidth(300);
@@ -1087,6 +1164,28 @@ final class PetControlWindow {
         if (!syncingQuickSettings) {
             quickSettingsDirty = true;
             quickSettingsStatus.setText("更改尚未应用。");
+        }
+    }
+
+    private void quickSettingsChanged() {
+        if (syncingQuickSettings) return;
+        markQuickSettingsDirty();
+        previewQuickSettings();
+    }
+
+    private void previewQuickSettings() {
+        if (webView == null || !quickSettingsDirty || quickSettingsModel == null || quickSettingsSafety == null
+                || quickSettingsModel.getValue() == null || quickSettingsSafety.getValue() == null) return;
+        JsonObject draft = new JsonObject();
+        draft.addProperty("modelValue", quickSettingsModel.getValue().value());
+        draft.addProperty("reasoningLevel", reasoningValue((int) Math.round(quickSettingsReasoning.getValue())));
+        draft.addProperty("safetyMode", quickSettingsSafety.getValue().value());
+        draft.addProperty("stream", quickSettingsStream.isSelected());
+        try {
+            webView.getEngine().executeScript("if(window.LkaChatContext && window.LkaChatContext.previewQuickSettings) "
+                    + "window.LkaChatContext.previewQuickSettings(" + draft + ");");
+        } catch (RuntimeException error) {
+            quickSettingsStatus.setText("推理设置校验暂不可用，请刷新后重试。");
         }
     }
 
@@ -1106,11 +1205,12 @@ final class PetControlWindow {
     }
 
     private void applyQuickSettings() {
-        if (quickSettingsApply.isDisabled() || quickSettingsModel.getValue() == null || quickSettingsSafety.getValue() == null) return;
+        if (quickSettingsApply.isDisabled() || quickSettingsModel.getValue() == null || quickSettingsSafety.getValue() == null || !quickSettingsReasoningValid) return;
         JsonObject options = new JsonObject();
         options.addProperty("modelValue", quickSettingsModel.getValue().value());
         options.addProperty("safetyMode", quickSettingsSafety.getValue().value());
         options.addProperty("stream", quickSettingsStream.isSelected());
+        options.addProperty("reasoningLevel", reasoningValue((int) Math.round(quickSettingsReasoning.getValue())));
         try {
             quickSettingsDirty = false;
             quickSettingsApply.setDisable(true);
@@ -1129,6 +1229,27 @@ final class PetControlWindow {
 
     private static boolean quickSettingFlag(JsonObject state, String key) {
         return state.has(key) && state.get(key).isJsonPrimitive() && state.get(key).getAsBoolean();
+    }
+
+    private void paintReasoningSegments() {
+        if (quickReasoningSegments.isEmpty()) return;
+        int selected = (int) Math.round(quickSettingsReasoning.getValue());
+        boolean locked = quickSettingsReasoning.isDisabled();
+        for (int i = 0; i < quickReasoningSegments.size(); i++) {
+            Button segment = quickReasoningSegments.get(i);
+            segment.getStyleClass().removeAll("is-selected", "is-unavailable");
+            if (i == selected) segment.getStyleClass().add("is-selected");
+            if (!quickReasoningAvailable.get(i)) segment.getStyleClass().add("is-unavailable");
+            segment.setDisable(locked || !quickReasoningAvailable.get(i) && i != selected);
+        }
+    }
+
+    private static String reasoningValue(int index) {
+        return switch (Math.max(0, Math.min(3, index))) { case 0 -> "off"; case 1 -> "low"; case 2 -> "high"; default -> "max"; };
+    }
+
+    private static int reasoningIndex(String value) {
+        return switch (value) { case "off" -> 0; case "low" -> 1; case "high" -> 2; case "max" -> 3; default -> 1; };
     }
 
     private void setQuickSettingsState(String json) {
@@ -1156,18 +1277,45 @@ final class PetControlWindow {
                 quickSettingsModel.getItems().add(selected);
             }
             quickSettingsModel.setValue(selected);
+            quickSettingsReasoningValid = quickSettingFlag(state, "reasoningValid");
             if (!quickSettingsDirty) {
                 String safety = quickSettingText(state, "safetyMode");
                 quickSettingsSafety.getSelectionModel().select(quickSettingsSafety.getItems().stream().filter(option -> option.value().equals(safety)).findFirst().orElse(quickSettingsSafety.getItems().get(0)));
                 quickSettingsStream.setSelected(quickSettingFlag(state, "stream"));
             }
+            if (!quickSettingsDirty) {
+                quickSettingsReasoning.setValue(reasoningIndex(quickSettingText(state, "reasoningLevel")));
+            }
+            List<String> reasoningLabels = new ArrayList<>(List.of("关闭", "低", "高", "最高"));
+            if (state.has("reasoningLevels") && state.get("reasoningLevels").isJsonArray()) {
+                int index = 0;
+                for (var entry : state.getAsJsonArray("reasoningLevels")) {
+                    if (index >= reasoningLabels.size()) break;
+                    if (entry.isJsonObject()) {
+                        JsonObject level = entry.getAsJsonObject();
+                        String label = quickSettingText(level, "label");
+                        quickReasoningAvailable.set(index, quickSettingFlag(level, "available"));
+                        if (!quickSettingFlag(level, "available") && !label.isEmpty()) label += " · 不可用";
+                        if (!label.isEmpty()) reasoningLabels.set(index, label);
+                    }
+                    index++;
+                }
+            }
+            quickSettingsReasoning.setLabelFormatter(new javafx.util.StringConverter<Double>() {
+                @Override public String toString(Double value) { return reasoningLabels.get(Math.max(0, Math.min(3, value.intValue()))); }
+                @Override public Double fromString(String value) { return (double) reasoningLabels.indexOf(value); }
+            });
+            paintReasoningSegments();
+            boolean reasoningAvailable = quickSettingFlag(state, "reasoningAvailable");
+            quickSettingsReasoningHint.setText(quickSettingText(state, "reasoningHint"));
+            quickSettingsReasoning.setDisable(!reasoningAvailable || quickSettingFlag(state, "loading") || quickSettingFlag(state, "busy") || !quickSettingFlag(state, "ready"));
             quickSettingsScope.setText(quickSettingText(state, "scopeLabel"));
             boolean locked = quickSettingFlag(state, "loading") || quickSettingFlag(state, "busy") || !quickSettingFlag(state, "ready");
             quickSettingsModel.setDisable(locked);
             quickSettingsSafety.setDisable(locked);
             quickSettingsStream.setDisable(locked);
             quickSettingsRefresh.setDisable(quickSettingFlag(state, "loading") || quickSettingFlag(state, "busy"));
-            quickSettingsApply.setDisable(locked || selected == null || sessionId.isEmpty());
+            quickSettingsApply.setDisable(locked || selected == null || sessionId.isEmpty() || !quickSettingsReasoningValid);
             String error = quickSettingText(state, "error"), notice = quickSettingText(state, "notice");
             quickSettingsStatus.setText(!error.isEmpty() ? error : quickSettingFlag(state, "loading") ? "正在读取设置…"
                     : quickSettingFlag(state, "busy") ? "正在保存…" : quickSettingsDirty ? "更改尚未应用。" : !notice.isEmpty() ? notice : "更改将用于之后的新运行。");
@@ -1236,6 +1384,31 @@ final class PetControlWindow {
         } catch (Exception error) {
             System.err.println("[pet-chat] cannot open Markdown link: " + error.getMessage());
         }
+    }
+
+    // Bubble mode: show the window with the page hidden, then fade it in once the page has
+    // rendered its conversation, so reopening does not flash intermediate states.
+    private int bubbleRevealToken;
+    private FadeTransition bubbleRevealFade;
+
+    private void concealBubblePage() {
+        if (webView == null || !isChatPageLocation(webView.getEngine().getLocation())) return;
+        int token = ++bubbleRevealToken;
+        if (bubbleRevealFade != null) bubbleRevealFade.stop();
+        webView.setOpacity(0);
+        PauseTransition fallback = new PauseTransition(javafx.util.Duration.millis(900));
+        fallback.setOnFinished(event -> { if (token == bubbleRevealToken) revealBubblePage(); });
+        fallback.play();
+    }
+
+    private void revealBubblePage() {
+        if (webView == null || webView.getOpacity() >= 1) return;
+        bubbleRevealToken++;
+        if (bubbleRevealFade != null) bubbleRevealFade.stop();
+        bubbleRevealFade = new FadeTransition(javafx.util.Duration.millis(140), webView);
+        bubbleRevealFade.setFromValue(webView.getOpacity());
+        bubbleRevealFade.setToValue(1);
+        bubbleRevealFade.play();
     }
 
     private void openAssistant() {
@@ -1368,6 +1541,7 @@ final class PetControlWindow {
                 chatBridge.setSavedRunStreamCancelHandler(this::cancelSavedRunStream);
                 chatBridge.setComposerActionHandler(action -> Platform.runLater(() -> setNativeComposerAction(action)));
                 chatBridge.setQuickPanelHeightHandler(this::setQuickContentHeight);
+                chatBridge.setQuickRevealHandler(() -> Platform.runLater(this::revealBubblePage));
                 chatBridge.setQuickSettingsStateHandler(this::setQuickSettingsState);
             }
             JSObject window = (JSObject) webView.getEngine().executeScript("window");
@@ -1689,6 +1863,7 @@ final class PetControlWindow {
         if (quickCard == null || composerRow == null || quickFooter == null) return;
         if (bubbleMode) quickCard.getStyleClass().add("pet-bubble-mode"); else quickCard.getStyleClass().removeAll("pet-bubble-mode");
         if (webView != null) webView.setPageFill(bubbleMode ? Color.TRANSPARENT : Color.WHITE);
+        if (webView != null && !bubbleMode) { if (bubbleRevealFade != null) bubbleRevealFade.stop(); bubbleRevealToken++; webView.setOpacity(1); }
         quickFooter.setVisible(!bubbleMode);
         quickFooter.setManaged(!bubbleMode);
         if (bubbleComposerLine == null) {
@@ -2138,7 +2313,8 @@ final class PetControlWindow {
             System.out.println("[pet-chat] bridge parsed questionLength=" + question.length() + " conversationId=" + conversationId + " mode=" + mode);
             String model = payload.has("llm_model") ? payload.get("llm_model").getAsString() : "";
             String client = payload.has("llm_client") ? payload.get("llm_client").getAsString() : "";
-            sendChatRequest(question, conversationId, mode, safetyMode, client, model, attachmentIds, resumable);
+            String reasoningLevel = payload.has("llm_reasoning_level") ? payload.get("llm_reasoning_level").getAsString() : "";
+            sendChatRequest(question, conversationId, mode, safetyMode, client, model, reasoningLevel, attachmentIds, resumable);
         } catch (RuntimeException error) {
             System.err.println("[pet-chat] bridge parse failed: " + error.getMessage());
             deliverChatResponse(jsonObject("error", "Desktop bridge parse failed: " + error.getMessage()));
@@ -2159,6 +2335,7 @@ final class PetControlWindow {
             String model = payload.has("llm_model") ? payload.get("llm_model").getAsString() : "";
             String client = payload.has("llm_client") ? payload.get("llm_client").getAsString() : "";
             String safetyMode = payload.has("safety_review_mode") ? payload.get("safety_review_mode").getAsString() : "";
+            String reasoningLevel = payload.has("llm_reasoning_level") ? payload.get("llm_reasoning_level").getAsString() : "";
             String attachmentIds = payload.has("attachment_ids") ? payload.get("attachment_ids").toString() : "[]";
             String responseMode = "stream";
             if (payload.has("llm_response_mode") && payload.get("llm_response_mode").isJsonPrimitive()) {
@@ -2170,7 +2347,8 @@ final class PetControlWindow {
             }
             Boolean resumable = bridgeResumable(payload);
             String selectedResponseMode = responseMode, callbackId = requestId, sessionId = conversationId;
-            Thread worker = new Thread(() -> sendChatStreamRequest(question, sessionId, client, model, safetyMode, attachmentIds, resumable, selectedResponseMode, callbackId), "pet-chat-stream");
+            String selectedReasoningLevel = reasoningLevel;
+            Thread worker = new Thread(() -> sendChatStreamRequest(question, sessionId, client, model, safetyMode, selectedReasoningLevel, attachmentIds, resumable, selectedResponseMode, callbackId), "pet-chat-stream");
             worker.setDaemon(true);
             worker.start();
         } catch (RuntimeException error) {
@@ -2184,13 +2362,14 @@ final class PetControlWindow {
         return payload.get("resumable").getAsBoolean();
     }
 
-    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String safetyMode, String attachmentIds, Boolean resumable, String responseMode, String requestId) {
+    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String safetyMode, String reasoningLevel, String attachmentIds, Boolean resumable, String responseMode, String requestId) {
         String requestJson = "{\"session_id\":" + jsonString(conversationId == null ? "" : conversationId)
                 + ",\"user_input\":" + jsonString(question == null ? "" : question)
                 + ",\"attachment_ids\":" + (attachmentIds == null ? "[]" : attachmentIds)
                 + ",\"llm\":{\"response_mode\":" + jsonString(responseMode)
                 + (client == null || client.isBlank() ? "" : ",\"client_name\":" + jsonString(client))
-                + (model == null || model.isBlank() ? "" : ",\"model\":" + jsonString(model)) + "}"
+                + (model == null || model.isBlank() ? "" : ",\"model\":" + jsonString(model))
+                + (reasoningLevel == null || reasoningLevel.isBlank() ? "" : ",\"reasoning_level\":" + jsonString(reasoningLevel)) + "}"
                 + (safetyMode == null || safetyMode.isBlank() ? "" : ",\"safety_review_mode\":" + jsonString(safetyMode))
                 + (resumable == null ? "" : ",\"resumable\":" + resumable) + "}";
         try {
@@ -2711,10 +2890,19 @@ final class PetControlWindow {
                 }
                 return true;
             }
+            if (route.matches("/matters/" + segment + "/restore")) {
+                return method.equals("POST") && uri.getRawQuery() == null;
+            }
             if (route.equals("/matters") || route.matches("/matters/" + segment)) {
                 if (!(method.equals("GET") || method.equals("POST") && route.equals("/matters")
-                        || method.equals("PATCH") && !route.equals("/matters"))) return false;
+                        || (method.equals("PATCH") || method.equals("DELETE")) && !route.equals("/matters"))) return false;
                 if (uri.getRawQuery() != null) {
+                    if (method.equals("DELETE")) {
+                        for (String part : uri.getRawQuery().split("&", -1)) {
+                            if (!part.split("=", 2)[0].equals("expected_revision")) return false;
+                        }
+                        return true;
+                    }
                     if (!method.equals("GET") || !route.equals("/matters")) return false;
                     for (String part : uri.getRawQuery().split("&", -1)) {
                         if (!List.of("limit", "offset", "status", "q", "kind", "parent_matter_id",
@@ -2848,7 +3036,7 @@ final class PetControlWindow {
         });
     }
 
-    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model, String attachmentIds, Boolean resumable) {
+    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model, String reasoningLevel, String attachmentIds, Boolean resumable) {
         Thread worker = new Thread(() -> {
             String responseJson;
             try {
@@ -2858,10 +3046,11 @@ final class PetControlWindow {
                 requestBody.add("attachment_ids", JsonParser.parseString(attachmentIds == null ? "[]" : attachmentIds));
                 if (safetyMode != null && !safetyMode.isBlank()) requestBody.addProperty("safety_review_mode", safetyMode);
                 if (resumable != null) requestBody.addProperty("resumable", resumable);
-                if ((client != null && !client.isBlank()) || (model != null && !model.isBlank())) {
+                if ((client != null && !client.isBlank()) || (model != null && !model.isBlank()) || (reasoningLevel != null && !reasoningLevel.isBlank())) {
                     JsonObject llm = new JsonObject();
                     if (client != null && !client.isBlank()) llm.addProperty("client_name", client);
                     if (model != null && !model.isBlank()) llm.addProperty("model", model);
+                    if (reasoningLevel != null && !reasoningLevel.isBlank()) llm.addProperty("reasoning_level", reasoningLevel);
                     requestBody.add("llm", llm);
                 }
                 String requestJson = requestBody.toString();

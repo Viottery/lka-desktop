@@ -5,10 +5,13 @@
   // Quick window: always. Workbench and phone: only inside the 真理 (manager) conversation.
   var body = document.body;
   var quick = body.classList.contains("quick-mode");
+  // Pet bubble mode has no header: her activity sits inside the pending reply bubble.
+  var bubble = quick && new URLSearchParams(location.search).get("layout") === "bubble";
   if (!quick && !body.classList.contains("work-mode")) return;
   var activity = null, lastText = "";
 
   function host() {
+    if (bubble) return document.querySelector("#messages .agent-live-output .bubble");
     if (quick) return document.querySelector("#quickAssistantBar .qa-identity");
     return body.classList.contains("manager-conversation") ? document.querySelector(".chat-session-meta") : null;
   }
@@ -21,7 +24,10 @@
       activity.id = "qaActivity"; activity.className = "qa-activity"; activity.setAttribute("aria-live", "polite");
       activity.innerHTML = '<span class="qa-activity-text"></span><span class="qa-typing" aria-hidden="true"><i></i><i></i><i></i></span>';
     }
-    if (activity.parentNode !== parent) {
+    if (bubble) {
+      // The live row is rebuilt with the transcript; keep the line first in it.
+      if (parent.firstChild !== activity) parent.insertBefore(activity, parent.firstChild);
+    } else if (activity.parentNode !== parent) {
       var title = parent.querySelector("#activeSessionTitle");
       if (title) title.insertAdjacentElement("afterend", activity); else parent.appendChild(activity);
     }
@@ -43,10 +49,13 @@
 
   function sync() {
     var node = ensureActivity();
-    var busy = !!node && (body.classList.contains("run-progress-inline") || !!document.querySelector(".agent-live-output"));
-    body.classList.toggle("qa-busy", busy);
+    var running = body.classList.contains("run-progress-inline") || !!document.querySelector(".agent-live-output");
+    var busy = !!node && running;
+    body.classList.toggle("qa-busy", bubble ? running : busy);
     if (!node) return;
-    var text = busy ? currentAction() : "";
+    // In the bubble the dots alone mean "thinking"; only concrete actions get words.
+    var action = busy ? currentAction() : "";
+    var text = bubble ? action === "在想…" ? "" : action.replace(/…$/, "") : action;
     if (text !== lastText) { node.querySelector(".qa-activity-text").textContent = text; lastText = text; }
     node.hidden = !busy;
   }
@@ -82,6 +91,10 @@
     scheduled = true;
     requestAnimationFrame(function () { scheduled = false; sync(); });
   }
-  new MutationObserver(schedule).observe(body, { attributes: true, attributeFilter: ["class"], childList: true, subtree: true, characterData: true });
+  new MutationObserver(function () {
+    // Re-attach to a rebuilt live bubble before paint instead of one frame later.
+    var live = bubble && document.querySelector("#messages .agent-live-output .bubble");
+    if (live && live.firstChild !== activity) sync(); else schedule();
+  }).observe(body, { attributes: true, attributeFilter: ["class"], childList: true, subtree: true, characterData: true });
   sync();
 }());

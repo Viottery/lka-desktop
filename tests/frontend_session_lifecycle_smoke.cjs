@@ -69,8 +69,8 @@ const server = http.createServer(async (req, res) => {
   if ((url.pathname === '/sessions' || url.pathname === '/sessions/deleted') && req.method === 'GET'
       && url.searchParams.get('limit') === '30') {
     if (holdHistoryRequests) {
-      await new Promise(resolve => heldHistoryRequests.push({ search: url.search, release: () => {
-        json(res, 200, { sessions: [] }); resolve();
+      await new Promise(resolve => heldHistoryRequests.push({ search: url.search, release: (sessions = [], status = 200) => {
+        json(res, status, { sessions }); resolve();
       } }));
       return;
     }
@@ -246,6 +246,34 @@ async function storedSessions(page) {
     assert.equal(historyRequests().length, progressBaseline + 1,
       'history-relevant storage changes still refresh the index');
     await sibling.close();
+
+    // Passive same-view refreshes retain their loaded index and never flash
+    // the foreground loading button, even while their response is delayed.
+    holdHistoryRequests = true;
+    await first.page.evaluate(key => window.dispatchEvent(new StorageEvent('storage', { key })), DELETED_KEY);
+    await waitFor(() => heldHistoryRequests.length === 1);
+    const cachedSummary = { session_id: 'synthetic-history-only', title: '保留的历史摘要',
+      created_at: new Date(now).toISOString(), updated_at: new Date(now).toISOString() };
+    heldHistoryRequests.shift().release([cachedSummary]);
+    await first.page.waitForFunction(() => document.querySelector('#sessionListStatus').textContent === '已载入 1 条历史');
+    await first.page.evaluate(key => window.dispatchEvent(new StorageEvent('storage', { key })), DELETED_KEY);
+    await waitFor(() => heldHistoryRequests.length === 1);
+    assert.equal(await first.page.locator('#loadMoreSessionsButton').isVisible(), false,
+      'background refresh does not reveal the loading button');
+    assert.equal(await first.page.locator('#sessionListStatus').textContent(), '已载入 1 条历史');
+    assert.equal(await first.page.locator('.session-item[data-session-id="synthetic-history-only"]').count(), 1,
+      'background refresh retains cached history summaries');
+    heldHistoryRequests.shift().release([], 503);
+    await first.page.waitForFunction(() => document.querySelector('#sessionListStatus').textContent.includes('加载失败'));
+    assert.equal(await first.page.locator('.session-item[data-session-id="synthetic-history-only"]').count(), 1,
+      'failed refresh preserves cached history and reports the error');
+    await first.page.evaluate(key => window.dispatchEvent(new StorageEvent('storage', { key })), DELETED_KEY);
+    await waitFor(() => heldHistoryRequests.length === 1);
+    heldHistoryRequests.shift().release([]);
+    await first.page.waitForFunction(() => document.querySelector('#sessionListStatus').textContent === '');
+    assert.equal(await first.page.locator('.session-item[data-session-id="synthetic-history-only"]').count(), 0,
+      'successful refresh replaces the previous index, including an empty result');
+    holdHistoryRequests = false;
 
     // While a history page is delayed, repeated resets coalesce. Search and
     // deleted-view changes are queued as one latest request after it drains.

@@ -13,6 +13,7 @@ public final class PetChatBridge {
     private Consumer<String> savedRunStreamRequestHandler;
     private Consumer<String> savedRunStreamCancelHandler;
     private Consumer<Double> quickPanelHeightHandler;
+    private Runnable quickRevealHandler;
     private Consumer<String> quickContextLabelHandler;
     private Consumer<String> quickSettingsStateHandler;
     private final Consumer<String> payloadConsumer;
@@ -96,6 +97,14 @@ public final class PetChatBridge {
 
     public void setQuickContextLabel(String label) {
         if (quickContextLabelHandler != null) quickContextLabelHandler.accept(label);
+    }
+
+    public void quickRevealReady() {
+        if (quickRevealHandler != null) quickRevealHandler.run();
+    }
+
+    void setQuickRevealHandler(Runnable handler) {
+        quickRevealHandler = handler;
     }
 
     void setWorkspaceReserveHandlers(BiFunction<String, String, String> reserver, Function<String, String> materializer) {

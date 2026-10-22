@@ -22,7 +22,8 @@
     function select(settings) {
       var visibility = settings && settings.visibility || "user";
       if (["user", "internal", "all"].indexOf(visibility) < 0) throw new Error("Invalid matter visibility projection");
-      var rows = Array.from(records.values()).map(copy), plans = new Map();
+      // Soft-deleted rows stay cached (newer revision wins) but are never shown.
+      var rows = Array.from(records.values()).filter(function (r) { return !r.deleted_at; }).map(copy), plans = new Map();
       rows.forEach(function (r) { if (r.kind === "plan") { r.progress = { total: 0, done: 0, cancelled: 0 }; plans.set(r.matter_id, r); } });
       rows.forEach(function (r) {
         var parent = plans.get(r.parent_matter_id);

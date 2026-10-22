@@ -18,10 +18,13 @@
     if (model && !models.some(function (row) { return row.value === model; })) {
       try { var pair = JSON.parse(model); models.push({ value: model, label: (pair[1] || pair[0] + ' 默认模型') + ' · 当前已保存' }); } catch (_) {}
     }
-    return { sessionId: view.sessionId || '', kind: view.kind || 'ordinary', scopeLabel: manager ? '真理模型' : '独立任务默认模型',
+    var level = draft && owner === view.sessionId ? draft.reasoningLevel
+      : manager && controller && controller.reasoning_level || prefs.reasoningLevel || 'low';
+    var reasoning = chat.reasoningOptions(model, level);
+    return Object.assign({ sessionId: view.sessionId || '', kind: view.kind || 'ordinary', scopeLabel: manager ? '真理模型' : '独立任务默认模型',
       modelValue: model, models: models, safetyMode: draft && owner === view.sessionId ? draft.safetyMode : prefs.safetyMode,
       stream: draft && owner === view.sessionId ? draft.stream : prefs.stream,
-      loading: loading, busy: busy, ready: ready && !loading, error: error, notice: notice };
+      loading: loading, busy: busy, ready: ready && !loading, error: error, notice: notice }, reasoning);
   }
   function publish() {
     var value = snapshot();
@@ -64,23 +67,35 @@
     var current = snapshot(), id = current.sessionId, manager = current.kind === 'manager', prefs = chat.preferences();
     if (!current.ready) { error = '请等当前会话连接完成后再设置。'; return publish(); }
     var next = { modelValue: values.modelValue === undefined ? current.modelValue : values.modelValue,
+      reasoningLevel: values.reasoningLevel === undefined ? current.reasoningLevel : values.reasoningLevel,
       safetyMode: values.safetyMode === undefined ? current.safetyMode : values.safetyMode,
       stream: values.stream === undefined ? current.stream : values.stream };
     if (typeof next.modelValue !== 'string' || !current.models.some(function (row) { return row.value === next.modelValue; })
         || ['backend', 'llm', 'manual', 'skip'].indexOf(next.safetyMode) < 0 || typeof next.stream !== 'boolean') {
       error = '请选择有效的模型和审查方式。'; return publish();
     }
+    var reasoning = chat.reasoningOptions(next.modelValue, next.reasoningLevel);
+    if (['off', 'low', 'high', 'max'].indexOf(next.reasoningLevel) < 0 || !reasoning.reasoningValid) {
+      error = reasoning.reasoningHint; return publish();
+    }
     var ticket = ++epoch; owner = id; draft = next; busy = true; error = ''; notice = ''; publish();
     try {
-      if (manager && next.modelValue !== managerModel(controller)) {
-        var pair = next.modelValue ? JSON.parse(next.modelValue) : [null, null];
-        var value = await request(id, 'PATCH', { expected_revision: controller.revision, llm_client_name: pair[0] || null, llm_model: pair[1] || null });
+      var savedReasoning = controller && controller.reasoning_level || prefs.reasoningLevel || 'low';
+      if (manager && (next.modelValue !== managerModel(controller) || next.reasoningLevel !== savedReasoning)) {
+        var patch = { expected_revision: controller.revision };
+        if (next.modelValue !== managerModel(controller)) {
+          var pair = next.modelValue ? JSON.parse(next.modelValue) : [null, null];
+          patch.llm_client_name = pair[0] || null; patch.llm_model = pair[1] || null;
+        }
+        if (reasoning.reasoningSupported && next.reasoningLevel !== savedReasoning) patch.reasoning_level = next.reasoningLevel;
+        var value = await request(id, 'PATCH', patch);
         if (ticket !== epoch || !same(id)) return snapshot();
         controller = accept(value, id);
       }
       if (ticket !== epoch || !same(id)) return snapshot();
       var changes = {};
       if (!manager && (next.modelValue !== prefs.modelValue || prefs.saveError)) changes.modelValue = next.modelValue;
+      if (!manager && (next.reasoningLevel !== prefs.reasoningLevel || prefs.saveError)) changes.reasoningLevel = next.reasoningLevel;
       if (next.safetyMode !== prefs.safetyMode || prefs.saveError) changes.safetyMode = next.safetyMode;
       if (next.stream !== prefs.stream || prefs.saveError) changes.stream = next.stream;
       if (Object.keys(changes).length) await chat.savePreferences(changes);
@@ -97,6 +112,16 @@
     return snapshot();
   }
   chat.quickSettings = snapshot;
+  chat.previewQuickSettings = function (values) {
+    var current = snapshot();
+    owner = current.sessionId;
+    draft = { modelValue: values.modelValue === undefined ? current.modelValue : values.modelValue,
+      reasoningLevel: values.reasoningLevel === undefined ? current.reasoningLevel : values.reasoningLevel,
+      safetyMode: values.safetyMode === undefined ? current.safetyMode : values.safetyMode,
+      stream: values.stream === undefined ? current.stream : values.stream };
+    error = notice = '';
+    return publish();
+  };
   chat.refreshQuickSettings = refresh;
   chat.updateQuickSettings = update;
 
@@ -105,17 +130,36 @@
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', '对话设置');
   panel.innerHTML = '<header><div><h2>设置</h2><p id="qsScope"></p></div><button id="qsClose" class="qs-icon" type="button" aria-label="关闭设置">×</button></header>' +
     '<form id="qsForm"><div class="qs-field"><label for="qsModel">对话模型</label><div class="qs-model-row"><select id="qsModel"></select><button id="qsRefresh" type="button" class="qs-icon" aria-label="刷新模型列表" title="刷新模型列表">↻</button></div></div>' +
+    '<div class="qs-field reasoning-control" id="qsReasoningControl"><div class="reasoning-heading"><label for="qsReasoning">推理强度</label><output id="qsReasoningValue" for="qsReasoning">低</output></div>' +
+    '<input id="qsReasoning" class="reasoning-slider" type="range" min="0" max="3" step="1" value="1" aria-valuetext="低" aria-describedby="qsReasoningHint">' +
+    '<div class="reasoning-ticks" aria-hidden="true"><span>关闭</span><span>低</span><span>高</span><span>最高</span></div><small id="qsReasoningHint"></small></div>' +
     '<div class="qs-field"><label for="qsSafety">审批模式</label><select id="qsSafety"><option value="backend">跟随后端配置</option><option value="llm">模型审查</option><option value="manual">每次确认</option><option value="skip">请求自动通过</option></select><small>后端策略可要求更严格的审查。</small></div>' +
     '<label class="qs-switch"><span>实时显示回复</span><input id="qsStream" type="checkbox"></label><p class="qs-help">审查方式与回复显示用于后续对话。</p>' +
     '<p id="qsStatus" role="status" aria-live="polite"></p><button id="qsApply" type="submit">应用更改</button></form>';
   document.body.appendChild(panel);
   function el(id) { return document.getElementById(id); }
+  function renderReasoning(value) {
+    var index = ['off', 'low', 'high', 'max'].indexOf(value.reasoningLevel);
+    el('qsReasoning').value = index;
+    el('qsReasoning').setAttribute('aria-valuetext', value.reasoningLevels[index].label);
+    el('qsReasoning').style.setProperty('--reasoning-progress', (index / 3 * 100) + '%');
+    el('qsReasoning').disabled = !value.ready || value.busy || !value.reasoningAvailable;
+    el('qsReasoningValue').textContent = value.reasoningLevels[index].label;
+    el('qsReasoningHint').textContent = value.reasoningHint;
+    el('qsReasoningControl').classList.toggle('reasoning-invalid', !value.reasoningValid);
+    el('qsReasoningControl').querySelectorAll('.reasoning-ticks span').forEach(function (node, i) {
+      node.classList.toggle('is-unavailable', !value.reasoningLevels[i].available);
+      node.classList.toggle('is-selected', i === index);
+    });
+    el('qsApply').disabled = !value.ready || value.busy || !value.reasoningValid;
+  }
   function render(value) {
     el('qsScope').textContent = value.scopeLabel;
     var selected = el('qsModel'); selected.textContent = '';
     value.models.forEach(function (row) { var option = document.createElement('option'); option.value = row.value; option.textContent = row.label; selected.appendChild(option); });
     selected.value = value.modelValue; el('qsSafety').value = value.safetyMode; el('qsStream').checked = value.stream;
     ['qsModel', 'qsSafety', 'qsStream', 'qsApply'].forEach(function (id) { el(id).disabled = !value.ready || value.busy; });
+    renderReasoning(value);
     el('qsRefresh').disabled = value.busy || value.loading;
     el('qsApply').textContent = value.busy ? '正在保存…' : '应用更改';
     el('qsStatus').textContent = value.loading ? '正在读取设置…' : value.error || value.notice || '更改在应用后保存。';
@@ -153,8 +197,14 @@
   }
   el('qsClose').addEventListener('click', function () { close(true); });
   el('qsRefresh').addEventListener('click', function () { refresh(true); });
-  el('qsForm').addEventListener('submit', function (event) { event.preventDefault(); update({ modelValue: el('qsModel').value, safetyMode: el('qsSafety').value, stream: el('qsStream').checked }); });
-  panel.addEventListener('change', function () { owner = context().sessionId; draft = { modelValue: el('qsModel').value, safetyMode: el('qsSafety').value, stream: el('qsStream').checked }; });
+  el('qsForm').addEventListener('submit', function (event) { event.preventDefault(); update({ modelValue: el('qsModel').value, reasoningLevel: ['off', 'low', 'high', 'max'][Number(el('qsReasoning').value)], safetyMode: el('qsSafety').value, stream: el('qsStream').checked }); });
+  function captureDraft() {
+    owner = context().sessionId;
+    draft = { modelValue: el('qsModel').value, reasoningLevel: ['off', 'low', 'high', 'max'][Number(el('qsReasoning').value)],
+      safetyMode: el('qsSafety').value, stream: el('qsStream').checked };
+  }
+  el('qsReasoning').addEventListener('input', function () { captureDraft(); renderReasoning(snapshot()); });
+  panel.addEventListener('change', function () { captureDraft(); publish(); });
   document.addEventListener('pointerdown', function (event) { if (opened && !panel.contains(event.target) && (!button || !button.contains(event.target))) close(false); });
   document.addEventListener('keydown', function (event) {
     if (!opened) return;

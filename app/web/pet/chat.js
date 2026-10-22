@@ -29,6 +29,9 @@
   var retryBackendButton = document.querySelector("#retryBackendButton");
   var workspaceInput = document.querySelector("#workspaceInput");
   var llmModelInput = document.querySelector("#llmModelInput");
+  var reasoningLevelInput = document.querySelector("#reasoningLevelInput");
+  var reasoningLevels = ["off", "low", "high", "max"];
+  var reasoningLabels = ["关闭", "低", "高", "最高"];
   var refreshModelsButton = document.querySelector("#refreshModelsButton");
   var modelCatalogStatus = document.querySelector("#modelCatalogStatus");
   var workspaceParentInput = document.querySelector("#workspaceParentInput");
@@ -120,6 +123,7 @@
   var historyRequestGeneration = 0;
   var historyRequestInFlight = false;
   var historyActiveRequestKey = "";
+  var historyLoadedRequestKey = "";
   var historyActiveRequestGeneration = 0;
   var historyResetQueued = false;
   var historySearchTimer = null;
@@ -168,7 +172,7 @@
   }) : null;
   window.LkaConversationReading = conversationReading;
   var runSettingsKey = "agentic-rag-pet-run-settings-v1";
-  var runSettings = { workspace: "", llmClient: "", llmModel: "", safetyMode: "backend", stream: true, workspaceParent: "" };
+  var runSettings = { workspace: "", llmClient: "", llmModel: "", reasoningLevel: "low", safetyMode: "backend", stream: true, workspaceParent: "" };
   var modelCatalog = null;
   var modelCatalogRetryTimer = null;
   var defaultsDirty = false;
@@ -219,6 +223,59 @@
     return runSettings.llmClient && runSettings.llmModel ? JSON.stringify([runSettings.llmClient, runSettings.llmModel]) : "";
   }
 
+  function reasoningOptions(modelValue, level) {
+    var pair = [];
+    try { pair = modelValue ? JSON.parse(modelValue) : []; } catch (ignored) {}
+    var clients = modelCatalog && modelCatalog.clients || [];
+    var clientName = pair[0] || modelCatalog && modelCatalog.default_client;
+    var client = clients.find(function (item) { return item.name === clientName; }) || (!clientName ? clients[0] : null);
+    var model = pair[1] || client && client.default_model;
+    var supported = clients.some(function (item) { return !!item.reasoning_capabilities; });
+    var capability = client && client.reasoning_capabilities && client.reasoning_capabilities[model];
+    var selected = reasoningLevels.indexOf(level) >= 0 ? level : "low";
+    var levels = reasoningLevels.map(function (value, index) {
+      var available = value === "low";
+      if (capability) available = value === "off" ? !!capability.supports_off
+        : capability.controlled ? Object.prototype.hasOwnProperty.call(capability.effort_map || {}, value) : value === "low";
+      return { value: value, label: reasoningLabels[index], available: supported && available };
+    });
+    var valid = !supported || levels.some(function (row) { return row.value === selected && row.available; });
+    var hint = !supported ? "当前后端未提供推理强度设置。"
+      : !valid ? "当前模型不支持此档位，请选择可用档位。"
+      : !capability || !capability.controlled ? "此模型未提供可调推理强度，低档沿用模型默认行为。"
+      : selected === "max" && capability.effort_map && capability.effort_map.max === capability.effort_map.high
+        ? "此模型的最高档与高档使用相同强度。" : "更深入的推理可能需要更长时间；新运行生效。";
+    return { reasoningLevel: selected, reasoningLevels: levels, reasoningSupported: supported,
+      reasoningAvailable: supported && (levels.filter(function (row) { return row.available; }).length > 1 || !valid),
+      reasoningValid: valid, reasoningHint: hint };
+  }
+
+  function renderReasoningControl(level) {
+    if (!reasoningLevelInput) return;
+    var settings = reasoningOptions(llmModelInput ? llmModelInput.value : selectedModelValue(), level || runSettings.reasoningLevel);
+    var index = reasoningLevels.indexOf(settings.reasoningLevel);
+    reasoningLevelInput.value = index;
+    reasoningLevelInput.disabled = !settings.reasoningAvailable;
+    reasoningLevelInput.style.setProperty("--reasoning-progress", (index / 3 * 100) + "%");
+    reasoningLevelInput.setAttribute("aria-valuetext", reasoningLabels[index]);
+    document.getElementById("reasoningLevelValue").textContent = reasoningLabels[index];
+    document.getElementById("reasoningLevelHint").textContent = settings.reasoningHint;
+    document.getElementById("reasoningControl").classList.toggle("reasoning-invalid", !settings.reasoningValid);
+    document.querySelectorAll("#reasoningControl .reasoning-ticks span").forEach(function (node, i) {
+      node.classList.toggle("is-unavailable", !settings.reasoningLevels[i].available);
+      node.classList.toggle("is-selected", i === index);
+    });
+  }
+
+  function requestReasoningLevel(sessionId) {
+    // Manager requests inherit their controller; ordinary tasks use UI defaults.
+    if (isManagerSession(getSessionById(sessionId))) return "";
+    var modelValue = selectedModelValue() || (runSettings.llmModel ? JSON.stringify([runSettings.llmClient, runSettings.llmModel]) : "");
+    var settings = reasoningOptions(modelValue, runSettings.reasoningLevel);
+    if (!settings.reasoningValid) throw new Error("当前模型不支持所选推理强度，请在设置中调整。");
+    return settings.reasoningSupported ? settings.reasoningLevel : "";
+  }
+
   function renderModelOptions() {
     if (!llmModelInput) return;
     llmModelInput.textContent = "";
@@ -250,6 +307,7 @@
       oldOption.selected = true;
       llmModelInput.appendChild(oldOption);
     }
+    renderReasoningControl();
   }
 
   async function loadModelCatalog(refresh) {
@@ -288,6 +346,7 @@
       var defaults = payload.defaults || {};
       runSettings.llmClient = managerEmbedding ? "" : defaults.llm_client || "";
       runSettings.llmModel = managerEmbedding ? "" : defaults.llm_model || "";
+      runSettings.reasoningLevel = reasoningLevels.indexOf(defaults.reasoning_level) >= 0 ? defaults.reasoning_level : "low";
       runSettings.safetyMode = defaults.safety_mode || "backend";
       runSettings.stream = defaults.stream !== false;
       runSettings.workspaceParent = defaults.workspace_parent || "";
@@ -320,10 +379,19 @@
       runSettings.llmClient = "";
       runSettings.llmModel = "";
     }
+    runSettings.reasoningLevel = reasoningLevelInput ? reasoningLevels[Number(reasoningLevelInput.value)] || "low" : runSettings.reasoningLevel;
+    var reasoning = reasoningOptions(llmModelInput ? llmModelInput.value : selectedModelValue(), runSettings.reasoningLevel);
+    renderReasoningControl();
+    if (!reasoning.reasoningValid) {
+      defaultsSaveError = new Error(reasoning.reasoningHint);
+      if (defaultsSaveStatus) { defaultsSaveStatus.textContent = defaultsSaveError.message; defaultsSaveStatus.classList.add("error"); }
+      return;
+    }
     runSettings.workspaceParent = parent;
     saveRunSettings();
     var defaults = { llm_client: runSettings.llmClient, llm_model: runSettings.llmModel,
       safety_mode: runSettings.safetyMode, stream: runSettings.stream, workspace_parent: parent };
+    if (reasoning.reasoningSupported) defaults.reasoning_level = runSettings.reasoningLevel;
     if (defaultsSaveStatus) { defaultsSaveStatus.textContent = "正在保存…"; defaultsSaveStatus.classList.remove("error"); }
     defaultsSaveChain = defaultsSaveChain.catch(function () {}).then(async function () {
       if (window.petBridge && typeof window.petBridge.saveUiDefaults === "function") {
@@ -431,7 +499,8 @@
       return [];
     }
     return rawEvents
-      .filter(function (event) { return event && typeof event === "object" && event.type !== "llm_delta"; })
+      .filter(function (event) { return event && typeof event === "object" && event.type !== "llm_delta"
+        && (backendUserVisible(event) || ["assistant_message", "final_answer"].indexOf(event.type) < 0); })
       .map(function (event) {
         return {
           event_index: Number(event.event_index) || 0,
@@ -1019,7 +1088,14 @@
     return typeof envelope.purpose === "string" ? envelope.purpose.trim() : "";
   }
 
+  function backendUserVisible(value) {
+    var payload = value && value.payload && typeof value.payload === "object" ? value.payload : {};
+    return !(value && value.user_visible === false || value && value.metadata && value.metadata.user_visible === false
+      || payload.user_visible === false || payload.metadata && payload.metadata.user_visible === false);
+  }
+
   function normalizeBackendRole(entry) {
+    if (!backendUserVisible(entry)) return "";
     // Provenance describes persisted inputs, never the agent's actual answer.
     if (entry.role === "assistant" || entry.role === "agent") return "assistant";
     var payload = entry.payload && typeof entry.payload === "object" ? entry.payload : {};
@@ -1335,6 +1411,7 @@
     var deletedView = viewingDeletedSessions;
     var query = sessionSearchInput ? sessionSearchInput.value.trim() : "";
     var requestKey = (deletedView ? "deleted" : "active") + "\u0000" + query;
+    var sameLoadedView = requestKey === historyLoadedRequestKey;
     if (historyRequestInFlight) {
       if (!reset) return;
       // Repeated resets for the same active request are already satisfied. If
@@ -1344,43 +1421,52 @@
           && historyActiveRequestGeneration === historyRequestGeneration) return;
       historyRequestGeneration += 1;
       historyResetQueued = true;
-      historyLoading = true;
-      historyOffset = 0;
-      historyHasMore = true;
-      historyError = "";
+      historyLoading = !sameLoadedView;
       lastKnownSearch = query;
-      if (deletedView) deletedHistoryItems = [];
-      else historyItems = [];
+      if (!sameLoadedView) {
+        historyLoadedRequestKey = "";
+        historyOffset = 0;
+        historyHasMore = true;
+        historyError = "";
+        if (deletedView) deletedHistoryItems = [];
+        else historyItems = [];
+      }
       renderSessionList();
       return;
     }
     if (!reset && (!historyHasMore || historyLoading)) return;
     var generation = reset ? ++historyRequestGeneration : historyRequestGeneration;
     if (reset) {
-      historyOffset = 0;
-      historyHasMore = true;
-      historyError = "";
       lastKnownSearch = query;
-      if (deletedView) deletedHistoryItems = [];
-      else historyItems = [];
+      // Keep the loaded index visible during same-view background refreshes.
+      if (!sameLoadedView) {
+        historyLoadedRequestKey = "";
+        historyOffset = 0;
+        historyHasMore = true;
+        historyError = "";
+        if (deletedView) deletedHistoryItems = [];
+        else historyItems = [];
+      }
     }
-    historyLoading = true;
+    historyLoading = !reset || !sameLoadedView;
     historyRequestInFlight = true;
     historyActiveRequestKey = requestKey;
     historyActiveRequestGeneration = generation;
     renderSessionList();
+    var requestOffset = reset ? 0 : historyOffset;
     try {
       var url = backendBaseUrl + (deletedView ? "/sessions/deleted" : "/sessions")
-        + "?limit=30&offset=" + historyOffset + (query ? "&q=" + encodeURIComponent(query) : "");
+        + "?limit=30&offset=" + requestOffset + (query ? "&q=" + encodeURIComponent(query) : "");
       var response = await fetch(url, { headers: { Accept: "application/json" } });
       if (!response.ok) throw new Error("HTTP " + response.status);
       var payload = await response.json();
       if (generation !== historyRequestGeneration || deletedView !== viewingDeletedSessions) return;
       var page = (Array.isArray(payload.sessions) ? payload.sessions : [])
         .map(sessionSummaryFromBackend).filter(function (item) { return item !== null; });
-      if (deletedView) deletedHistoryItems = deletedHistoryItems.concat(page);
-      else historyItems = historyItems.concat(page);
-      historyOffset += page.length;
+      if (deletedView) deletedHistoryItems = reset ? page : deletedHistoryItems.concat(page);
+      else historyItems = reset ? page : historyItems.concat(page);
+      historyLoadedRequestKey = requestKey;
+      historyOffset = requestOffset + page.length;
       historyHasMore = page.length === 30;
       historyError = "";
     } catch (error) {
@@ -1407,14 +1493,15 @@
     try {
       var rows = JSON.parse(rawValue || "[]");
       if (!Array.isArray(rows)) return "";
-      return JSON.stringify(rows.map(function (item) {
-        if (!item || typeof item !== "object") return null;
+      return JSON.stringify(rows.filter(function (item) {
+        return item && typeof item === "object" && item.kind !== "manager";
+      }).map(function (item) {
         var messages = Array.isArray(item.messages) ? item.messages : [];
         var last = messages[messages.length - 1] || {};
         return [item.id || item.session_id || "", item.title || "", !!item.title_is_custom,
           Number(item.updated_at) || 0, item.workspace || "", item.project_id || "",
           messages.length, last.messageId || last.message_id || last.id || "", last.role || ""];
-      }));
+      }).sort(function (a, b) { return safeText(a[0]).localeCompare(safeText(b[0])); }));
     } catch (ignored) { return ""; }
   }
 
@@ -1850,7 +1937,10 @@
     var managerView = isManagerSession(session);
     document.body.classList.toggle("manager-conversation", managerView);
     [workspaceInput, changeWorkspaceButton, indexWorkspaceButton].forEach(function (control) { if (control) control.disabled = managerView; });
-    if (workMode && !managerEmbedding && input) input.placeholder = managerView ? "和真理聊聊目标、进展或下一步…" : "描述你想完成的任务…";
+    if (workMode && !managerEmbedding && input) {
+      input.placeholder = urlParams.get("layout") === "mobile" ? "Привет, Doctor."
+        : managerView ? "和真理聊聊目标、进展或下一步…" : "描述你想完成的任务…";
+    }
     syncWorkbenchPanels();
     var projectButton = document.querySelector("#newProjectSessionButton");
     if (projectButton) projectButton.disabled = !path || !!pendingState;
@@ -2102,17 +2192,29 @@
     applySessionTitle(session);
   }
 
+  function reconcileSessionList(nodes) {
+    var next = sessionList.firstChild;
+    nodes.forEach(function (node) {
+      if (node === next) next = next.nextSibling;
+      else sessionList.insertBefore(node, next);
+    });
+    while (next) {
+      var removed = next;
+      next = next.nextSibling;
+      removed.remove();
+    }
+  }
+
   function renderSessionList() {
     if (!sessionList) {
       return;
     }
-    sessionList.innerHTML = "";
     if (sessionListCaption) sessionListCaption.textContent = viewingDeletedSessions ? "已删除的会话" : "最近的工作";
     if (toggleDeletedSessionsButton) toggleDeletedSessionsButton.textContent = viewingDeletedSessions ? "返回会话" : "已删除";
     if (sessionSearchInput) sessionSearchInput.placeholder = viewingDeletedSessions ? "搜索已删除会话" : "搜索会话";
     if (loadMoreSessionsButton) {
       loadMoreSessionsButton.hidden = !historyHasMore && !historyLoading;
-      loadMoreSessionsButton.disabled = historyLoading;
+      loadMoreSessionsButton.disabled = historyRequestInFlight;
       loadMoreSessionsButton.textContent = historyLoading ? "加载中…" : "加载更早的会话";
     }
     if (sessionListStatus) {
@@ -2120,9 +2222,19 @@
       sessionListStatus.textContent = historyError || (historyLoading ? "正在读取历史…" : loadedCount ? "已载入 " + loadedCount + " 条历史" : "");
     }
     if (viewingDeletedSessions) {
+      sessionList.innerHTML = "";
       renderDeletedSessionList();
       return;
     }
+    var existingCards = Object.create(null), existingGroups = Object.create(null);
+    Array.prototype.forEach.call(sessionList.children, function (node) {
+      if (node.classList.contains("session-item") && !node.classList.contains("deleted-session")) existingCards[node.dataset.sessionId] = node;
+      else if (node.classList.contains("session-group-label")) {
+        if (!existingGroups[node.textContent]) existingGroups[node.textContent] = [];
+        existingGroups[node.textContent].push(node);
+      }
+    });
+    var nodes = [], renameEditorCreated = false;
 
     var searchTerm = sessionSearchInput ? sessionSearchInput.value.trim().toLocaleLowerCase() : "";
     var ordered = sessions.filter(function (session) {
@@ -2148,7 +2260,7 @@
       empty.className = "session-list-empty";
       empty.textContent = historyLoading ? "正在搜索历史会话…" :
         searchTerm ? "没有找到匹配的会话" : "还没有会话";
-      sessionList.appendChild(empty);
+      nodes.push(empty);
     }
 
     var lastGroup = "";
@@ -2156,22 +2268,45 @@
       if (!session.summary_only) applySessionTitle(session);
       var group = searchTerm ? "" : sessionGroupLabel(session.updated_at);
       if (group && group !== lastGroup) {
-        var groupLabel = document.createElement("p");
+        var groupLabel = (existingGroups[group] || []).shift() || document.createElement("p");
         groupLabel.className = "session-group-label";
-        groupLabel.textContent = group;
-        sessionList.appendChild(groupLabel);
+        if (groupLabel.textContent !== group) groupLabel.textContent = group;
+        nodes.push(groupLabel);
         lastGroup = group;
       }
 
-      var item = document.createElement("article");
       var runState = sessionRunState(session);
-      item.className = "session-item" + (session.id === activeSessionId ? " active" : "") + (runState ? " is-" + runState : "");
+      var itemClass = "session-item" + (session.id === activeSessionId ? " active" : "") + (runState ? " is-" + runState : "");
+      var timeText = runState === "running" ? "进行中" : runState === "waiting" ? "待确认" : runState === "paused" ? "已暂停" : formatTimestamp(session.updated_at);
+      var folder = safeText(session.workspace).replace(/[\\/]+$/, "").split(/[\\/]/).pop();
+      var metaText = sessionPreviewText(session) || (session.summary_only ? (folder && !/^(conv|session)[-_]/.test(folder) ? folder + " · 点击载入" : "点击载入") : "尚未开始");
+      var item = existingCards[session.id], renaming = renamingSessionId === session.id;
+      // Keep hovered actions and an active rename editor mounted during sync.
+      if (item && !!item._renaming === renaming) {
+        if (item.className !== itemClass) item.className = itemClass;
+        var titleNode = item.querySelector(".session-title"), timeNode = item.querySelector(".session-time"), metaNode = item.querySelector(".session-meta");
+        if (titleNode && titleNode.textContent !== session.title) titleNode.textContent = session.title || "新会话";
+        if (timeNode && timeNode.textContent !== timeText) timeNode.textContent = timeText;
+        if (metaNode.textContent !== metaText) metaNode.textContent = metaText;
+        if (!renaming) {
+          var buttons = item.querySelectorAll(".session-actions button");
+          buttons[0].setAttribute("aria-label", "重命名会话：" + (session.title || "新会话"));
+          buttons[1].disabled = !!deletingSessionIds[session.id];
+          buttons[1].setAttribute("aria-label", "删除会话：" + (session.title || "新会话"));
+        }
+        nodes.push(item);
+        return;
+      }
+      item = document.createElement("article");
+      item.className = itemClass;
       item.dataset.sessionId = session.id;
+      item._renaming = renaming;
 
       var row = document.createElement("div");
       row.className = "session-row";
 
       if (renamingSessionId === session.id) {
+        renameEditorCreated = true;
         var renameInput = document.createElement("input");
         renameInput.type = "text";
         renameInput.className = "session-rename-input";
@@ -2234,7 +2369,7 @@
         openButton.appendChild(title);
         var time = document.createElement("span");
         time.className = "session-time";
-        time.textContent = runState === "running" ? "进行中" : runState === "waiting" ? "待确认" : runState === "paused" ? "已暂停" : formatTimestamp(session.updated_at);
+        time.textContent = timeText;
         openButton.appendChild(time);
 
         var actions = document.createElement("div");
@@ -2273,15 +2408,15 @@
 
       var meta = document.createElement("span");
       meta.className = "session-meta";
-      var folder = safeText(session.workspace).replace(/[\\/]+$/, "").split(/[\\/]/).pop();
-      meta.textContent = sessionPreviewText(session) || (session.summary_only ? (folder && !/^(conv|session)[-_]/.test(folder) ? folder + " · 点击载入" : "点击载入") : "尚未开始");
+      meta.textContent = metaText;
 
       item.appendChild(row);
       item.appendChild(meta);
-      sessionList.appendChild(item);
+      nodes.push(item);
     });
+    reconcileSessionList(nodes);
 
-    if (renamingSessionId) {
+    if (renameEditorCreated) {
       focusRenameInputSoon();
     }
   }
@@ -2970,6 +3105,13 @@
     session = session && (getSessionById(session.id) || session);
     if (!session || !run || run.run_id && run.run_id !== session.multiAgentRunId) return;
     if (run.superseded_by_run_id) { followSupersedingRun(session, run.superseded_by_run_id); return; }
+    // Reading an unchanged status must not broadcast the page's cache again.
+    if (session.runControlStatus === safeText(run.status) && session.pauseRequested === !!run.pause_requested
+        && !session.resumePending && (run.status !== "paused" || session.timelineState === "paused")
+        && (run.status !== "cancelled" || session.timelineState === "cancelled")) {
+      if (activeSessionId === session.id) setComposerDisabled(!!pendingState && !isTerminalRunStatus(session.runControlStatus));
+      return;
+    }
     session.runControlStatus = safeText(run.status);
     session.pauseRequested = !!run.pause_requested;
     if (session.runControlStatus !== "paused") session.resumePending = false;
@@ -3215,6 +3357,8 @@
     var llm = {};
     if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmClient) llm.client_name = runSettings.llmClient;
     if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmModel) llm.model = runSettings.llmModel;
+    var reasoningLevel = requestReasoningLevel(payload.session_id || payload.conversation_id);
+    if (reasoningLevel) llm.reasoning_level = reasoningLevel;
     var response = await fetch(backendBaseUrl + "/agent/turn", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -3240,6 +3384,8 @@
     var llm = { response_mode: runSettings.stream ? "stream" : "text" };
     if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmClient) llm.client_name = runSettings.llmClient;
     if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmModel) llm.model = runSettings.llmModel;
+    var reasoningLevel = requestReasoningLevel(payload.session_id || payload.conversation_id);
+    if (reasoningLevel) llm.reasoning_level = reasoningLevel;
     var response = await fetch(backendBaseUrl + "/agent/turn/stream", {
       method: "POST", headers: { "Content-Type": "application/json", Accept: "text/event-stream" },
       body: JSON.stringify({ session_id: payload.session_id, user_input: payload.question, attachment_ids: payload.attachment_ids || [],
@@ -3747,16 +3893,21 @@
     if (eventName === "run_cancelled") settleCancelledRun(currentSession);
     var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
     var answer = turnState ? turnState.answer : liveAnswers[currentSession.id] || "";
-    if (eventName === "llm_delta" && payload.display_target === "assistant_answer") {
+    var answerVisible = backendUserVisible(data);
+    if (!answerVisible && ["llm_delta", "final_answer", "run_completed"].indexOf(eventName) >= 0) {
+      clearHiddenStreamAnswer(currentSession, turnState);
+      answer = "";
+    }
+    if (answerVisible && eventName === "llm_delta" && payload.display_target === "assistant_answer") {
       answer = safeText(payload.content_snapshot || (answer + safeText(payload.delta)));
       var streamedBody = runSettings.stream ? renderStreamingAnswer(currentSession, answer, false) : null;
       if (turnState) { turnState.answer = answer; turnState.body = streamedBody; }
-    } else if (eventName === "final_answer") {
+    } else if (answerVisible && eventName === "final_answer") {
       var metadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
       if (typeof metadata.answer === "string" || (!answer && typeof data.message === "string")) {
         answer = metadata.answer || data.message;
         var finalBody = renderStreamingAnswer(currentSession, answer, true);
-        if (turnState) { turnState.answer = answer; turnState.body = finalBody; }
+        if (turnState) { turnState.answer = answer; turnState.body = finalBody; turnState.userVisible = true; }
       }
     }
     if (turnState) {
@@ -3898,7 +4049,7 @@
         session_id: session.id,
         run_id: session.multiAgentRunId,
         answer: turnState.answer || "本轮完成。",
-        progress_events: turnState.events
+        progress_events: turnState.events, user_visible: turnState.userVisible !== false
       });
     } else if (status) {
       window.__petChatReceive({ session_id: session.id, run_id: session.multiAgentRunId, error: "Agent run " + status + "." });
@@ -4101,6 +4252,15 @@
     return output;
   }
 
+  function clearHiddenStreamAnswer(session, state) {
+    if (state) { state.userVisible = false; state.answer = ""; state.body = null; }
+    delete liveAnswers[session.id];
+    if (session.id === activeSessionId) {
+      var output = messages.querySelector(".agent-live-output");
+      if (output) output.remove();
+    }
+  }
+
   function renderStreamingAnswer(session, answer, complete) {
     var first = !liveAnswers[session.id];
     liveAnswers[session.id] = answer;
@@ -4137,6 +4297,7 @@
     var sequence = Number(data && data.sequence) || 0;
     if (sequence && sequence <= process.sequence) return false;
     if (sequence) process.sequence = sequence;
+    if (!backendUserVisible(data) && ["llm_delta", "final_answer", "assistant_message"].indexOf(eventName) >= 0) return false;
     var entries = process.entries, entry = null, index;
     // Backend emits decoded, user-visible progress after validating a decision.
     // Raw agent_process deltas contain control JSON, never display text.
@@ -4328,7 +4489,7 @@
     if (eventName === "run_paused") current.timelineState = "paused";
     if (current.id === activeSessionId) renderRunControls();
     var processChanged = recordProcessOutput(session, eventName, data);
-    if (eventName === "llm_delta") return;
+    if (eventName === "llm_delta" || !backendUserVisible(data) && ["final_answer", "assistant_message"].indexOf(eventName) >= 0) return;
     var message = truncateText(timelineText(eventName, data), eventName === "safety_review_decided" ? 4000 : 180);
     if (!message) {
       if (processChanged && session.id === activeSessionId) renderRunTimeline(getSessionById(session.id) || session);
@@ -4366,13 +4527,16 @@
     if (eventName === "run_paused") { state.paused = true; settlePausedRun(state.session, state); return; }
     if (eventName === "run_cancelled") settleCancelledRun(state.session);
     var payload = data && data.payload && typeof data.payload === "object" ? data.payload : {};
-    if (eventName === "llm_delta" && payload.display_target === "assistant_answer") {
+    var answerVisible = backendUserVisible(data);
+    if (!answerVisible && ["llm_delta", "final_answer", "run_completed"].indexOf(eventName) >= 0) clearHiddenStreamAnswer(state.session, state);
+    if (answerVisible && eventName === "llm_delta" && payload.display_target === "assistant_answer") {
       state.answer = safeText(payload.content_snapshot || (state.answer + safeText(payload.delta)));
       if (runSettings.stream) state.body = renderStreamingAnswer(state.session, state.answer, false);
       if (activeSessionId === state.session.id) { setRunStatus("正在生成回答…"); scrollMessagesToBottom(); }
       return;
     }
-    if (eventName === "final_answer") {
+    if (answerVisible && eventName === "final_answer") {
+      state.userVisible = true;
       var finalMetadata = payload.metadata && typeof payload.metadata === "object" ? payload.metadata : {};
       if (typeof finalMetadata.answer === "string" || (!state.answer && typeof data.message === "string")) {
         state.answer = finalMetadata.answer || data.message;
@@ -4401,7 +4565,7 @@
       else if (eventName === "tool_started") setRunStatus("正在调用工具：" + (data.tool_name || payload.tool_name || "处理中"));
       else if (eventName === "run_completed") setRunStatus("本轮完成");
       else if (eventName === "run_failed") setRunStatus(eventMessage(data) || "本轮失败", "error");
-      else if (eventName !== "heartbeat" && eventMessage(data)) setRunStatus(eventMessage(data));
+      else if (eventName !== "heartbeat" && backendUserVisible(data) && eventMessage(data)) setRunStatus(eventMessage(data));
     }
     state.events.push(data);
   }
@@ -4432,6 +4596,7 @@
       llm_response_mode: runSettings.stream ? "stream" : "text",
       llm_client: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmClient || "" : "",
       llm_model: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmModel || "" : "",
+      llm_reasoning_level: requestReasoningLevel(payload.session_id || payload.conversation_id),
       safety_review_mode: payload.safety_review_mode || ""
     }));
     return true;
@@ -4472,6 +4637,7 @@
       llm_response_mode: runSettings.stream ? "stream" : "text",
       llm_client: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmClient || "" : "",
       llm_model: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmModel || "" : "",
+      llm_reasoning_level: requestReasoningLevel(payload.session_id || payload.conversation_id),
       safety_review_mode: payload.safety_review_mode || ""
     }));
     return true;
@@ -5037,6 +5203,8 @@
           llm: { response_mode: runSettings.stream ? "stream" : "text" }, safety_review_mode: payload.safety_review_mode || undefined };
         if (!isManagerSession(session) && runSettings.llmClient) replacementBody.llm.client_name = runSettings.llmClient;
         if (!isManagerSession(session) && runSettings.llmModel) replacementBody.llm.model = runSettings.llmModel;
+        var replacementReasoning = requestReasoningLevel(session.id);
+        if (replacementReasoning) replacementBody.llm.reasoning_level = replacementReasoning;
         var fingerprint = JSON.stringify(replacementBody), previous = replacementCommands[session.id];
         replacementBody.command_id = previous && previous.runId === replaceRunId && previous.fingerprint === fingerprint ? previous.id : "replace-" + Date.now() + "-" + Math.random().toString(36).slice(2);
         replacementCommands[session.id] = { runId: replaceRunId, fingerprint: fingerprint, id: replacementBody.command_id };
@@ -5074,7 +5242,7 @@
             }
             if (streamState.viaBridge && eventName === "run_completed") {
               window.__petChatReceive({ session_id: session.id, run_id: session.multiAgentRunId,
-                answer: streamState.answer || "本轮没有生成可显示的回答。", progress_events: streamState.events });
+                answer: streamState.answer || "本轮没有生成可显示的回答。", progress_events: streamState.events, user_visible: streamState.userVisible !== false });
               reconcileCompletedSession(session.id);
             }
           };
@@ -5125,7 +5293,7 @@
           throw streamError;
         }
         window.__petChatReceive({ session_id: session.id, run_id: session.multiAgentRunId,
-          answer: streamState.answer || "本轮没有生成可显示的回答。", progress_events: streamState.events });
+          answer: streamState.answer || "本轮没有生成可显示的回答。", progress_events: streamState.events, user_visible: streamState.userVisible !== false });
         reconcileCompletedSession(session.id);
       }
     } catch (error) {
@@ -5337,8 +5505,8 @@
       if (hasAnswerText) recordRunEvent(session, "run_completed", {});
       setBackendOfflineState(false, "");
       var backendMessages = normalizeBackendMessages(result && result.messages);
-      if (pendingApproval) {
-        // Approval flow: avoid noisy backend status text and only render approval card.
+      if (pendingApproval || !backendUserVisible(result)) {
+        // Keep internal completions out of chat; pending approvals still use their card.
       } else {
         var answerText = safeText(extractAnswer(result)).trim();
         if (answerText) {
@@ -5366,7 +5534,7 @@
       }
     }
 
-    if (hasAnswerText || shouldTreatAsHardError) { delete liveAnswers[session.id]; delete runProcesses[session.id]; }
+    if (hasAnswerText || shouldTreatAsHardError || !backendUserVisible(result)) { delete liveAnswers[session.id]; delete runProcesses[session.id]; }
     applySessionTitle(session);
     touchSession(session);
     pinSessionToTop(session.id);
@@ -5463,6 +5631,7 @@
     sessionSearchInput.addEventListener("input", function () {
       if (historySearchTimer) window.clearTimeout(historySearchTimer);
       historyRequestGeneration += 1;
+      historyLoadedRequestKey = "";
       historyLoading = false;
       historyHasMore = false;
       historyError = "";
@@ -5963,13 +6132,17 @@
   loadRunSettings();
   defaultsReady = loadSharedDefaults();
   loadModelCatalog(false);
-  [llmModelInput, safetyModeSelect, streamToggle, workspaceParentInput].forEach(function (control) {
+  if (reasoningLevelInput) reasoningLevelInput.addEventListener("input", function () {
+    renderReasoningControl(reasoningLevels[Number(reasoningLevelInput.value)]);
+  });
+  [llmModelInput, reasoningLevelInput, safetyModeSelect, streamToggle, workspaceParentInput].forEach(function (control) {
     if (control) control.addEventListener("change", saveDefaultPreferences);
   });
   if (refreshModelsButton) refreshModelsButton.addEventListener("click", function () { loadModelCatalog(true); });
   if (resetDefaultsButton) resetDefaultsButton.addEventListener("click", function () {
     if (llmModelInput) llmModelInput.value = "";
     if (safetyModeSelect) safetyModeSelect.value = "backend";
+    if (reasoningLevelInput) reasoningLevelInput.value = 1;
     if (streamToggle) streamToggle.checked = true;
     if (workspaceParentInput) workspaceParentInput.value = "";
     saveDefaultPreferences();
@@ -6067,6 +6240,7 @@
   };
 
   window.LkaChatContext = {
+    reasoningOptions: reasoningOptions,
     preferences: function () {
       return {
         modelValue: llmModelInput ? llmModelInput.value : "",
@@ -6074,6 +6248,7 @@
           var group = option.parentElement.tagName === "OPTGROUP" ? option.parentElement.label : "";
           return { value: option.value, label: (group ? group + " / " : "") + option.textContent };
         }) : [],
+        reasoningLevel: runSettings.reasoningLevel || "low",
         safetyMode: safetyModeSelect ? safetyModeSelect.value : "backend",
         stream: streamToggle ? streamToggle.checked : true,
         saveError: !!defaultsSaveError
@@ -6085,6 +6260,10 @@
     },
     savePreferences: async function (values) {
       if (Object.prototype.hasOwnProperty.call(values, "modelValue")) llmModelInput.value = values.modelValue;
+      if (Object.prototype.hasOwnProperty.call(values, "reasoningLevel")) {
+        if (reasoningLevels.indexOf(values.reasoningLevel) < 0) throw new Error("请选择有效的推理强度。");
+        if (reasoningLevelInput) reasoningLevelInput.value = reasoningLevels.indexOf(values.reasoningLevel);
+      }
       if (Object.prototype.hasOwnProperty.call(values, "safetyMode")) safetyModeSelect.value = values.safetyMode;
       if (Object.prototype.hasOwnProperty.call(values, "stream")) streamToggle.checked = values.stream;
       await saveDefaultPreferences();
@@ -6240,7 +6419,10 @@
       renderWorkspaceSummary(activeAfter);
     }
     if (refreshHistory) loadHistoryPage(true);
-    refreshActiveRunState();
+    // Storage already carries the peer's run state. Render it without a GET
+    // that would save the same cache and notify the other window again.
+    renderRunControls();
+    renderRunTimeline(getActiveSession());
   });
   document.addEventListener("visibilitychange", function () {
     if (!document.hidden) {

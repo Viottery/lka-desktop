@@ -577,8 +577,18 @@ body.quick-bubble .agent-live-output .message-content:not([hidden]) > :last-chil
 body.quick-bubble .agent-live-output .bubble:has(.message-content[hidden])::after {
   content: "• • •"; letter-spacing: 2px; color: #8aa496;
 }
+/* Her activity line replaces the bare dots; the floating header is not used in bubble mode. */
+body.quick-bubble .qa-bar { display: none !important; }
+body.quick-bubble .agent-live-output .bubble:has(.qa-activity:not([hidden]))::after { content: none; }
+body.quick-bubble .agent-live-output .qa-activity { display: flex; color: #6f8a7d; font-size: 13px; line-height: 1.65; }
+body.quick-bubble .agent-live-output .qa-activity[hidden] { display: none; }
+body.quick-bubble .agent-live-output .qa-activity-text:empty { display: none; }
+body.quick-bubble .agent-live-output .qa-activity + :not([hidden]) { margin-top: 4px; }
+/* No pop-in: scaling text in the transparent pet WebView renders blurry until it settles. */
+body.quick-bubble .message.is-new { animation: none !important; }
+/* Static dots: animating inside the masked, transparent transcript repaints badly in the pet WebView. */
+body.quick-bubble .agent-live-output .qa-typing i { background: var(--bb-accent); opacity: .45; animation: none !important; }
 body.quick-bubble .run-status:not(:empty) { margin: 0 16px 6px auto; max-width: 288px; border-radius: 12px; box-shadow: 0 2px 8px #243a3214; }
-body.quick-bubble.bubble-dragging .messages { cursor: grabbing; user-select: none; }
 /* While the pointer is away, history recedes; the latest exchange stays readable. */
 body.quick-bubble .message { transition: opacity .6s ease; }
 body.quick-bubble.bubble-idle .message:not(:nth-last-child(-n+2)) { opacity: .3; }

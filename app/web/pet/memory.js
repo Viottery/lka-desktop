@@ -4,7 +4,7 @@
   var chat = window.LkaChatContext;
   var state = { scope: "global", tab: "entries", rows: [], next: null, selected: null,
     generation: 0, projectId: null, token: "", config: null, schema: null, models: null,
-    jobs: [], preview: null, contextKey: "", feedbackSupported: null, feedbackProbe: null, feedbackProbeEpoch: 0, feedbackCapabilityKey: null };
+    jobs: [], preview: null, contextKey: "", filter: "all", feedbackSupported: null, feedbackProbe: null, feedbackProbeEpoch: 0, feedbackCapabilityKey: null };
   var typeNames = { preference: "偏好", project_decision: "项目决策", user_fact: "个人事实" };
   var statusNames = { active: "已生效", candidate: "候选", retracted: "已撤回", superseded: "已替代",
     queued: "排队中", running: "处理中", retry_wait: "等待重试", succeeded: "已完成", failed: "失败", cancelled: "已取消" };
@@ -14,6 +14,17 @@
     return { "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c];
   }); }
   function date(value) { return value ? new Date(value).toLocaleString() : "—"; }
+  function ago(value) {
+    if (!value) return "—";
+    var then = new Date(value), days = Math.floor((new Date().setHours(0, 0, 0, 0) - new Date(then).setHours(0, 0, 0, 0)) / 86400000);
+    var time = then.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+    if (days <= 0) return "今天 " + time;
+    if (days === 1) return "昨天 " + time;
+    if (days < 7) return days + " 天前";
+    return then.toLocaleDateString();
+  }
+  var typeGlyphs = { preference: "偏", project_decision: "策", user_fact: "我" };
+  function needsReview(row) { return row.status === "candidate" || !!(row.metadata && row.metadata.needs_review); }
   function el(id) { return document.getElementById(id); }
   function context() { return chat.get(); }
   function isOpen() { return !el("memoryOverlay").hidden; }
@@ -105,11 +116,12 @@
   var overlay = document.createElement("div");
   overlay.id = "memoryOverlay"; overlay.className = "memory-overlay"; overlay.hidden = true;
   overlay.innerHTML = '<section class="memory-center" role="dialog" aria-modal="true" aria-labelledby="memoryTitle">' +
-    '<header class="memory-header"><div><h2 id="memoryTitle">记忆与自动学习</h2><p>让长期偏好和项目决策可查看、可纠正。</p></div><button id="memoryClose" aria-label="关闭记忆中心">×</button></header>' +
+    '<header class="memory-header"><div class="memory-heading"><span class="memory-eyebrow">Memory Archive · 记忆档案</span><h2 id="memoryTitle">记忆与自动学习</h2><p>真理记住的偏好、事实与项目决策。每一条都可查看来源、随时纠正。</p></div>' +
+    '<div class="memory-header-stats" id="memoryHeaderStats" aria-live="polite"></div><button id="memoryClose" class="memory-close" aria-label="关闭记忆中心">×</button></header>' +
     '<details class="memory-connection" id="memoryConnection"><summary>连接设置</summary><form id="memoryTokenForm"><label>记忆接口访问令牌<input id="memoryToken" type="password" autocomplete="off" placeholder="本机未设置令牌时留空"><small>只在此页面内存中使用，不写入网址或浏览器存储。</small></label><button type="submit">应用并重试</button></form></details>' +
-    '<nav class="memory-navigation" role="tablist" aria-label="记忆中心"><button data-memory-tab="entries" role="tab" aria-selected="true">记忆</button>' +
-    '<button data-memory-tab="jobs" role="tab" class="memory-work-only" aria-selected="false">后台任务</button><button data-memory-tab="config" role="tab" class="memory-work-only" aria-selected="false">高级设置</button>' +
-    '<button data-memory-tab="files" role="tab" class="memory-work-only" aria-selected="false">导出与文件</button></nav>' +
+    '<nav class="memory-navigation" role="tablist" aria-label="记忆中心"><button data-memory-tab="entries" role="tab" aria-selected="true"><span class="memory-tab-glyph" aria-hidden="true">◆</span>记忆</button>' +
+    '<button data-memory-tab="jobs" role="tab" class="memory-work-only" aria-selected="false"><span class="memory-tab-glyph" aria-hidden="true">◷</span>后台任务</button><button data-memory-tab="config" role="tab" class="memory-work-only" aria-selected="false"><span class="memory-tab-glyph" aria-hidden="true">⚙</span>高级设置</button>' +
+    '<button data-memory-tab="files" role="tab" class="memory-work-only" aria-selected="false"><span class="memory-tab-glyph" aria-hidden="true">⇩</span>导出与文件</button></nav>' +
     '<div class="memory-content" id="memoryContent" role="tabpanel"></div><p id="memoryStatus" class="memory-status" role="status" aria-live="polite"></p></section>';
   document.body.appendChild(overlay);
   var editor = document.createElement("div");
@@ -123,7 +135,7 @@
     '<p id="memoryEditorError" class="memory-note" role="alert"></p><footer><button id="memoryEditorReload" type="button" hidden>重新载入最新版本</button><button id="memoryEditorCancel" type="button">取消</button><button id="memoryEditorSave" type="submit" class="memory-primary">保存</button></footer></form></section>';
   document.body.appendChild(editor);
   function scopeToolbar(extra) {
-    return '<div class="memory-toolbar"><label>作用范围<select id="memoryScope"><option value="global">全局记忆</option><option value="project"' +
+    return '<div class="memory-toolbar"><label class="memory-scope"><span>作用范围</span><select id="memoryScope"><option value="global">全局记忆</option><option value="project"' +
       (!context().workspace ? ' disabled' : '') + '>当前项目</option></select></label>' + (extra || "") + '</div><p class="memory-note">' +
       esc(state.scope === "project" ? "当前项目：" + context().workspace : "全局偏好可以在不同工作目录和会话中使用。") + '</p>';
   }
@@ -205,11 +217,15 @@
   }
   function renderEntries() {
     el("memoryContent").innerHTML = '<button class="memory-quick-workbench" id="memoryWorkbench">在工作台管理后台任务与高级设置</button>' +
-      scopeToolbar('<input id="memorySearch" type="search" aria-label="搜索已载入记忆" placeholder="搜索已载入记忆"><button id="memoryAdd" class="memory-primary">新增记忆</button><button id="memoryRefresh">刷新</button>') +
-      '<div class="memory-learning"><label><input id="memoryLearningGlobal" type="checkbox" disabled>自动学习我的偏好</label><label><input id="memoryLearningProject" type="checkbox" disabled>自动学习当前项目</label></div>' +
-      '<p class="memory-note">学习开关立即生效；关闭后仍保留并使用已有记忆。候选及冲突待确认条目暂不用于回答。</p>' +
-      '<p id="memoryFeedbackStatus" class="memory-note" hidden></p>' +
-      '<div class="memory-layout"><div><div class="memory-list" id="memoryList">正在读取记忆…</div><button id="memoryMore" hidden>加载更多</button></div><div id="memoryDetail" class="memory-detail"><p class="memory-note">选择一条记忆，查看来源或纠正内容。</p></div></div>' +
+      '<div class="memory-learning">' +
+      '<label class="memory-switch-card"><input id="memoryLearningGlobal" type="checkbox" disabled><span class="memory-switch" aria-hidden="true"></span><span><strong>自动学习我的偏好</strong><small>从对话中提炼长期偏好，所有会话可用</small></span></label>' +
+      '<label class="memory-switch-card"><input id="memoryLearningProject" type="checkbox" disabled><span class="memory-switch" aria-hidden="true"></span><span><strong>自动学习当前项目</strong><small>' + esc(context().workspace ? "仅记录当前工作目录的项目决策" : "选择工作目录后可用") + '</small></span></label>' +
+      '<p class="memory-learning-note">开关立即生效；关闭后仍使用已有记忆。候选和冲突待确认的条目暂不用于回答。</p></div>' +
+      scopeToolbar('<label class="memory-search"><span class="sr-only">搜索已载入记忆</span><input id="memorySearch" type="search" aria-label="搜索已载入记忆" placeholder="搜索已载入记忆…"></label><button id="memoryRefresh" class="memory-ghost" title="重新载入">刷新</button><button id="memoryAdd" class="memory-primary">＋ 新增记忆</button>') +
+      '<div class="memory-filters" id="memoryFilters" role="group" aria-label="按类型筛选"></div>' +
+      '<p id="memoryFeedbackStatus" class="memory-note memory-feedback-note" hidden></p>' +
+      '<div class="memory-layout"><div class="memory-list-column"><div class="memory-list" id="memoryList"><p class="memory-empty">正在读取记忆…</p></div><button id="memoryMore" class="memory-ghost memory-more" hidden>加载更多</button></div>' +
+      '<div id="memoryDetail" class="memory-detail"><div class="memory-detail-empty"><span aria-hidden="true">❝</span><p>选择一条记忆，查看来源或纠正内容。</p></div></div></div>' +
       '<details class="memory-work-only" id="memoryRelocate"><summary>项目目录搬迁</summary><p class="memory-note">仅在同一项目搬到新目录时使用。保留项目记忆身份，不移动磁盘文件；普通工作目录切换不需要搬迁。</p>' +
       '<form id="memoryRelocateForm" class="memory-toolbar"><label>新目录<input id="memoryRelocatePath" required placeholder="已搬迁项目的新目录"></label><button type="submit">迁移记忆身份</button></form></details>';
     bindScope(); el("memoryWorkbench").onclick = openWorkbench;
@@ -249,15 +265,40 @@
   function paintEntries() {
     if (!el("memoryList")) return;
     var term = el("memorySearch").value.trim().toLocaleLowerCase();
-    var rows = state.rows.filter(function (row) { return row.content.toLocaleLowerCase().indexOf(term) !== -1; });
+    paintSummary();
+    var rows = state.rows.filter(function (row) {
+      var kind = state.filter === "all" || (state.filter === "review" ? needsReview(row) : row.memory_type === state.filter);
+      return kind && row.content.toLocaleLowerCase().indexOf(term) !== -1;
+    });
     el("memoryList").innerHTML = rows.map(function (row, index) {
-      return '<button class="memory-entry" data-index="' + index + '" aria-pressed="' + Boolean(state.selected && state.selected.memory_id === row.memory_id) + '">' +
-        tag(row) + '<p>' + esc(row.content) + '</p><small>' + esc(date(row.updated_at)) + '</small></button>';
-    }).join("") || '<p class="memory-note">' + (term ? "已载入条目中没有匹配内容；可继续加载更多。" : "暂无记忆。") + '</p>';
+      return '<button class="memory-entry' + (needsReview(row) ? ' is-review' : '') + '" data-type="' + esc(row.memory_type) + '" data-index="' + index + '" aria-pressed="' + Boolean(state.selected && state.selected.memory_id === row.memory_id) + '">' +
+        '<span class="memory-entry-glyph" aria-hidden="true">' + esc(typeGlyphs[row.memory_type] || "记") + '</span><span class="memory-entry-body"><span class="memory-entry-meta">' + tag(row) +
+        (row.sensitivity === "personal" ? '<span class="memory-tag private">个人</span>' : '') + '<small>' + esc(ago(row.updated_at)) + '</small></span><p>' + esc(row.content) + '</p></span></button>';
+    }).join("") || '<div class="memory-empty"><span aria-hidden="true">◇</span><p>' + (term || state.filter !== "all" ? "没有符合条件的记忆。可以换个筛选，或继续加载更多。" : "还没有记忆。新增一条偏好，或在对话里让真理记住。") + '</p></div>';
     Array.prototype.forEach.call(el("memoryList").querySelectorAll("button"), function (button) {
       button.onclick = function () { selectMemory(rows[Number(button.dataset.index)]); };
     });
     el("memoryMore").hidden = state.next == null;
+  }
+  function paintSummary() {
+    var counts = { all: state.rows.length, preference: 0, project_decision: 0, user_fact: 0, review: 0, active: 0 };
+    state.rows.forEach(function (row) {
+      if (counts[row.memory_type] !== undefined) counts[row.memory_type]++;
+      if (needsReview(row)) counts.review++; else if (row.status === "active") counts.active++;
+    });
+    var more = state.next != null ? "+" : "";
+    var stats = el("memoryHeaderStats");
+    if (stats) stats.innerHTML = '<span><b>' + counts.all + more + '</b>条记忆</span><span><b>' + counts.active + '</b>已生效</span>' +
+      '<span class="' + (counts.review ? "is-alert" : "") + '"><b>' + counts.review + '</b>待确认</span>';
+    var filters = el("memoryFilters");
+    if (!filters) return;
+    filters.innerHTML = [["all", "全部"], ["preference", "偏好"], ["project_decision", "项目决策"], ["user_fact", "个人事实"], ["review", "待确认"]].map(function (item) {
+      return '<button type="button" data-filter="' + item[0] + '" aria-pressed="' + (state.filter === item[0]) + '"' + (item[0] === "review" && counts.review ? ' class="is-alert"' : '') + '>' +
+        item[1] + '<span>' + counts[item[0]] + '</span></button>';
+    }).join("");
+    Array.prototype.forEach.call(filters.querySelectorAll("button"), function (button) {
+      button.onclick = function () { state.filter = button.dataset.filter; paintEntries(); };
+    });
   }
   async function loadLearning() {
     var generation = state.generation;
@@ -290,13 +331,13 @@
   function selectMemory(record) {
     state.selected = record; paintEntries();
     var generation = state.generation, workspace = context().workspace, q = recordQuery(record, workspace), metadata = record.metadata || {};
-    el("memoryDetail").innerHTML = '<h3>记忆详情</h3>' + tag(record) + '<blockquote>' + esc(record.content) + '</blockquote><dl>' +
+    el("memoryDetail").innerHTML = '<div class="memory-detail-head" data-type="' + esc(record.memory_type) + '"><span class="memory-entry-glyph" aria-hidden="true">' + esc(typeGlyphs[record.memory_type] || "记") + '</span><div><h3>记忆详情</h3><div>' + tag(record) + '</div></div></div><blockquote>' + esc(record.content) + '</blockquote><dl>' +
       '<dt>作用范围</dt><dd>' + esc(record.scope === "global" ? "所有会话" : workspace) + '</dd><dt>有效期</dt><dd>' + esc(record.expires_at ? date(record.expires_at) : "未设置") + '</dd>' +
-      '<dt>版本</dt><dd>' + esc(record.version) + '</dd><dt>敏感程度</dt><dd>' + (record.sensitivity === "personal" ? "个人信息" : "普通") + '</dd></dl>' +
+      '<dt>版本</dt><dd>v' + esc(record.version) + '</dd><dt>敏感程度</dt><dd>' + (record.sensitivity === "personal" ? "个人信息" : "普通") + '</dd><dt>更新于</dt><dd>' + esc(date(record.updated_at)) + '</dd></dl>' +
       (metadata.needs_review ? '<p class="memory-restart">与其他记忆存在冲突，暂不参与回答。请查看冲突条目，并明确保留或纠正哪条要求。</p><div id="memoryConflicts"></div>' : "") +
-      '<div class="memory-actions"><button id="memoryEdit">' + (record.status === "candidate" || metadata.needs_review ? "确认或纠正" : "纠正") + '</button><button id="memoryRetract" class="memory-danger">停止使用</button></div>' +
+      '<div class="memory-actions"><button id="memoryEdit" class="memory-primary">' + (record.status === "candidate" || metadata.needs_review ? "确认或纠正" : "纠正") + '</button><button id="memoryRetract" class="memory-danger">停止使用</button></div>' +
       '<div id="memoryRetractConfirm" hidden><p class="memory-note">停止使用会撤回这条记忆，但保留来源与审计记录；当前接口不支持直接恢复。</p><label id="memoryRetractReasonWrap" class="memory-note" hidden>原因（可选）<select id="memoryRetractReason"><option value="unspecified">不说明</option><option value="factual_error">内容有误</option><option value="outdated">已过时</option><option value="duplicate">重复内容</option><option value="not_worth_remembering">不值得长期记住</option><option value="do_not_store">不希望保存这类内容</option></select><small>你的选择可帮助改进记忆判断。</small></label><button id="memoryRetractYes" class="memory-danger">确认停止使用</button><button id="memoryRetractNo">取消</button></div>' +
-      '<h3 style="margin-top:20px">来源</h3><div id="memorySources">正在读取来源…</div><p class="memory-note">来源接口提供标识与时间，不提供原始私密正文。</p>';
+      '<h4 class="memory-section-title">来源</h4><div id="memorySources" class="memory-sources">正在读取来源…</div><p class="memory-note">来源接口提供标识与时间，不提供原始私密正文。</p>';
     el("memoryEdit").onclick = function () { remember(record.content, record); };
     el("memoryRetract").onclick = function () { el("memoryRetractConfirm").hidden = false; paintFeedbackSupport(); el("memoryRetractYes").focus(); };
     el("memoryRetractNo").onclick = function () { el("memoryRetractConfirm").hidden = true; };
@@ -423,7 +464,7 @@
     finally { if (streamController === controller) streamController = null; }
   }
   function renderJobs() {
-    el("memoryContent").innerHTML = '<div class="memory-toolbar"><label>任务范围<select id="memoryJobScope"><option value="all">所有后台任务</option><option value="session">当前会话</option></select></label>' +
+    el("memoryContent").innerHTML = '<div class="memory-toolbar memory-job-toolbar"><label>任务范围<select id="memoryJobScope"><option value="all">所有后台任务</option><option value="session">当前会话</option></select></label>' +
       '<label>状态<select id="memoryJobStatus"><option value="">全部状态</option>' + ["queued", "running", "retry_wait", "failed", "cancelled", "succeeded"].map(function (s) { return '<option value="' + s + '">' + statusNames[s] + '</option>'; }).join("") +
       '</select></label><button id="memoryJobRefresh">刷新</button></div><div id="memoryHealth"></div><p class="memory-note">后台整理与当前对话独立。取消不能撤销已完成的结果，也不保证中止已发出的模型调用。</p><div id="memoryJobs">正在读取任务…</div>';
     el("memoryJobStatus").onchange = function () { run(null, loadJobs); }; el("memoryJobScope").onchange = function () { run(null, loadJobs); };
@@ -453,7 +494,7 @@
       el("memoryJobs").innerHTML = state.jobs.map(function (job, index) {
         var retryable = ["memory_extract", "context_compact"].indexOf(job.kind) !== -1 && ["failed", "cancelled"].indexOf(job.status) !== -1;
         var cancellable = ["queued", "running", "retry_wait"].indexOf(job.status) !== -1;
-        return '<article class="memory-job"><strong>' + esc({ memory_extract: "学习记忆", context_compact: "整理上下文", instruction_index: "整理指导文件" }[job.kind] || job.kind) + '</strong> ' +
+        return '<article class="memory-job" data-status="' + esc(job.status) + '"><span class="memory-job-dot" aria-hidden="true"></span><strong>' + esc({ memory_extract: "学习记忆", context_compact: "整理上下文", instruction_index: "整理指导文件" }[job.kind] || job.kind) + '</strong> ' +
           '<span class="memory-tag' + (job.status === "failed" ? ' warning' : '') + '">' + esc(statusNames[job.status] || job.status) + '</span><p>' + esc(job.job_id) + '</p><p>更新于 ' + esc(date(job.updated_at)) + ' · 尝试 ' + esc(job.attempts || 0) + ' 次</p>' +
           (job.error_class ? '<p>失败原因：' + esc(job.error_class) + '</p>' : "") +
           '<div class="memory-actions">' + (retryable ? '<button data-job-index="' + index + '" data-job-action="retry">重试</button>' : "") +

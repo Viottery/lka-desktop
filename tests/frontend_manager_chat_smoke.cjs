@@ -12,7 +12,16 @@ const extraManagerWorkspaces=new Map();
 const dispatchedTask='在自己的工作区内创建 `hello.py`，内容为 `print("hello world")`。\n完成后报告路径与文件内容。';
 let ordinaryMessages=[{message_id:'dispatch-first',role:'tool',content:'内部来源 secret-source 与调试 secret-debug',payload:{input_origin:'manager',input_envelope:{origin:'manager',purpose:dispatchedTask,input_id:'secret-id',debug_info:{private:'secret-debug'}}}},{role:'tool',content:'ordinary internal dispatch',payload:{input_origin:'manager'}},{role:'assistant',content:'ordinary initial answer'}];
 let holdOrdinaryRefresh=false,releaseOrdinaryRefresh,onOrdinaryHeld;
-let managerMessages=[], holdSessionRefresh=false, heldSessionResponse, onHeldSession, finishBusy;
+let managerMessages=[], holdSessionRefresh=false, heldSessionResponse, onHeldSession, finishBusy, finishSilent;
+function silentEvents(res,runId,hold=false){
+ res.writeHead(200,{'content-type':'text/event-stream'});
+ function emit(type,sequence,message,payload={}){res.write('id: '+runId+':'+sequence+'\nevent: '+type+'\ndata: '+JSON.stringify({run_id:runId,sequence,message,payload})+'\n\n');}
+ emit('run_started',1,'Started');
+ emit('assistant_message',2,'SILENT_PROCESS_SECRET',{metadata:{user_visible:false}});
+ emit('llm_delta',3,'SILENT_DELTA_SECRET',{display_target:'assistant_answer',delta:'SILENT_DELTA_SECRET',user_visible:false});
+ const finish=()=>{emit('final_answer',4,'SILENT_FINAL_SECRET',{metadata:{answer:'SILENT_FINAL_SECRET',user_visible:false}});emit('run_completed',5,'Completed',{user_visible:false});res.end();};
+ if(hold)finishSilent=finish;else finish();
+}
 const stamp=new Date().toISOString();
 const json=(res,status,data)=>{res.writeHead(status,{'content-type':'application/json'});res.end(JSON.stringify(data));};
 function detail(id,kind='manager'){return {session:{session_id:id,kind,title:kind==='manager'?'真理':'普通会话',created_at:stamp,updated_at:stamp,metadata:{source_frontend:'windows-pet'},workspace:kind==='manager'?null:{path:'/synthetic/work'},management:{status:'paused'}},messages:[]};}
@@ -68,6 +77,7 @@ const server=http.createServer(async(req,res)=>{
  if(route.endsWith('/workspace'))return json(res,200,{project_id:'synthetic-project'});
  if(route==='/openapi.json')return json(res,200,{paths:{'/sessions/{session_id}':{delete:{parameters:[{name:'only_if_empty'}]}}}});
  if(route==='/agent/turn/stream'){
+  if(body.user_input==='静默管理处理测试')return silentEvents(res,'silent-active',true);
   if(body.session_id==='ordinary')ordinaryMessages=ordinaryMessages.concat([{role:'user',content:body.user_input},{role:'assistant',content:'合成管理回复'}]);
   if(body.session_id==='manager-conflict')return json(res,409,{detail:'manager_run_already_active',session_id:'manager-conflict',run_id:'existing-root'});
   res.writeHead(200,{'content-type':'text/event-stream'});res.write('event: llm_started\ndata: {"stage":"synthetic"}\n\n');
@@ -116,6 +126,8 @@ const server=http.createServer(async(req,res)=>{
    {role:'tool',content:'内部后台输入不得冒充真理',payload:{input_origin:'background'}},
    {role:'tool',content:'内部主管派发不得冒充真理',payload:{input_envelope:{origin:'manager'}}},
    {role:'tool',content:'内部任务报告不得冒充真理',payload:{input_origin:'task_report'}},
+   {role:'assistant',content:'SILENT_HISTORY_SECRET',payload:{user_visible:false}},
+   {role:'agent',content:'SILENT_HISTORY_TOP_SECRET',user_visible:false},
    {role:'assistant',content:'合成管理回复'},
    {role:'assistant',content:'后台自主交付正文',payload:{input_origin:'background'}}];
   await frame.locator('#questionInput').fill('尚未发送的本地草稿');
@@ -125,6 +137,7 @@ const server=http.createServer(async(req,res)=>{
   assert.equal(await frame.locator('#messages').getByText('内部后台输入不得冒充真理').count(),0);
   assert.equal(await frame.locator('#messages').getByText('内部主管派发不得冒充真理').count(),0);
   assert.equal(await frame.locator('#messages').getByText('内部任务报告不得冒充真理').count(),0);
+  assert(!/SILENT_HISTORY/.test(await frame.locator('#messages').textContent()),'explicitly hidden historical answers never become bubbles');
   await child.evaluate(()=>LkaChatContext.refreshConversation());
   assert.equal(await frame.locator('#messages').getByText('后台自主交付正文',{exact:true}).count(),1,'delivery refresh never appends duplicates');
   const delivered=managerMessages;
@@ -212,6 +225,28 @@ const server=http.createServer(async(req,res)=>{
   assert((await ordinary.locator('#messages').textContent()).includes('已完成的新用户指令'),'late filtered history preserves a completed user turn');
   assert.equal(await ordinary.locator('#messages .message.user').filter({hasText:'已完成的新用户指令'}).locator('strong').first().textContent(),'你','human intervention retains its own sender');
   assert((await ordinary.locator('#messages').textContent()).includes('合成管理回复'),'late filtered history preserves its real assistant answer');
+  // Internal rounds preserve run lifecycle/cursors without projecting hidden content.
+  const silentContext=await browser.newContext();silentContext.on('page',p=>p.on('pageerror',e=>errors.push(e.message)));
+  const silent=await silentContext.newPage();
+  await silent.goto(origin+'/chat.html?mode=work&embedded=matter&assistant=global&backend='+encodeURIComponent(origin)+'&session_id=manager-silent-active');
+  await silent.locator('#sendButton:not([disabled])').waitFor();
+  await silent.locator('#questionInput').fill('静默管理处理测试');await silent.locator('#sendButton').click();
+  await silent.waitForFunction(()=>JSON.parse(localStorage.getItem('agentic-rag-pet-chat-sessions-v4-run-cursor-manager-silent-active'))?.sequence>=3);
+  assert(!/SILENT_/.test(await silent.locator('body').textContent()),'hidden process and delta content never renders while streaming');
+  finishSilent();
+  await silent.waitForFunction(()=>JSON.parse(localStorage.getItem('agentic-rag-pet-chat-sessions-v4')).find(s=>s.id==='manager-silent-active')?.runControlStatus==='completed');
+  await silent.locator('#sendButton:not([disabled])').waitFor();
+  let silentState=await silent.evaluate(()=>JSON.parse(localStorage.getItem('agentic-rag-pet-chat-sessions-v4')).find(s=>s.id==='manager-silent-active'));
+  assert.equal(silentState.multiAgentSequence,5,'hidden events still advance the durable cursor');
+  assert.equal(silentState.timelineState,'completed','silent completion preserves lifecycle');
+  assert(!/SILENT_|本轮没有生成可显示的回答/.test(await silent.locator('body').textContent()),'silent completion does not invent a fallback answer');
+  assert(!/SILENT_/.test(JSON.stringify(silentState.messages)+JSON.stringify(silentState.timelineEvents)),'silent content stays out of conversation and timeline caches');
+  await silent.evaluate(()=>__petChatReceive({session_id:'manager-silent-active',answer:'SILENT_DIRECT_SECRET',user_visible:false}));
+  assert(!/SILENT_DIRECT/.test(await silent.locator('body').textContent()),'nonstream final commits obey explicit visibility');
+  await silent.evaluate(()=>__petChatReceive({session_id:'manager-silent-active',answer:'LEGACY_VISIBLE_ANSWER',progress_events:[{type:'assistant_message',message:'SILENT_PROGRESS_SECRET',metadata:{user_visible:false}}]}));
+  assert.equal(await silent.locator('#messages').getByText('LEGACY_VISIBLE_ANSWER',{exact:true}).count(),1,'missing visibility remains compatible');
+  assert(!/SILENT_PROGRESS/.test(await silent.locator('body').textContent()),'visible answers do not expose hidden progress details');
+  await silent.close();await silentContext.close();
   // Explicit manager links initialize that exact controller, including embedded views.
   for(const embedded of [false,true]){
    const id='manager-unconfigured-'+(embedded?'embedded':'explicit'),linked=await context.newPage(),before=requests.length;
@@ -241,6 +276,6 @@ const server=http.createServer(async(req,res)=>{
   const failed=await context.newPage();await failed.goto(origin+'/chat.html?mode=work&assistant=global&backend='+encodeURIComponent(origin));
   await failed.locator('#gaConnectionText').filter({hasText:'默认任务目录准备失败'}).waitFor();assert(await failed.locator('#sendButton').isDisabled());await failed.close();
   assert.deepEqual(errors,[]);
-  console.log('PASS manager chat: verified kind and delayed bootstrap, paused chat, isolated model/drafts, original-session attachment upload, delivery refresh and generation/busy guards, fail-closed initialization, manager cleanup/recent exclusions, ordinary workspace behavior');
+  console.log('PASS manager chat: verified kind and delayed bootstrap, paused chat, isolated model/drafts, original-session attachment upload, delivery refresh and generation/busy guards, fail-closed initialization, manager cleanup/recent exclusions, ordinary workspace behavior, hidden history/active SSE/final commit with lifecycle and cursor preservation');
  }finally{if(browser)await browser.close();await new Promise(r=>server.close(r));}
 })().catch(e=>{console.error(e);process.exitCode=1});
