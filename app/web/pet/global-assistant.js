@@ -98,7 +98,12 @@
     } else {
       var rows = Array.from(deliveries.values()).sort(function (a, b) { return b.cursor - a.cursor; });
       if (!rows.length) list.appendChild(empty('交付记录会留在这里', '助手完成跟进并将结果写入对话后，可在这里重新打开记录。'));
-      rows.forEach(function (delivery) { var row = record('一份跟进结果已送达', '', time(delivery.created_at)); runLink(row, delivery.session_id, delivery.run_id, '查看本次对话记录'); list.appendChild(row); });
+      rows.forEach(function (delivery) {
+        // Older backends send no topic; keep the generic label for them.
+        var row = record(delivery.topic || '一份跟进结果已送达', '', '');
+        row.querySelector('.ga-record-heading').appendChild(node('small', 'ga-record-when', time(delivery.created_at)));
+        runLink(row, delivery.session_id, delivery.run_id, '查看本次对话记录'); list.appendChild(row);
+      });
       if (rows.length) list.appendChild(node('p', 'ga-list-note', '交付表示已有回复；目标是否完成，以目标状态和结果内容为准。'));
     }
   }
