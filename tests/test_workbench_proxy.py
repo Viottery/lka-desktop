@@ -120,7 +120,10 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         result = await self.request("matters/m1", "PATCH", payload=payload)
         self.assertEqual(result.status_code, 200)
         self.assertEqual(__import__("json").loads(self.calls[-1].content), payload)
-        for path, method in (("matters/m1", "DELETE"), ("matters?token=secret", "GET"),
+        result = await self.request("matters/m1?expected_revision=3", "DELETE")
+        self.assertEqual(result.status_code, 200)
+        self.assertEqual(str(self.calls[-1].url), "http://127.0.0.1:8765/matters/m1?expected_revision=3")
+        for path, method in (("matters/m1?token=secret", "DELETE"), ("matters?token=secret", "GET"),
                              ("matters/m1/source-links", "POST")):
             result = await self.request(path, method)
             self.assertEqual(result.status_code, 404)
@@ -191,6 +194,10 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(_route("POST", "agent/runs/run_1/interrupt", {"unexpected"}))
         self.assertFalse(_route("GET", "sessions/s1/files", {"arbitrary"}))
         self.assertFalse(_route("POST", "plugins/qq-ui/messages/send", set()))
+        self.assertTrue(_route("DELETE", "matters/m1", {"expected_revision"}))
+        self.assertTrue(_route("POST", "matters/m1/restore", set()))
+        self.assertFalse(_route("DELETE", "matters/m1", {"arbitrary"}))
+        self.assertTrue(_route("POST", "sessions/s1/workspace/materialize", set()))
 
     async def test_run_interrupt_and_replace_are_forwarded_same_origin(self):
         import json
