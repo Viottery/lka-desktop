@@ -21,7 +21,7 @@
     return error.message || String(error);
   }
   function emptyDetail() {
-    return '<div class="memory-detail-empty"><span>项</span><p>在左侧选择一个项目</p><p class="memory-note">可以看到它的对话、在里面新开对话，或管理它的待办和记忆。</p></div>';
+    return '<div class="memory-detail-empty project-detail-empty"><svg viewBox="0 0 24 24" width="30" height="30" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 7.5A1.5 1.5 0 0 1 4.5 6h4l2 2h9A1.5 1.5 0 0 1 21 9.5v8A1.5 1.5 0 0 1 19.5 19h-15A1.5 1.5 0 0 1 3 17.5z"/></svg><p>在左侧选择一个项目</p><p class="memory-note">可以看到它的对话、在里面新开对话，或管理它的待办和记忆。</p></div>';
   }
   function glyph(name) { var text = String(name || "").trim(); return esc(text ? Array.from(text)[0].toUpperCase() : "项"); }
   function folderParts(path) {
