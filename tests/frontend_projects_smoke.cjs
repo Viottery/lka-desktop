@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright-core');
 
-const ROOT = process.env.FRONTEND_PET_ROOT || 'D:/agent-bot-frontend/app/web/pet';
+const ROOT = process.env.FRONTEND_PET_ROOT || path.resolve(__dirname, '../app/web/pet');
 const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Application/chrome.exe';
 const OUT = process.env.SMOKE_ARTIFACT_DIR || '/tmp/frontend-projects-smoke';
 fs.mkdirSync(OUT, { recursive: true });
@@ -52,7 +52,10 @@ const server = http.createServer((req,res) => {
     if (p.startsWith('/projects') || p === '/sessions' || /^\/sessions\/[^/]+\/workspace$/.test(p)) requests.push({path:p+parsed.search,method:req.method,auth:req.headers.authorization||'',body});
     if (req.method === 'OPTIONS') return send(res,204,'');
     if (p === '/agent/ui-defaults' && req.method === 'GET') return send(res,200,{configured:false,defaults:{},updated_at:null});
-    if (p === '/sessions' && req.method === 'GET') return send(res,200,{sessions:state.sessions.filter(x=>x.status!=='deleted')});
+    // The seeded page session also exists on the backend; the page treats the backend as authoritative.
+    const demo={session_id:'demo',title:'Demo',status:'active',kind:'ordinary',metadata:{explicit_workspace:true},workspace:{path:'C:/fake/current',platform:'windows',backend_path:'C:/fake/current'},created_at:stamp,updated_at:stamp};
+    if (p === '/sessions/demo' && req.method === 'GET') return send(res,200,{session:demo,messages:[{message_id:'m1',role:'assistant',content:'hello',created_at:stamp}]});
+    if (p === '/sessions' && req.method === 'GET') return send(res,200,{sessions:[demo,...state.sessions.filter(x=>x.status!=='deleted')]});
     if (/^\/sessions\/[^/]+\/workspace$/.test(p) && req.method === 'PUT') {
       state.lastWorkspaceBinding=JSON.parse(body);
       return send(res,200,{session_id:p.split('/')[2],workspace:{path:state.lastWorkspaceBinding.path,platform:'windows',backend_path:'C:/isolated/backend-new'},project_id:'new-project'});
@@ -197,6 +200,8 @@ const server = http.createServer((req,res) => {
 
     // A later workspace switch uses the session workspace API and persists both path and project identity.
     state.allowWorkspaceBinding=true;
+    // The right rail may start collapsed; open it before reaching the settings tab.
+    if (!await page.locator('#settingsTabButton').isVisible()) await page.locator('#toggleSettingsButton').click();
     if (!await page.locator('#workspaceInput').isVisible()) await page.locator('#settingsTabButton').click();
     await page.locator('#workspaceInput').fill('C:/isolated/another-workspace');
     await page.locator('#workspaceInput').dispatchEvent('change');
@@ -219,7 +224,8 @@ const server = http.createServer((req,res) => {
     await page.evaluate(()=>{window.LkaChatContext.get=window.__projectOriginalGet;window.dispatchEvent(new Event('lka-session-context'));});
 
     // Token remains in page memory, is not persisted, and is reused by project calls.
-    await page.locator('#projectConnection summary').click();
+    // Desktop hides closed connection settings; the app opens them itself on 401/403.
+    await page.locator('#projectConnection').evaluate(e=>{e.open=true;});
     await page.locator('#projectToken').fill('project-smoke-token');
     await page.locator('#projectTokenForm').locator('[type=submit]').click();
     await page.locator('#projectRefresh').click();
@@ -228,7 +234,7 @@ const server = http.createServer((req,res) => {
     const storage=await page.evaluate(()=>JSON.stringify(Object.keys(localStorage).map(k=>[k,localStorage.getItem(k)])));
     assert(!storage.includes('project-smoke-token'),'project token must not enter localStorage');
 
-    if (await page.locator('#projectConnection').evaluate(e=>e.open)) await page.locator('#projectConnection summary').click();
+    await page.locator('#projectConnection').evaluate(e=>{e.open=false;});
     await page.setViewportSize({width:430,height:680});
     await page.screenshot({path:path.join(OUT,'projects-430x680-list.png'),fullPage:true});
     await page.locator('#projectDetail').scrollIntoViewIfNeeded();

@@ -20,14 +20,30 @@
     if (error.status === 401 || error.status === 403) el("projectConnection").open = true;
     return error.message || String(error);
   }
+  function emptyDetail() {
+    return '<div class="memory-detail-empty"><span>项</span><p>在左侧选择一个项目</p><p class="memory-note">可以看到它的对话、在里面新开对话，或管理它的待办和记忆。</p></div>';
+  }
+  function glyph(name) { var text = String(name || "").trim(); return esc(text ? Array.from(text)[0].toUpperCase() : "项"); }
+  function folderParts(path) {
+    var shown = String(displayPath(path) || ""), parts = shown.replace(/[\\/]+$/, "").split(/[\\/]/);
+    var folder = parts.pop() || shown; return { folder: folder, parent: parts.join("/") || "" };
+  }
+  function ago(value) {
+    var time = new Date(value).getTime(); if (!isFinite(time)) return "";
+    var minutes = Math.round((Date.now() - time) / 60000);
+    if (minutes < 1) return "刚刚"; if (minutes < 60) return minutes + " 分钟前";
+    var hours = Math.round(minutes / 60); if (hours < 24) return hours + " 小时前";
+    var days = Math.round(hours / 24); if (days < 7) return days + " 天前";
+    return new Date(time).toLocaleDateString();
+  }
   var overlay = document.createElement("div");
   overlay.id = "projectsOverlay"; overlay.className = "memory-overlay project-overlay"; overlay.hidden = true;
   overlay.innerHTML = '<section class="memory-center project-center" role="dialog" aria-modal="true" aria-labelledby="projectsTitle">' +
-    '<header class="memory-header"><div><h2 id="projectsTitle">项目与会话</h2><p>按目录整理工作，在同一项目中继续新的任务。</p></div><button id="projectsClose" aria-label="关闭项目管理">×</button></header>' +
+    '<header class="memory-header"><div><span class="memory-eyebrow">Projects</span><h2 id="projectsTitle">项目与会话</h2><p>一个项目对应电脑上的一个文件夹；在项目里开的对话共用这个文件夹和项目记忆。</p></div><div class="memory-header-stats" id="projectStats"></div><button id="projectsClose" aria-label="关闭项目管理">×</button></header>' +
     '<details class="memory-connection" id="projectConnection"><summary>连接设置</summary><form id="projectTokenForm"><label>项目与记忆接口访问令牌<input id="projectToken" type="password" autocomplete="off" placeholder="未设置令牌时留空"><small id="projectTokenNote">仅在当前页面内存使用，与记忆中心共用。</small></label><button type="submit">应用并重试</button></form></details>' +
-    '<div class="memory-content"><div class="memory-toolbar"><input id="projectSearch" type="search" maxlength="500" aria-label="搜索项目" placeholder="搜索项目名称"><button id="projectRefresh">刷新</button><button id="projectRegisterToggle" class="memory-primary">登记目录</button></div>' +
-    '<form id="projectRegisterForm" class="project-register" hidden><div class="memory-config-fields"><label>项目名称（可选）<input id="projectRegisterName" maxlength="120" placeholder="默认使用目录名称"></label><label>目录路径<input id="projectRegisterPath" required maxlength="4000" placeholder="选择一个已有工作目录"></label><label>目录所在系统<select id="projectRegisterPlatform"><option value="">自动识别</option><option value="windows">Windows 路径</option><option value="linux">Linux / WSL 路径</option><option value="macos">macOS 路径</option></select></label></div><p class="memory-note">目录必须已存在且允许访问。登记不会创建文件夹；同目录重复登记会打开原项目。</p><button type="submit" class="memory-primary">登记项目</button><button type="button" id="projectUseCurrent">使用当前会话目录</button></form>' +
-    '<div class="memory-layout project-layout"><div><div id="projectList" class="memory-list">正在读取项目…</div><button id="projectMore" hidden>加载更多项目</button></div><div id="projectDetail" class="memory-detail"><p class="memory-note">选择项目，查看会话或开始新的任务。</p></div></div></div>' +
+    '<div class="memory-content"><div class="memory-toolbar"><input id="projectSearch" type="search" maxlength="500" aria-label="搜索项目" placeholder="搜索项目名称"><button id="projectRefresh">刷新</button><button id="projectRegisterToggle" class="memory-primary">＋ 登记文件夹</button></div>' +
+    '<form id="projectRegisterForm" class="project-register" hidden><h3>把已有文件夹登记为项目</h3><div class="project-register-path"><label>文件夹路径<input id="projectRegisterPath" required maxlength="4000" placeholder="例如 D:\\work\\report 或 /home/me/app"></label><button type="button" id="projectUseCurrent">填入当前会话目录</button></div><div class="memory-config-fields"><label>项目名称（可选）<input id="projectRegisterName" maxlength="120" placeholder="默认使用文件夹名称"></label><label>路径类型<select id="projectRegisterPlatform"><option value="">自动识别</option><option value="windows">Windows 路径</option><option value="linux">Linux / WSL 路径</option><option value="macos">macOS 路径</option></select></label></div><p class="memory-note">不会新建或移动文件夹。同一个文件夹重复登记时，会直接打开原来的项目。</p><div class="memory-actions"><button type="submit" class="memory-primary">登记项目</button><button type="button" id="projectRegisterCancel">取消</button></div></form>' +
+    '<div class="memory-layout project-layout"><div><div id="projectList" class="memory-list">正在读取项目…</div><button id="projectMore" hidden>加载更多项目</button></div><div id="projectDetail" class="memory-detail">' + emptyDetail() + '</div></div></div>' +
     '<p id="projectStatus" class="memory-status" role="status" aria-live="polite"></p></section>';
   document.body.appendChild(overlay);
   var content = overlay.querySelector(".memory-content"), toolbar = content.querySelector(".memory-toolbar");
@@ -56,8 +72,10 @@
   };
   el("projectRegisterToggle").onclick = function () {
     el("projectRegisterForm").hidden = !el("projectRegisterForm").hidden;
+    el("projectRegisterToggle").setAttribute("aria-expanded", String(!el("projectRegisterForm").hidden));
     if (!el("projectRegisterForm").hidden) el("projectRegisterPath").focus();
   };
+  el("projectRegisterCancel").onclick = function () { el("projectRegisterForm").hidden = true; el("projectRegisterToggle").focus(); };
   el("projectUseCurrent").onclick = function () { el("projectRegisterPath").value = chat.get().workspace || ""; };
   function platformFor(path, selected) { return selected || (/^(?:[A-Za-z]:[\\/]|\\\\)/.test(path) ? "windows" : path.charAt(0) === "/" ? "linux" : ""); }
   async function register(path, name, platform) {
@@ -95,7 +113,7 @@
       var data = await api("/projects?limit=50&offset=" + offset + (q ? "&q=" + encodeURIComponent(q) : ""));
       if (request !== state.listRequest || !isOpen()) return;
       state.rows = more ? state.rows.concat(data.projects || []) : data.projects || []; state.next = data.next_offset;
-      paintProjects(); if (noticeAtStart === noticeVersion) status(state.rows.length ? "已载入 " + state.rows.length + " 个项目" : "暂无匹配项目。可以登记一个已有目录。");
+      paintProjects(); if (noticeAtStart === noticeVersion) status("");
     } catch (error) { if (request === state.listRequest && isOpen()) { el("projectList").textContent = "项目列表暂不可用"; status(explain(error), true); } }
     finally { if (request === state.listRequest) el("projectMore").disabled = false; }
   }
@@ -106,13 +124,29 @@
     var match = /^\/mnt\/([a-z])(\/.*)?$/i.exec(String(path || ""));
     return match ? match[1].toUpperCase() + ":" + (match[2] || "/") : path;
   }
+  function projectCard(p) {
+    var current = chat.get().projectId === p.project_id, where = folderParts(p.workspace_path);
+    return '<button class="memory-entry project-entry' + (automaticName(p.name) ? ' is-automatic' : '') + '" data-project-id="' + esc(p.project_id) + '" aria-pressed="' + Boolean(state.selected && state.selected.project_id === p.project_id) + '">' +
+      '<span class="project-glyph" aria-hidden="true">' + (automaticName(p.name) ? "任" : glyph(p.name)) + '</span><span class="project-entry-body"><span class="project-entry-title"><strong>' + esc(displayName(p)) + '</strong>' + (current ? '<span class="memory-tag">当前</span>' : '') + '</span>' +
+      '<p title="' + esc(displayPath(p.workspace_path) || "") + '">' + (p.workspace_path ? esc(where.parent ? where.parent + "/" : "") + '<b>' + esc(where.folder) + '</b>' : "未绑定文件夹") + '</p>' +
+      '<small>' + esc(Number(p.session_count) || 0) + ' 个对话' + (p.updated_at ? ' · ' + esc(ago(p.updated_at)) + '更新' : '') + '</small></span></button>';
+  }
+  function paintStats() {
+    var named = state.rows.filter(function (p) { return !automaticName(p.name); }).length;
+    var talks = state.rows.reduce(function (sum, p) { return sum + (Number(p.session_count) || 0); }, 0);
+    // Counts cover loaded pages only; mark them as a lower bound while more remain.
+    var more = state.next != null ? "+" : "";
+    el("projectStats").innerHTML = state.rows.length ? '<span><b>' + named + more + '</b>项目</span><span><b>' + talks + more + '</b>对话</span>' : "";
+  }
   function paintProjects() {
     var hidden = state.rows.filter(function (p) { return automaticName(p.name) && !Number(p.session_count); });
     var rows = state.showUnusedAutomatic ? state.rows : state.rows.filter(function (p) { return hidden.indexOf(p) < 0; });
-    el("projectList").innerHTML = rows.map(function (p) {
-      return '<button class="memory-entry project-entry" data-project-id="' + esc(p.project_id) + '" aria-pressed="' + Boolean(state.selected && state.selected.project_id === p.project_id) + '"><strong>' + esc(displayName(p)) + '</strong><p>' + esc(displayPath(p.workspace_path) || "目录未绑定") + '</p><small>' + esc(p.session_count) + ' 个会话' + (chat.get().projectId === p.project_id ? ' · 当前项目' : '') + '</small></button>';
-    }).join("") + (hidden.length ? '<button type="button" class="project-unused-toggle" id="projectUnusedToggle">' + (state.showUnusedAutomatic ? "隐藏" : "显示") + ' ' + hidden.length + ' 个未使用的任务工作区</button>' : "")
-      || '<p class="memory-note">暂无匹配项目。登记现有目录后可在其中建立多个会话。</p>';
+    var named = rows.filter(function (p) { return !automaticName(p.name); }), automatic = rows.filter(function (p) { return automaticName(p.name); });
+    paintStats();
+    el("projectList").innerHTML = (named.length ? named.map(projectCard).join("") : "") +
+      (automatic.length ? '<p class="project-list-label">任务工作区 <small>对话自动创建的文件夹</small></p>' + automatic.map(projectCard).join("") : "") +
+      (hidden.length ? '<button type="button" class="project-unused-toggle" id="projectUnusedToggle">' + (state.showUnusedAutomatic ? "隐藏" : "显示") + ' ' + hidden.length + ' 个没有对话的任务工作区</button>' : "")
+      || '<div class="memory-empty"><span>＋</span><p>' + (el("projectSearch").value.trim() ? "没有匹配的项目，换个关键词试试。" : "还没有项目。点右上角“登记文件夹”，把常用的工作文件夹加进来。") + '</p></div>';
     if (el("projectUnusedToggle")) el("projectUnusedToggle").onclick = function () { state.showUnusedAutomatic = !state.showUnusedAutomatic; paintProjects(); };
     Array.prototype.forEach.call(el("projectList").querySelectorAll("[data-project-id]"), function (button) {
       button.onclick = function () { selectProject(button.dataset.projectId); };
@@ -127,13 +161,22 @@
       var project = await api("/projects/" + encodeURIComponent(id));
       if (request !== state.detailRequest || !isOpen()) return;
       state.selected = project; paintProjects(); renderDetail(project); loadProjectSessions(false);
+      if (window.matchMedia("(max-width: 640px)").matches) el("projectDetail").scrollIntoView({ block: "start", behavior: "smooth" });
     } catch (error) { if (request === state.detailRequest && isOpen()) { el("projectDetail").textContent = "项目详情暂不可用"; status(explain(error), true); } }
   }
   function renderDetail(project) {
-    el("projectDetail").innerHTML = '<h3>' + esc(displayName(project)) + '</h3><p class="project-path">' + esc(displayPath(project.workspace_path) || "目录未绑定") + '</p><p class="memory-note">' + esc(project.session_count) + ' 个会话。会话各自保留消息，共用这个目录和项目记忆。</p>' +
-      '<form id="projectRenameForm"><label>显示名称<input id="projectRenameName" required maxlength="120" value="' + esc(project.name) + '"></label><div class="memory-actions"><button type="submit">保存名称</button><button type="button" id="projectRenameReload" hidden>重新载入版本</button></div><p class="memory-note" id="projectRenameStatus" role="status">只修改显示名称，不修改文件夹。</p></form>' +
-      '<div class="memory-actions"><button id="projectNewSession" class="memory-primary">在此项目新建会话</button><button id="projectMemory">项目记忆</button><button id="projectMatters">待办与规划</button></div>' +
-      '<h3 class="project-sessions-heading">项目会话</h3><input id="projectSessionSearch" type="search" maxlength="500" aria-label="搜索项目会话" placeholder="搜索会话标题和消息"><div id="projectSessions" class="project-sessions"></div><button id="projectSessionMore" hidden>加载更多会话</button>';
+    var current = chat.get().projectId === project.project_id;
+    el("projectDetail").innerHTML = '<div class="project-hero"><span class="project-glyph is-large" aria-hidden="true">' + (automaticName(project.name) ? "任" : glyph(project.name)) + '</span><div><h3>' + esc(displayName(project)) + '</h3>' +
+      '<p class="project-path"><span>' + esc(displayPath(project.workspace_path) || "未绑定文件夹") + '</span>' + (project.workspace_path ? '<button type="button" id="projectCopyPath" class="project-copy" title="复制路径">复制</button>' : '') + '</p></div></div>' +
+      '<div class="project-start"><button id="projectNewSession" class="memory-primary">＋ 在这个项目里开新对话</button><p class="memory-note">新对话直接在这个文件夹里工作，能用到项目记忆。</p></div>' +
+      '<div class="project-shortcuts"><button id="projectMatters">待办与规划</button><button id="projectMemory">项目记忆</button></div>' +
+      (current ? "" : '<p class="memory-note project-memory-hint">项目记忆要在这个项目的对话里打开：先点下面任意一个对话。</p>') +
+      '<div class="project-sessions-head"><h3 class="project-sessions-heading">对话 <small>' + esc(Number(project.session_count) || 0) + '</small></h3><input id="projectSessionSearch" type="search" maxlength="500" aria-label="搜索项目会话" placeholder="搜索标题和消息"></div><div id="projectSessions" class="project-sessions"></div><button id="projectSessionMore" hidden>加载更多对话</button>' +
+      '<details class="project-settings"' + (automaticName(project.name) ? '' : ' open') + '><summary>项目设置</summary><form id="projectRenameForm"><label>显示名称<input id="projectRenameName" required maxlength="120" value="' + esc(project.name) + '"></label><div class="memory-actions"><button type="submit">保存名称</button><button type="button" id="projectRenameReload" hidden>重新载入版本</button></div><p class="memory-note" id="projectRenameStatus" role="status">只改名字，文件夹本身不会改动。</p></form></details>';
+    if (el("projectCopyPath")) el("projectCopyPath").onclick = function () {
+      var text = displayPath(project.workspace_path), button = this;
+      Promise.resolve(navigator.clipboard && navigator.clipboard.writeText(text)).then(function () { button.textContent = "已复制"; setTimeout(function () { button.textContent = "复制"; }, 1500); }, function () { status("复制失败，可以手动选中路径。", true); });
+    };
     updateActions();
     el("projectNewSession").onclick = function () { createProjectSession(project); };
     el("projectMatters").onclick = function () { close(); if (window.LkaMatters) window.LkaMatters.open({ projectId: project.project_id, projectName: project.name }); };
@@ -147,7 +190,7 @@
         if (request !== state.detailRequest || !isOpen()) return;
         project = updated; state.selected = updated;
         state.rows = state.rows.map(function (p) { return p.project_id === updated.project_id ? updated : p; });
-        paintProjects(); el("projectDetail").querySelector("h3").textContent = updated.name;
+        paintProjects(); el("projectDetail").querySelector("h3").textContent = displayName(updated);
         input.value = updated.name; el("projectRenameReload").hidden = true;
         el("projectRenameStatus").textContent = "名称已保存，文件夹和项目记忆保持原位。";
       } catch (error) {
@@ -178,7 +221,8 @@
     el("projectNewSession").disabled = state.creating || state.opening || c.busy || !state.selected.workspace_path;
     el("projectNewSession").title = c.busy ? "请等待当前任务完成" : "在项目目录内开始新会话";
     el("projectMemory").disabled = c.projectId !== state.selected.project_id;
-    el("projectMemory").title = c.projectId === state.selected.project_id ? "管理当前项目的记忆" : "先打开此项目的会话，再管理其记忆";
+    el("projectMemory").title = c.projectId === state.selected.project_id ? "管理当前项目的记忆" : "先打开这个项目的对话，再管理它的记忆";
+    el("projectNewSession").textContent = state.creating ? "正在创建…" : c.busy ? "等当前任务完成后再开" : "＋ 在这个项目里开新对话";
   }
   async function loadProjectSessions(more) {
     if (!state.selected || !el("projectSessions")) return;
@@ -198,8 +242,9 @@
   function paintSessions() {
     var c = chat.get();
     el("projectSessions").innerHTML = state.sessions.map(function (s) {
-      return '<button class="project-session" data-project-session="' + esc(s.session_id) + '"' + (c.busy || state.creating || state.opening ? ' disabled' : '') + '><strong>' + esc(s.title || "新会话") + '</strong><small>' + (c.sessionId === s.session_id ? "当前会话 · " : "") + esc(new Date(s.updated_at).toLocaleString()) + '</small></button>';
-    }).join("") || '<p class="memory-note">此范围还没有会话，可以在项目内开始新任务。</p>';
+      var current = c.sessionId === s.session_id;
+      return '<button class="project-session' + (current ? ' is-current' : '') + '" data-project-session="' + esc(s.session_id) + '"' + (c.busy || state.creating || state.opening ? ' disabled' : '') + ' title="' + esc(new Date(s.updated_at).toLocaleString()) + '"><strong>' + esc(s.title || "新会话") + '</strong><small>' + (current ? '<span class="memory-tag">正在查看</span>' : '') + esc(ago(s.updated_at)) + '</small><span class="project-session-go" aria-hidden="true">›</span></button>';
+    }).join("") || '<div class="memory-empty"><p>' + (el("projectSessionSearch") && el("projectSessionSearch").value.trim() ? "没有匹配的对话。" : "这个项目里还没有对话，点上面的按钮开第一个。") + '</p></div>';
     Array.prototype.forEach.call(el("projectSessions").querySelectorAll("[data-project-session]"), function (button) {
       button.onclick = async function () {
         if (chat.get().busy || state.creating || state.opening) return;
