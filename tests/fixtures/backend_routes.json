@@ -1,0 +1,738 @@
+[
+ {
+  "method": "DELETE",
+  "path": "/background/config"
+ },
+ {
+  "method": "DELETE",
+  "path": "/matters/{matter_id}"
+ },
+ {
+  "method": "DELETE",
+  "path": "/memories/{memory_id}"
+ },
+ {
+  "method": "DELETE",
+  "path": "/sessions/{session_id}"
+ },
+ {
+  "method": "DELETE",
+  "path": "/watches/{watch_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/agent/models"
+ },
+ {
+  "method": "GET",
+  "path": "/agent/runs/{run_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/agent/runs/{run_id}/events"
+ },
+ {
+  "method": "GET",
+  "path": "/agent/runs/{run_id}/safety-reviews"
+ },
+ {
+  "method": "GET",
+  "path": "/agent/runs/{run_id}/snapshot"
+ },
+ {
+  "method": "GET",
+  "path": "/agent/runs/{run_id}/stream"
+ },
+ {
+  "method": "GET",
+  "path": "/agent/safety-reviews"
+ },
+ {
+  "method": "GET",
+  "path": "/agent/safety-reviews/{review_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/agent/ui-defaults"
+ },
+ {
+  "method": "GET",
+  "path": "/background/config"
+ },
+ {
+  "method": "GET",
+  "path": "/background/config/schema"
+ },
+ {
+  "method": "GET",
+  "path": "/background/events"
+ },
+ {
+  "method": "GET",
+  "path": "/background/health"
+ },
+ {
+  "method": "GET",
+  "path": "/background/jobs"
+ },
+ {
+  "method": "GET",
+  "path": "/background/jobs/{job_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/background/services/message-reading"
+ },
+ {
+  "method": "GET",
+  "path": "/capabilities"
+ },
+ {
+  "method": "GET",
+  "path": "/health"
+ },
+ {
+  "method": "GET",
+  "path": "/integrations/messages/policies"
+ },
+ {
+  "method": "GET",
+  "path": "/knowledge/documents/{document_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/knowledge/file-types"
+ },
+ {
+  "method": "GET",
+  "path": "/knowledge/search"
+ },
+ {
+  "method": "GET",
+  "path": "/mail/matters"
+ },
+ {
+  "method": "GET",
+  "path": "/mail/search"
+ },
+ {
+  "method": "GET",
+  "path": "/managers"
+ },
+ {
+  "method": "GET",
+  "path": "/managers/{session_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/managers/{session_id}/deliveries"
+ },
+ {
+  "method": "GET",
+  "path": "/managers/{session_id}/events"
+ },
+ {
+  "method": "GET",
+  "path": "/managers/{session_id}/executions"
+ },
+ {
+  "method": "GET",
+  "path": "/managers/{session_id}/goals"
+ },
+ {
+  "method": "GET",
+  "path": "/managers/{session_id}/goals/{goal_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/matters"
+ },
+ {
+  "method": "GET",
+  "path": "/matters/search"
+ },
+ {
+  "method": "GET",
+  "path": "/matters/sync"
+ },
+ {
+  "method": "GET",
+  "path": "/matters/{matter_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/memories"
+ },
+ {
+  "method": "GET",
+  "path": "/memories/export"
+ },
+ {
+  "method": "GET",
+  "path": "/memories/feedback"
+ },
+ {
+  "method": "GET",
+  "path": "/memories/file"
+ },
+ {
+  "method": "GET",
+  "path": "/memories/file/preview"
+ },
+ {
+  "method": "GET",
+  "path": "/memories/learning"
+ },
+ {
+  "method": "GET",
+  "path": "/memories/maintenance"
+ },
+ {
+  "method": "GET",
+  "path": "/memories/merges"
+ },
+ {
+  "method": "GET",
+  "path": "/memories/{memory_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/memories/{memory_id}/sources"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/attachments"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/attachments/{attachment_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/attachments/{attachment_id}/content"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/conversations"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/conversations/resolve"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/conversations/{conversation_key}/coverage"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/conversations/{conversation_key}/digest"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/conversations/{conversation_key}/facts"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/conversations/{conversation_key}/history"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/conversations/{conversation_key}/metadata"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/conversations/{conversation_key}/summary"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/matter-proposals"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/matter-proposals/{proposal_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/policies"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/dossiers"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/dossiers/{conversation_key}/{sender_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/dossiers/{conversation_key}/{sender_id}/sources"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/evaluation/badcases"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/evaluation/badcases/{badcase_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/focus/{conversation_key}"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/insights"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/insights/{insight_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/insights/{insight_id}/sources"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/overview"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/participants"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/participants/{conversation_key}/{sender_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/participants/{conversation_key}/{sender_id}/sources"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/profile"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/topics"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/topics/{topic_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/reading/topics/{topic_id}/sources"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/recent"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/records/{message_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/records/{message_id}/context"
+ },
+ {
+  "method": "GET",
+  "path": "/messages/search"
+ },
+ {
+  "method": "GET",
+  "path": "/projects"
+ },
+ {
+  "method": "GET",
+  "path": "/projects/{project_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/projects/{project_id}/sessions"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/deleted"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/{session_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/{session_id}/attachments/{attachment_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/{session_id}/attachments/{attachment_id}/raw"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/{session_id}/context-status"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/{session_id}/file"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/{session_id}/file/raw"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/{session_id}/files"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/{session_id}/inputs"
+ },
+ {
+  "method": "GET",
+  "path": "/sessions/{session_id}/runs"
+ },
+ {
+  "method": "GET",
+  "path": "/watches"
+ },
+ {
+  "method": "GET",
+  "path": "/watches/briefings"
+ },
+ {
+  "method": "GET",
+  "path": "/watches/briefings/{briefing_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/watches/{watch_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/watches/{watch_id}/runs"
+ },
+ {
+  "method": "PATCH",
+  "path": "/background/config"
+ },
+ {
+  "method": "PATCH",
+  "path": "/managers/{session_id}"
+ },
+ {
+  "method": "PATCH",
+  "path": "/managers/{session_id}/goals/{goal_id}"
+ },
+ {
+  "method": "PATCH",
+  "path": "/matters/{matter_id}"
+ },
+ {
+  "method": "PATCH",
+  "path": "/memories/{memory_id}"
+ },
+ {
+  "method": "PATCH",
+  "path": "/messages/conversations/{conversation_key}/metadata"
+ },
+ {
+  "method": "PATCH",
+  "path": "/projects/{project_id}"
+ },
+ {
+  "method": "PATCH",
+  "path": "/sessions/{session_id}"
+ },
+ {
+  "method": "PATCH",
+  "path": "/watches/{watch_id}"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/runs/{parent_run_id}/children/{child_run_id}/cancel"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/runs/{parent_run_id}/children/{child_run_id}/retry"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/runs/{run_id}/cancel"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/runs/{run_id}/continue"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/runs/{run_id}/interrupt"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/runs/{run_id}/replace"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/runs/{run_id}/resume"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/safety-reviews/{review_id}/decision"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/turn"
+ },
+ {
+  "method": "POST",
+  "path": "/agent/turn/stream"
+ },
+ {
+  "method": "POST",
+  "path": "/background/budgets/reset"
+ },
+ {
+  "method": "POST",
+  "path": "/background/jobs/{job_id}/cancel"
+ },
+ {
+  "method": "POST",
+  "path": "/background/jobs/{job_id}/retry"
+ },
+ {
+  "method": "POST",
+  "path": "/background/services/message-reading/pause"
+ },
+ {
+  "method": "POST",
+  "path": "/background/services/message-reading/resume"
+ },
+ {
+  "method": "POST",
+  "path": "/integrations/messages/conversations/metadata"
+ },
+ {
+  "method": "POST",
+  "path": "/integrations/messages/import"
+ },
+ {
+  "method": "POST",
+  "path": "/integrations/messages/media"
+ },
+ {
+  "method": "POST",
+  "path": "/integrations/qq/messages/import"
+ },
+ {
+  "method": "POST",
+  "path": "/knowledge/chunks/load"
+ },
+ {
+  "method": "POST",
+  "path": "/knowledge/import"
+ },
+ {
+  "method": "POST",
+  "path": "/knowledge/mail-mirror/sync"
+ },
+ {
+  "method": "POST",
+  "path": "/knowledge/semantic-index/sync"
+ },
+ {
+  "method": "POST",
+  "path": "/mail/import"
+ },
+ {
+  "method": "POST",
+  "path": "/mail/outlook/auth/complete"
+ },
+ {
+  "method": "POST",
+  "path": "/mail/outlook/auth/start"
+ },
+ {
+  "method": "POST",
+  "path": "/mail/outlook/sync"
+ },
+ {
+  "method": "POST",
+  "path": "/managers"
+ },
+ {
+  "method": "POST",
+  "path": "/managers/default"
+ },
+ {
+  "method": "POST",
+  "path": "/managers/{session_id}/goals"
+ },
+ {
+  "method": "POST",
+  "path": "/matters"
+ },
+ {
+  "method": "POST",
+  "path": "/matters/{matter_id}/restore"
+ },
+ {
+  "method": "POST",
+  "path": "/matters/{matter_id}/source-links"
+ },
+ {
+  "method": "POST",
+  "path": "/memories"
+ },
+ {
+  "method": "POST",
+  "path": "/memories/file/generate"
+ },
+ {
+  "method": "POST",
+  "path": "/memories/file/import"
+ },
+ {
+  "method": "POST",
+  "path": "/memories/maintenance"
+ },
+ {
+  "method": "POST",
+  "path": "/memories/merges/{merge_id}/undo"
+ },
+ {
+  "method": "POST",
+  "path": "/memories/projects/{project_id}/relocate"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/analysis-work/{family_id}/limits"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/conversations/{conversation_key}/analyze"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/conversations/{conversation_key}/replay"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/conversations/{conversation_key}/retry"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/matter-proposals"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/matter-proposals/{proposal_id}/decision"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/matter-proposals/{proposal_id}/revalidate"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/reading/evaluation/badcases"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/reading/evaluation/badcases/preview"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/reading/insights/{insight_id}/attention"
+ },
+ {
+  "method": "POST",
+  "path": "/messages/reading/participants/{conversation_key}/{sender_id}/control"
+ },
+ {
+  "method": "POST",
+  "path": "/projects"
+ },
+ {
+  "method": "POST",
+  "path": "/runtime/debug"
+ },
+ {
+  "method": "POST",
+  "path": "/sessions"
+ },
+ {
+  "method": "POST",
+  "path": "/sessions/{session_id}/attachments"
+ },
+ {
+  "method": "POST",
+  "path": "/sessions/{session_id}/inputs"
+ },
+ {
+  "method": "POST",
+  "path": "/sessions/{session_id}/inputs/resume"
+ },
+ {
+  "method": "POST",
+  "path": "/sessions/{session_id}/messages"
+ },
+ {
+  "method": "POST",
+  "path": "/sessions/{session_id}/restore"
+ },
+ {
+  "method": "POST",
+  "path": "/sessions/{session_id}/workspace/materialize"
+ },
+ {
+  "method": "POST",
+  "path": "/watches"
+ },
+ {
+  "method": "POST",
+  "path": "/watches/briefings/{briefing_id}/read"
+ },
+ {
+  "method": "POST",
+  "path": "/watches/{watch_id}/pause"
+ },
+ {
+  "method": "POST",
+  "path": "/watches/{watch_id}/resume"
+ },
+ {
+  "method": "POST",
+  "path": "/watches/{watch_id}/run-now"
+ },
+ {
+  "method": "POST",
+  "path": "/workspaces/index"
+ },
+ {
+  "method": "PUT",
+  "path": "/agent/ui-defaults"
+ },
+ {
+  "method": "PUT",
+  "path": "/memories/learning"
+ },
+ {
+  "method": "PUT",
+  "path": "/messages/policies"
+ },
+ {
+  "method": "PUT",
+  "path": "/messages/reading/focus/{conversation_key}"
+ },
+ {
+  "method": "PUT",
+  "path": "/messages/reading/profile"
+ },
+ {
+  "method": "PUT",
+  "path": "/sessions/{session_id}/workspace"
+ }
+]
