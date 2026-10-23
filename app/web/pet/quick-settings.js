@@ -9,20 +9,23 @@
   function context() { return chat.get(); }
   function same(id) { return context().sessionId === id; }
   function managerModel(value) { return value && (value.llm_client_name || value.llm_model) ? JSON.stringify([value.llm_client_name || '', value.llm_model || '']) : ''; }
+  function managerAnswerModel(value) { return value && (value.llm_answer_client_name || value.llm_answer_model) ? JSON.stringify([value.llm_answer_client_name || '', value.llm_answer_model || '']) : ''; }
   function snapshot() {
     var view = context(), prefs = chat.preferences(), manager = view.kind === 'manager';
     var ready = !!view.sessionId && (!manager || !!controller && owner === view.sessionId);
     var value = manager ? ready ? managerModel(controller) : '' : prefs.modelValue;
     var model = draft && owner === view.sessionId ? draft.modelValue : value;
+    var answerModel = draft && owner === view.sessionId ? draft.answerModelValue : manager ? ready ? managerAnswerModel(controller) : '' : prefs.answerModelValue || '';
     var models = prefs.models.slice();
     if (model && !models.some(function (row) { return row.value === model; })) {
       try { var pair = JSON.parse(model); models.push({ value: model, label: (pair[1] || pair[0] + ' 默认模型') + ' · 当前已保存' }); } catch (_) {}
     }
+    if (answerModel && !models.some(function (row) { return row.value === answerModel; })) { try { var answerPair = JSON.parse(answerModel); models.push({ value: answerModel, label: (answerPair[1] || answerPair[0] + ' 默认模型') + ' · 当前已保存' }); } catch (_) {} }
     var level = draft && owner === view.sessionId ? draft.reasoningLevel
       : manager && controller && controller.reasoning_level || prefs.reasoningLevel || 'low';
     var reasoning = chat.reasoningOptions(model, level);
     return Object.assign({ sessionId: view.sessionId || '', kind: view.kind || 'ordinary', scopeLabel: manager ? '真理模型' : '独立任务默认模型',
-      modelValue: model, models: models, safetyMode: draft && owner === view.sessionId ? draft.safetyMode : prefs.safetyMode,
+      modelValue: model, answerModelValue: answerModel, models: models, safetyMode: draft && owner === view.sessionId ? draft.safetyMode : prefs.safetyMode,
       stream: draft && owner === view.sessionId ? draft.stream : prefs.stream,
       loading: loading, busy: busy, ready: ready && !loading, error: error, notice: notice }, reasoning);
   }
@@ -67,10 +70,11 @@
     var current = snapshot(), id = current.sessionId, manager = current.kind === 'manager', prefs = chat.preferences();
     if (!current.ready) { error = '请等当前会话连接完成后再设置。'; return publish(); }
     var next = { modelValue: values.modelValue === undefined ? current.modelValue : values.modelValue,
+      answerModelValue: values.answerModelValue === undefined ? current.answerModelValue : values.answerModelValue,
       reasoningLevel: values.reasoningLevel === undefined ? current.reasoningLevel : values.reasoningLevel,
       safetyMode: values.safetyMode === undefined ? current.safetyMode : values.safetyMode,
       stream: values.stream === undefined ? current.stream : values.stream };
-    if (typeof next.modelValue !== 'string' || !current.models.some(function (row) { return row.value === next.modelValue; })
+    if (typeof next.modelValue !== 'string' || !current.models.some(function (row) { return row.value === next.modelValue; }) || typeof next.answerModelValue !== 'string' || !current.models.some(function (row) { return row.value === next.answerModelValue; })
         || ['backend', 'llm', 'manual', 'skip'].indexOf(next.safetyMode) < 0 || typeof next.stream !== 'boolean') {
       error = '请选择有效的模型和审查方式。'; return publish();
     }
@@ -81,12 +85,13 @@
     var ticket = ++epoch; owner = id; draft = next; busy = true; error = ''; notice = ''; publish();
     try {
       var savedReasoning = controller && controller.reasoning_level || prefs.reasoningLevel || 'low';
-      if (manager && (next.modelValue !== managerModel(controller) || next.reasoningLevel !== savedReasoning)) {
+      if (manager && (next.modelValue !== managerModel(controller) || next.answerModelValue !== managerAnswerModel(controller) || next.reasoningLevel !== savedReasoning)) {
         var patch = { expected_revision: controller.revision };
         if (next.modelValue !== managerModel(controller)) {
           var pair = next.modelValue ? JSON.parse(next.modelValue) : [null, null];
           patch.llm_client_name = pair[0] || null; patch.llm_model = pair[1] || null;
         }
+        if (next.answerModelValue !== managerAnswerModel(controller)) { var answerPair = next.answerModelValue ? JSON.parse(next.answerModelValue) : [null, null]; patch.llm_answer_client_name = answerPair[0] || null; patch.llm_answer_model = answerPair[1] || null; }
         if (reasoning.reasoningSupported && next.reasoningLevel !== savedReasoning) patch.reasoning_level = next.reasoningLevel;
         var value = await request(id, 'PATCH', patch);
         if (ticket !== epoch || !same(id)) return snapshot();
@@ -95,6 +100,7 @@
       if (ticket !== epoch || !same(id)) return snapshot();
       var changes = {};
       if (!manager && (next.modelValue !== prefs.modelValue || prefs.saveError)) changes.modelValue = next.modelValue;
+      if (!manager && (next.answerModelValue !== prefs.answerModelValue || prefs.saveError)) changes.answerModelValue = next.answerModelValue;
       if (!manager && (next.reasoningLevel !== prefs.reasoningLevel || prefs.saveError)) changes.reasoningLevel = next.reasoningLevel;
       if (next.safetyMode !== prefs.safetyMode || prefs.saveError) changes.safetyMode = next.safetyMode;
       if (next.stream !== prefs.stream || prefs.saveError) changes.stream = next.stream;
@@ -116,6 +122,7 @@
     var current = snapshot();
     owner = current.sessionId;
     draft = { modelValue: values.modelValue === undefined ? current.modelValue : values.modelValue,
+      answerModelValue: values.answerModelValue === undefined ? current.answerModelValue : values.answerModelValue,
       reasoningLevel: values.reasoningLevel === undefined ? current.reasoningLevel : values.reasoningLevel,
       safetyMode: values.safetyMode === undefined ? current.safetyMode : values.safetyMode,
       stream: values.stream === undefined ? current.stream : values.stream };
@@ -129,7 +136,7 @@
   var panel = document.createElement('section'); panel.id = 'quickSettings'; panel.className = 'qs-panel'; panel.hidden = true;
   panel.setAttribute('role', 'dialog'); panel.setAttribute('aria-label', '对话设置');
   panel.innerHTML = '<header><div><h2>设置</h2><p id="qsScope"></p></div><button id="qsClose" class="qs-icon" type="button" aria-label="关闭设置">×</button></header>' +
-    '<form id="qsForm"><div class="qs-field"><label for="qsModel">对话模型</label><div class="qs-model-row"><select id="qsModel"></select><button id="qsRefresh" type="button" class="qs-icon" aria-label="刷新模型列表" title="刷新模型列表">↻</button></div></div>' +
+    '<form id="qsForm"><div class="qs-field"><label for="qsModel">推理模型</label><div class="qs-model-row"><select id="qsModel"></select><button id="qsRefresh" type="button" class="qs-icon" aria-label="刷新模型列表" title="刷新模型列表">↻</button></div></div><details id="qs-advanced" class="qs-advanced"><summary>高级设置</summary><div class="qs-field"><label for="qsAnswerModel">最终回答模型</label><select id="qsAnswerModel"></select><small>最终回答使用此模型，其余步骤使用推理模型。</small></div></details>' +
     '<div class="qs-field reasoning-control" id="qsReasoningControl"><div class="reasoning-heading"><label for="qsReasoning">推理强度</label><output id="qsReasoningValue" for="qsReasoning">低</output></div>' +
     '<input id="qsReasoning" class="reasoning-slider" type="range" min="0" max="3" step="1" value="1" aria-valuetext="低" aria-describedby="qsReasoningHint">' +
     '<div class="reasoning-ticks" aria-hidden="true"><span>关闭</span><span>低</span><span>高</span><span>最高</span></div><small id="qsReasoningHint"></small></div>' +
@@ -157,8 +164,11 @@
     el('qsScope').textContent = value.scopeLabel;
     var selected = el('qsModel'); selected.textContent = '';
     value.models.forEach(function (row) { var option = document.createElement('option'); option.value = row.value; option.textContent = row.label; selected.appendChild(option); });
-    selected.value = value.modelValue; el('qsSafety').value = value.safetyMode; el('qsStream').checked = value.stream;
-    ['qsModel', 'qsSafety', 'qsStream', 'qsApply'].forEach(function (id) { el(id).disabled = !value.ready || value.busy; });
+    selected.value = value.modelValue;
+    var answer = el('qsAnswerModel'); answer.textContent = ''; var follow = document.createElement('option'); follow.value = ''; follow.textContent = '跟随推理模型'; answer.appendChild(follow);
+    value.models.filter(function (row) { return row.value; }).forEach(function (row) { var option = document.createElement('option'); option.value = row.value; option.textContent = row.label; answer.appendChild(option); }); answer.value = value.answerModelValue;
+    el('qsSafety').value = value.safetyMode; el('qsStream').checked = value.stream;
+    ['qsModel', 'qsAnswerModel', 'qsSafety', 'qsStream', 'qsApply'].forEach(function (id) { el(id).disabled = !value.ready || value.busy; });
     renderReasoning(value);
     el('qsRefresh').disabled = value.busy || value.loading;
     el('qsApply').textContent = value.busy ? '正在保存…' : '应用更改';
@@ -197,10 +207,10 @@
   }
   el('qsClose').addEventListener('click', function () { close(true); });
   el('qsRefresh').addEventListener('click', function () { refresh(true); });
-  el('qsForm').addEventListener('submit', function (event) { event.preventDefault(); update({ modelValue: el('qsModel').value, reasoningLevel: ['off', 'low', 'high', 'max'][Number(el('qsReasoning').value)], safetyMode: el('qsSafety').value, stream: el('qsStream').checked }); });
+  el('qsForm').addEventListener('submit', function (event) { event.preventDefault(); update({ modelValue: el('qsModel').value, answerModelValue: el('qsAnswerModel').value, reasoningLevel: ['off', 'low', 'high', 'max'][Number(el('qsReasoning').value)], safetyMode: el('qsSafety').value, stream: el('qsStream').checked }); });
   function captureDraft() {
     owner = context().sessionId;
-    draft = { modelValue: el('qsModel').value, reasoningLevel: ['off', 'low', 'high', 'max'][Number(el('qsReasoning').value)],
+    draft = { modelValue: el('qsModel').value, answerModelValue: el('qsAnswerModel').value, reasoningLevel: ['off', 'low', 'high', 'max'][Number(el('qsReasoning').value)],
       safetyMode: el('qsSafety').value, stream: el('qsStream').checked };
   }
   el('qsReasoning').addEventListener('input', function () { captureDraft(); renderReasoning(snapshot()); });

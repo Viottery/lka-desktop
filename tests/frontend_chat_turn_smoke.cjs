@@ -561,7 +561,7 @@ const server = http.createServer(async (req, res) => {
     const quickStream = await quickStreamContext.newPage();
     quickStream.on('pageerror', error => failures.push(error.message));
     await quickStream.addInitScript(() => {
-      localStorage.setItem('agentic-rag-pet-run-settings-v1', JSON.stringify({ stream: true }));
+      localStorage.setItem('agentic-rag-pet-run-settings-v1', JSON.stringify({ stream: true, llmAnswerClient: 'answer-provider', llmAnswerModel: 'answer-only' }));
       window.petBridge = {
         createSessionWorkspace: () => JSON.stringify({ path: 'C:/synthetic/stream-workspace' }),
         setSessionWorkspace: () => JSON.stringify({ project_id: 'synthetic-stream-project' }),
@@ -574,6 +574,8 @@ const server = http.createServer(async (req, res) => {
     await quickStream.waitForFunction(() => typeof window.__petChatSubmitText === 'function');
     await quickStream.evaluate(() => window.__petChatSubmitText('合成快速流式任务'));
     await quickStream.waitForFunction(() => window.__streamPayload && typeof window.__petChatReceiveStream === 'function');
+    assert.equal(await quickStream.evaluate(() => window.__streamPayload.llm_answer_client), 'answer-provider');
+    assert.equal(await quickStream.evaluate(() => window.__streamPayload.llm_answer_model), 'answer-only');
     await quickStream.evaluate(() => window.__petChatReceiveStream('llm_started', { stage: 'answer' }));
     await quickStream.waitForFunction(() => document.querySelector('#messages #runTimelineSummary')?.textContent === '收起过程');
     assert.equal(await quickStream.locator('#runTimeline').isVisible(), true);

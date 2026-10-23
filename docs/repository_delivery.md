@@ -2,6 +2,8 @@
 
 当前分发包含 Windows 桌宠、共享聊天与工作台、QQ 插件/消息中心、适配 API、测试、角色资源和启动脚本。独立 LKA 后端通过启动参数连接。
 
+当前发行版与升级说明见 [0.1.0 发布说明](../RELEASE_NOTES.md)。
+
 ## 配置与运行
 
 根目录 README 提供 Windows 原生安装步骤。`.env.example`、`.env.qq-reader.example` 是不含凭据的模板。虚拟环境、`.env`、QQ SQLite/媒体、NapCat/SnowLuma 安装与登录缓存、日志、运行状态、Java 构建和 Node 依赖不提交。

@@ -36,7 +36,7 @@ public final class PetQuickAssistantCheck {
             window.__petChatOpenFreshTask=function(){window.freshOpens++;window.localManagerDraft='不应清除';};
             window.__petChatOpenWorkbench=function(){window.workbenchOpens++;};
             window.settingsRefreshes=[];window.settingsUpdates=[];window.settingsPreviews=[];
-            window.fixtureSettings={sessionId:'manager-one',kind:'manager',scopeLabel:'真理模型',modelValue:'default',models:[{value:'default',label:'跟随后端默认模型'},{value:'alternate',label:'合成服务商 / 模型 B'}],safetyMode:'backend',stream:true,reasoningLevel:'low',reasoningLevels:[{value:'off',label:'关闭',available:true},{value:'low',label:'低',available:true},{value:'high',label:'高',available:true},{value:'max',label:'最高',available:true}],reasoningHint:'模型支持推理强度设置。',reasoningAvailable:true,reasoningValid:true,ready:true,loading:false,busy:false,error:'',notice:''};
+            window.fixtureSettings={sessionId:'manager-one',kind:'manager',scopeLabel:'真理模型',modelValue:'default',answerModelValue:'',models:[{value:'default',label:'跟随后端默认模型'},{value:'alternate',label:'合成服务商 / 模型 B'}],safetyMode:'backend',stream:true,reasoningLevel:'low',reasoningLevels:[{value:'off',label:'关闭',available:true},{value:'low',label:'低',available:true},{value:'high',label:'高',available:true},{value:'max',label:'最高',available:true}],reasoningHint:'模型支持推理强度设置。',reasoningAvailable:true,reasoningValid:true,ready:true,loading:false,busy:false,error:'',notice:''};
             window.publishFixture=function(){petBridge.setQuickSettingsState(JSON.stringify(window.fixtureSettings));};
             window.LkaChatContext={get:function(){return {kind:window.fixtureKind};},
               quickSettings:function(){return window.fixtureSettings;},
@@ -126,9 +126,71 @@ public final class PetQuickAssistantCheck {
                 check(((Number) script("document.querySelectorAll('iframe').length")).intValue() == 0, "composer remains in main WebView");
                 return null;
             });
+            testImePosition(control, stage, composer);
             testQuickSettings(control, stage);
             System.out.println("PASS: default quick assistant URL; reusable manager draft/root and native composer; visible assistant/new-task actions at 340px; manager/ordinary workbench dispatch");
         } finally { control.dispose(); server.stop(0); Platform.exit(); }
+    }
+    private static void testImePosition(PetControlWindow control, Stage stage, TextArea composer) throws Exception {
+        boolean original = (boolean) fx(() -> field(control, "bubbleMode"));
+        String originalDraft = (String) fx(composer::getText);
+        double[] originalBounds = (double[]) fx(() -> new double[]{stage.getX(), stage.getY(), stage.getWidth(), stage.getHeight()});
+        try {
+            for (boolean bubble : new boolean[]{false, true}) {
+                fx(() -> {
+                    Field mode = PetControlWindow.class.getDeclaredField("bubbleMode"); mode.setAccessible(true); mode.set(control, bubble);
+                    Method layout = PetControlWindow.class.getDeclaredMethod("applyQuickLayout"); layout.setAccessible(true); layout.invoke(control);
+                    stage.setWidth(450); stage.setHeight(420); stage.setX(180); stage.setY(160);
+                    stage.toFront(); stage.requestFocus(); composer.requestFocus();
+                    return null;
+                });
+                waitFor(() -> stage.isFocused() && composer.isFocused());
+                for (String text : List.of("", "Hello Doctor", "one\ntwo\nthree\nfour\nfive\nsix")) {
+                    fx(() -> { composer.setText(text); composer.positionCaret(text.length()); return null; });
+                    Thread.sleep(150);
+                    fx(() -> {
+                        stage.getScene().getRoot().applyCss(); stage.getScene().getRoot().layout();
+                        var caret = composer.lookupAll("*").stream().filter(n -> n instanceof javafx.scene.shape.Path)
+                            .filter(n -> n.getBoundsInLocal().getWidth() <= 3 && n.getBoundsInLocal().getHeight() > 10)
+                            .findFirst().orElseThrow();
+                        var bounds = caret.localToScreen(caret.getBoundsInLocal());
+                        var ime = composer.getInputMethodRequests().getTextLocation(0);
+                        check(Math.abs(ime.getX() - bounds.getMinX()) < 8 && Math.abs(ime.getY() - bounds.getMaxY()) < 28,
+                            "IME anchor follows the actual insertion caret in " + (bubble ? "bubble" : "card") + " mode");
+                        if (System.getProperty("os.name", "").startsWith("Windows")) {
+                            // Query Glass's actual handoff, then compare with the independent Win32 window origin.
+                            var helper = Class.forName("com.sun.javafx.scene.SceneHelper");
+                            var peer = helper.getMethod("getPeer", javafx.scene.Scene.class).invoke(null, stage.getScene());
+                            var getView = peer.getClass().getDeclaredMethod("getPlatformView"); getView.setAccessible(true);
+                            var glassView = getView.invoke(peer);
+                            var glassWindow = glassView.getClass().getMethod("getWindow").invoke(glassView);
+                            long handle = (long) glassWindow.getClass().getMethod("getNativeWindow").invoke(glassWindow);
+                            var hwnd = new com.sun.jna.platform.win32.WinDef.HWND(new com.sun.jna.Pointer(handle));
+                            var origin = new com.sun.jna.platform.win32.WinDef.RECT();
+                            check(com.sun.jna.platform.win32.User32.INSTANCE.GetWindowRect(hwnd, origin), "native transparent window origin available");
+                            var handler = glassView.getClass().getMethod("getEventHandler").invoke(glassView);
+                            var getPosition = handler.getClass().getMethod("getInputMethodCandidatePos", int.class); getPosition.setAccessible(true);
+                            double[] physical = (double[]) getPosition.invoke(handler, 0);
+                            double expectedX = origin.left + (ime.getX() - stage.getX()) * stage.getOutputScaleX();
+                            double expectedY = origin.top + (ime.getY() - stage.getY()) * stage.getOutputScaleY();
+                            check(Math.abs(physical[0] - expectedX) <= 2 && Math.abs(physical[1] - expectedY) <= 2,
+                                "Windows IME handoff uses physical pixels at " + stage.getOutputScaleX() + "x: got "
+                                    + physical[0] + "," + physical[1] + " expected " + expectedX + "," + expectedY);
+                        }
+                        return null;
+                    });
+                }
+            }
+            System.out.println("PASS: card/bubble IME anchor and Windows physical-pixel handoff for empty, typed and multiline input");
+        } finally {
+            fx(() -> {
+                Field mode = PetControlWindow.class.getDeclaredField("bubbleMode"); mode.setAccessible(true); mode.set(control, original);
+                Method layout = PetControlWindow.class.getDeclaredMethod("applyQuickLayout"); layout.setAccessible(true); layout.invoke(control);
+                stage.setX(originalBounds[0]); stage.setY(originalBounds[1]);
+                stage.setWidth(originalBounds[2]); stage.setHeight(originalBounds[3]);
+                composer.setText(originalDraft); return null;
+            });
+        }
     }
     private static void testQuickSettings(PetControlWindow control, Stage stage) throws Exception {
         fx(() -> {
@@ -141,6 +203,7 @@ public final class PetQuickAssistantCheck {
         fx(() -> {
             check(Boolean.FALSE.equals(script("window.settingsRefreshes[0]")), "opening refreshes scope without forcing model discovery");
             var model = (javafx.scene.control.ComboBox<?>) field(control, "quickSettingsModel");
+            var answerModel = (javafx.scene.control.ComboBox<?>) field(control, "quickSettingsAnswerModel");
             var safety = (javafx.scene.control.ComboBox<?>) field(control, "quickSettingsSafety");
             var apply = (Button) field(control, "quickSettingsApply");
             var refresh = (Button) field(control, "quickSettingsRefresh");
@@ -153,14 +216,18 @@ public final class PetQuickAssistantCheck {
             check(pet != null && !pet.isExpanded(), "pet controls collapsed by default");
             check(scroll.getHbarPolicy() == javafx.scene.control.ScrollPane.ScrollBarPolicy.NEVER, "sheet fits narrow quick window");
             check(scroll.getWidth() <= 320, "settings sheet stays within 340px window width");
+            check(answerModel.getItems().size() == 3 && answerModel.getSelectionModel().getSelectedIndex() == 0, "answer model initially follows inference");
+            answerModel.getSelectionModel().select(1);
             model.getSelectionModel().select(1);
             safety.getSelectionModel().select(2);
             stream.setSelected(false);
             reasoning.setValue(3);
             script("window.publishFixture()");
+            check(answerModel.getSelectionModel().getSelectedIndex() == 1, "unsaved answer model survives same-session snapshot");
             check(model.getSelectionModel().getSelectedIndex() == 1 && safety.getSelectionModel().getSelectedIndex() == 2 && !stream.isSelected(), "unsaved selection survives incoming same-session snapshot");
             apply.fire();
             check(apply.isDisabled(), "save disables apply while busy");
+            check("default".equals(script("window.settingsUpdates[0].answerModelValue")), "native settings applies independent answer model through JS");
             check("alternate".equals(script("window.settingsUpdates[0].modelValue")) && "manual".equals(script("window.settingsUpdates[0].safetyMode")) && Boolean.FALSE.equals(script("window.settingsUpdates[0].stream")) && "max".equals(script("window.settingsUpdates[0].reasoningLevel")), "apply delegates complete draft to JS without native HTTP");
             return null;
         });
@@ -192,8 +259,9 @@ public final class PetQuickAssistantCheck {
             check(((Number) script("window.settingsUpdates.length")).intValue() == 1, "unsupported preview sends no settings update");
             script("window.fixtureSettings.ready=false;window.publishFixture()");
             check(((Button) field(control, "quickSettingsApply")).isDisabled(), "unready manager cannot apply");
-            script("Object.assign(window.fixtureSettings,{sessionId:'ordinary-two',kind:'ordinary',scopeLabel:'独立任务默认模型',modelValue:'default',ready:true,error:''});window.publishFixture()");
+            script("Object.assign(window.fixtureSettings,{sessionId:'ordinary-two',kind:'ordinary',scopeLabel:'独立任务默认模型',modelValue:'default',answerModelValue:'',ready:true,error:''});window.publishFixture()");
             check(model.getSelectionModel().getSelectedIndex() == 0, "new session resets prior scope selection");
+            check(((javafx.scene.control.ComboBox<?>) field(control, "quickSettingsAnswerModel")).getSelectionModel().getSelectedIndex() == 0, "new session clears prior answer-model draft");
             check("独立任务默认模型".equals(((javafx.scene.control.Label) field(control, "quickSettingsScope")).getText()), "scope changes with selected session");
             var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
             var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();

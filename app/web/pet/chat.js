@@ -29,6 +29,7 @@
   var retryBackendButton = document.querySelector("#retryBackendButton");
   var workspaceInput = document.querySelector("#workspaceInput");
   var llmModelInput = document.querySelector("#llmModelInput");
+  var llmAnswerModelInput = document.querySelector("#llmAnswerModelInput");
   var reasoningLevelInput = document.querySelector("#reasoningLevelInput");
   var reasoningLevels = ["off", "low", "high", "max"];
   var reasoningLabels = ["关闭", "低", "高", "最高"];
@@ -172,7 +173,7 @@
   }) : null;
   window.LkaConversationReading = conversationReading;
   var runSettingsKey = "agentic-rag-pet-run-settings-v1";
-  var runSettings = { workspace: "", llmClient: "", llmModel: "", reasoningLevel: "low", safetyMode: "backend", stream: true, workspaceParent: "" };
+  var runSettings = { workspace: "", llmClient: "", llmModel: "", llmAnswerClient: "", llmAnswerModel: "", reasoningLevel: "low", safetyMode: "backend", stream: true, workspaceParent: "" };
   var modelCatalog = null;
   var modelCatalogRetryTimer = null;
   var defaultsDirty = false;
@@ -307,7 +308,33 @@
       oldOption.selected = true;
       llmModelInput.appendChild(oldOption);
     }
+    renderAnswerModelOptions();
     renderReasoningControl();
+  }
+
+  function renderAnswerModelOptions() {
+    if (!llmAnswerModelInput) return;
+    llmAnswerModelInput.textContent = "";
+    var follow = document.createElement("option"); follow.value = ""; follow.textContent = "跟随推理模型"; llmAnswerModelInput.appendChild(follow);
+    (modelCatalog && modelCatalog.clients || []).forEach(function (client) {
+      var group = document.createElement("optgroup"); group.label = client.name;
+      (client.models || []).forEach(function (model) { var option = document.createElement("option"); option.value = JSON.stringify([client.name, model]); option.textContent = model === client.default_model ? model + " · 默认" : model; group.appendChild(option); });
+      llmAnswerModelInput.appendChild(group);
+    });
+    var saved = runSettings.llmAnswerModel ? JSON.stringify([runSettings.llmAnswerClient || "", runSettings.llmAnswerModel]) : "";
+    if (saved && !Array.from(llmAnswerModelInput.options).some(function (option) { return option.value === saved; })) { var stale = document.createElement("option"); stale.value = saved; stale.textContent = runSettings.llmAnswerModel + " · 已保存，当前未列出"; llmAnswerModelInput.appendChild(stale); }
+    llmAnswerModelInput.value = saved;
+  }
+
+  function selectPreferenceModel(select, value) {
+    if (value && !Array.from(select.options).some(function (option) { return option.value === value; })) {
+      var pair = JSON.parse(value);
+      var saved = document.createElement("option");
+      saved.value = value;
+      saved.textContent = (pair[1] || pair[0] + " 默认模型") + " · 已保存，当前未列出";
+      select.appendChild(saved);
+    }
+    select.value = value;
   }
 
   async function loadModelCatalog(refresh) {
@@ -346,6 +373,8 @@
       var defaults = payload.defaults || {};
       runSettings.llmClient = managerEmbedding ? "" : defaults.llm_client || "";
       runSettings.llmModel = managerEmbedding ? "" : defaults.llm_model || "";
+      runSettings.llmAnswerClient = managerEmbedding ? "" : defaults.llm_answer_client || "";
+      runSettings.llmAnswerModel = managerEmbedding ? "" : defaults.llm_answer_model || "";
       runSettings.reasoningLevel = reasoningLevels.indexOf(defaults.reasoning_level) >= 0 ? defaults.reasoning_level : "low";
       runSettings.safetyMode = defaults.safety_mode || "backend";
       runSettings.stream = defaults.stream !== false;
@@ -379,6 +408,10 @@
       runSettings.llmClient = "";
       runSettings.llmModel = "";
     }
+    if (llmAnswerModelInput && llmAnswerModelInput.value) {
+      try { var answerSelected = JSON.parse(llmAnswerModelInput.value); runSettings.llmAnswerClient = answerSelected[0] || ""; runSettings.llmAnswerModel = answerSelected[1] || ""; }
+      catch (ignored) { return; }
+    } else { runSettings.llmAnswerClient = ""; runSettings.llmAnswerModel = ""; }
     runSettings.reasoningLevel = reasoningLevelInput ? reasoningLevels[Number(reasoningLevelInput.value)] || "low" : runSettings.reasoningLevel;
     var reasoning = reasoningOptions(llmModelInput ? llmModelInput.value : selectedModelValue(), runSettings.reasoningLevel);
     renderReasoningControl();
@@ -390,6 +423,7 @@
     runSettings.workspaceParent = parent;
     saveRunSettings();
     var defaults = { llm_client: runSettings.llmClient, llm_model: runSettings.llmModel,
+      llm_answer_client: runSettings.llmAnswerClient, llm_answer_model: runSettings.llmAnswerModel,
       safety_mode: runSettings.safetyMode, stream: runSettings.stream, workspace_parent: parent };
     if (reasoning.reasoningSupported) defaults.reasoning_level = runSettings.reasoningLevel;
     if (defaultsSaveStatus) { defaultsSaveStatus.textContent = "正在保存…"; defaultsSaveStatus.classList.remove("error"); }
@@ -2991,11 +3025,58 @@
     input.style.overflowY = draftHeight > 156 ? "auto" : "hidden";
   }
 
+  function renderInputQueueNotice(session) {
+    var state = queueEnabled(session) ? queueState(session) : null;
+    var visible = !!(state && state.paused && state.pending_count > 0);
+    var notice = document.querySelector("#managerInputQueueNotice");
+    if (!notice && visible && form && form.parentNode) {
+      notice = document.createElement("div");
+      notice.id = "managerInputQueueNotice";
+      notice.className = "run-status review";
+      notice.setAttribute("role", "status");
+      notice.setAttribute("aria-live", "polite");
+      var text = document.createElement("span");
+      text.textContent = "上一轮未完成，消息已收到，等待继续";
+      notice.appendChild(text);
+      var button = document.createElement("button");
+      button.type = "button";
+      button.className = "text-action";
+      button.textContent = "继续处理";
+      button.addEventListener("click", function () { resumeManagerInputs(getActiveSession()); });
+      notice.appendChild(button);
+      var primaryButton = document.createElement("button");
+      primaryButton.type = "button";
+      primaryButton.className = "text-action";
+      primaryButton.textContent = "改用推理模型继续";
+      primaryButton.setAttribute("data-action", "resume-primary");
+      primaryButton.addEventListener("click", function () {
+        var active = getActiveSession(), pending = firstUnboundManagerInput(active);
+        if (pending) resumeManagerInputs(active, pending.input_id);
+      });
+      notice.appendChild(primaryButton);
+      form.parentNode.insertBefore(notice, form);
+    }
+    if (!notice) return;
+    notice.hidden = !visible;
+    if (visible) {
+      var resumeButton = notice.querySelector("button");
+      // A queue continuation cannot resume a paused root or approve its tools.
+      resumeButton.disabled = backendOffline || !managerSessionReady || state.resuming || !inputQueueNeedsResume(session);
+      resumeButton.textContent = state.resuming ? "正在继续…" : "继续处理";
+      resumeButton.title = inputQueueNeedsResume(session) ? "继续处理已收到的消息，不重发失败消息" : "请先处理当前任务的暂停、审批或待回答问题";
+      var primaryButton = notice.querySelector('[data-action="resume-primary"]');
+      primaryButton.hidden = !firstUnboundManagerInput(session);
+      primaryButton.disabled = resumeButton.disabled;
+      primaryButton.title = "使用推理模型回答下一条已收到的消息，不重发失败消息";
+    }
+  }
+
   function renderRunControls(overrideDraft) {
     resizeWorkbenchComposer();
     var session = getActiveSession(), status = session && session.runControlStatus || "";
     var activeRun = !!(session && session.multiAgentRunId && status && !isTerminalRunStatus(status));
     var inputState = isManagerSession(session) ? queueState(session) : null;
+    renderInputQueueNotice(session);
     var controlState = (session && session.resumePending || inputState && inputState.resuming) ? "resuming" : session && session.pauseRequested ? "pause_requested" : status || "idle";
     if (sendButton.getAttribute("data-run-state") !== controlState) sendButton.setAttribute("data-run-state", controlState);
     var draft = document.body.classList.contains("native-composer") ? session && readDraft(session.id) || "" : input.value;
@@ -3357,6 +3438,7 @@
     var llm = {};
     if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmClient) llm.client_name = runSettings.llmClient;
     if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmModel) llm.model = runSettings.llmModel;
+    if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmAnswerModel) { llm.answer_client_name = runSettings.llmAnswerClient || undefined; llm.answer_model = runSettings.llmAnswerModel; }
     var reasoningLevel = requestReasoningLevel(payload.session_id || payload.conversation_id);
     if (reasoningLevel) llm.reasoning_level = reasoningLevel;
     var response = await fetch(backendBaseUrl + "/agent/turn", {
@@ -3384,6 +3466,7 @@
     var llm = { response_mode: runSettings.stream ? "stream" : "text" };
     if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmClient) llm.client_name = runSettings.llmClient;
     if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmModel) llm.model = runSettings.llmModel;
+    if (modelOverridesAllowed(payload.session_id || payload.conversation_id) && runSettings.llmAnswerModel) { llm.answer_client_name = runSettings.llmAnswerClient || undefined; llm.answer_model = runSettings.llmAnswerModel; }
     var reasoningLevel = requestReasoningLevel(payload.session_id || payload.conversation_id);
     if (reasoningLevel) llm.reasoning_level = reasoningLevel;
     var response = await fetch(backendBaseUrl + "/agent/turn/stream", {
@@ -4596,6 +4679,8 @@
       llm_response_mode: runSettings.stream ? "stream" : "text",
       llm_client: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmClient || "" : "",
       llm_model: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmModel || "" : "",
+      llm_answer_client: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmAnswerClient || "" : "",
+      llm_answer_model: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmAnswerModel || "" : "",
       llm_reasoning_level: requestReasoningLevel(payload.session_id || payload.conversation_id),
       safety_review_mode: payload.safety_review_mode || ""
     }));
@@ -4637,6 +4722,8 @@
       llm_response_mode: runSettings.stream ? "stream" : "text",
       llm_client: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmClient || "" : "",
       llm_model: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmModel || "" : "",
+      llm_answer_client: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmAnswerClient || "" : "",
+      llm_answer_model: modelOverridesAllowed(payload.session_id || payload.conversation_id) ? runSettings.llmAnswerModel || "" : "",
       llm_reasoning_level: requestReasoningLevel(payload.session_id || payload.conversation_id),
       safety_review_mode: payload.safety_review_mode || ""
     }));
@@ -4870,7 +4957,13 @@
     return !!state.paused && state.pending_count > 0
       && (!session.multiAgentRunId || isTerminalRunStatus(session.runControlStatus));
   }
-  async function resumeManagerInputs(session) {
+  function firstUnboundManagerInput(session) {
+    if (!queueEnabled(session)) return null;
+    return queueState(session).receipts.filter(function (item) {
+      return item.status === "queued" && !item.run_id;
+    }).sort(function (left, right) { return left.sequence - right.sequence; })[0] || null;
+  }
+  async function resumeManagerInputs(session, inputId) {
     if (!inputQueueNeedsResume(session)) return;
     var state = queueState(session);
     if (state.resuming) return;
@@ -4878,7 +4971,8 @@
     if (activeSessionId === session.id) renderRunControls();
     var epoch = (state.requestEpoch || 0) + 1; state.requestEpoch = epoch;
     try {
-      var snapshot = await inputQueueRequest(session, "POST", {}, "/resume");
+      var body = inputId ? { input_id: inputId, answer_client_name: null, answer_model: null } : {};
+      var snapshot = await inputQueueRequest(session, "POST", body, "/resume");
       if (!validInputSnapshot(snapshot)) throw new Error("消息状态无效");
       if (managerInputQueues[session.id] === state) await applyInputSnapshot(session, snapshot, epoch);
     } catch (error) {
@@ -5203,6 +5297,7 @@
           llm: { response_mode: runSettings.stream ? "stream" : "text" }, safety_review_mode: payload.safety_review_mode || undefined };
         if (!isManagerSession(session) && runSettings.llmClient) replacementBody.llm.client_name = runSettings.llmClient;
         if (!isManagerSession(session) && runSettings.llmModel) replacementBody.llm.model = runSettings.llmModel;
+        if (!isManagerSession(session) && runSettings.llmAnswerModel) { replacementBody.llm.answer_client_name = runSettings.llmAnswerClient || undefined; replacementBody.llm.answer_model = runSettings.llmAnswerModel; }
         var replacementReasoning = requestReasoningLevel(session.id);
         if (replacementReasoning) replacementBody.llm.reasoning_level = replacementReasoning;
         var fingerprint = JSON.stringify(replacementBody), previous = replacementCommands[session.id];
@@ -6135,12 +6230,13 @@
   if (reasoningLevelInput) reasoningLevelInput.addEventListener("input", function () {
     renderReasoningControl(reasoningLevels[Number(reasoningLevelInput.value)]);
   });
-  [llmModelInput, reasoningLevelInput, safetyModeSelect, streamToggle, workspaceParentInput].forEach(function (control) {
+  [llmModelInput, llmAnswerModelInput, reasoningLevelInput, safetyModeSelect, streamToggle, workspaceParentInput].forEach(function (control) {
     if (control) control.addEventListener("change", saveDefaultPreferences);
   });
   if (refreshModelsButton) refreshModelsButton.addEventListener("click", function () { loadModelCatalog(true); });
   if (resetDefaultsButton) resetDefaultsButton.addEventListener("click", function () {
     if (llmModelInput) llmModelInput.value = "";
+    if (llmAnswerModelInput) llmAnswerModelInput.value = "";
     if (safetyModeSelect) safetyModeSelect.value = "backend";
     if (reasoningLevelInput) reasoningLevelInput.value = 1;
     if (streamToggle) streamToggle.checked = true;
@@ -6244,6 +6340,7 @@
     preferences: function () {
       return {
         modelValue: llmModelInput ? llmModelInput.value : "",
+        answerModelValue: llmAnswerModelInput ? llmAnswerModelInput.value : "",
         models: llmModelInput ? Array.from(llmModelInput.options).map(function (option) {
           var group = option.parentElement.tagName === "OPTGROUP" ? option.parentElement.label : "";
           return { value: option.value, label: (group ? group + " / " : "") + option.textContent };
@@ -6259,7 +6356,8 @@
       if (refreshModels || !modelCatalog) await loadModelCatalog(!!refreshModels);
     },
     savePreferences: async function (values) {
-      if (Object.prototype.hasOwnProperty.call(values, "modelValue")) llmModelInput.value = values.modelValue;
+      if (Object.prototype.hasOwnProperty.call(values, "modelValue")) selectPreferenceModel(llmModelInput, values.modelValue);
+      if (Object.prototype.hasOwnProperty.call(values, "answerModelValue")) selectPreferenceModel(llmAnswerModelInput, values.answerModelValue);
       if (Object.prototype.hasOwnProperty.call(values, "reasoningLevel")) {
         if (reasoningLevels.indexOf(values.reasoningLevel) < 0) throw new Error("请选择有效的推理强度。");
         if (reasoningLevelInput) reasoningLevelInput.value = reasoningLevels.indexOf(values.reasoningLevel);

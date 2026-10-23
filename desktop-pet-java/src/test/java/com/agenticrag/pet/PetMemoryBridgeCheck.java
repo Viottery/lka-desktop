@@ -33,7 +33,11 @@ public final class PetMemoryBridgeCheck {
         check(PetControlWindow.allowedMemoryRequest("GET", "/matters/m1"), "matter detail");
         check(PetControlWindow.allowedMemoryRequest("POST", "/matters"), "create matter");
         check(PetControlWindow.allowedMemoryRequest("PATCH", "/matters/m1"), "update matter");
-        check(!PetControlWindow.allowedMemoryRequest("DELETE", "/matters/m1"), "reject matter delete");
+        check(PetControlWindow.allowedMemoryRequest("DELETE", "/matters/m1"), "soft delete matter");
+        check(PetControlWindow.allowedMemoryRequest("DELETE", "/matters/m1?expected_revision=3"), "revision-checked matter delete");
+        check(!PetControlWindow.allowedMemoryRequest("DELETE", "/matters"), "reject collection delete");
+        check(!PetControlWindow.allowedMemoryRequest("DELETE", "/matters/m1?token=secret"), "reject unexpected delete query");
+        check(!PetControlWindow.allowedMemoryRequest("DELETE", "/matters/m1/restore"), "reject unsupported restore verb");
         check(!PetControlWindow.allowedMemoryRequest("GET", "/matters?token=secret"), "reject matter query token");
         check(!PetControlWindow.allowedMemoryRequest("PATCH", "/matters/m1?kind=plan"), "reject mutation query");
         check(PetControlWindow.allowedMemoryRequest("POST", "/projects"), "register project");
@@ -165,6 +169,10 @@ public final class PetMemoryBridgeCheck {
             public void shutdownDesktopPet() {}
         };
         PetControlWindow window = new PetControlWindow(actions, base + "/desktop-pet/chat.html?backend=http://127.0.0.1:" + backendServer.getAddress().getPort(), ".", List.of());
+        // Card sizing must not inherit the workstation's saved bubble preference.
+        Field bubbleMode = PetControlWindow.class.getDeclaredField("bubbleMode");
+        bubbleMode.setAccessible(true);
+        bubbleMode.setBoolean(window, false);
         try {
             window.toggle(100, 100);
             Field field = PetControlWindow.class.getDeclaredField("webView"); field.setAccessible(true);

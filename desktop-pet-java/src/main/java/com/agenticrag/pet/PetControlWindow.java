@@ -188,6 +188,7 @@ final class PetControlWindow {
         @Override public String toString() { return label; }
     }
     private ComboBox<QuickSettingChoice> quickSettingsModel;
+    private ComboBox<QuickSettingChoice> quickSettingsAnswerModel;
     private ComboBox<QuickSettingChoice> quickSettingsSafety;
     private CheckBox quickSettingsStream;
     private Slider quickSettingsReasoning;
@@ -1055,7 +1056,7 @@ final class PetControlWindow {
             settingsMenuButton.hide();
             openWorkbench();
         });
-        Label modelLabel = new Label("对话模型");
+        Label modelLabel = new Label("推理模型");
         quickSettingsModel = new ComboBox<>();
         quickSettingsModel.setId("quickSettingsModel");
         quickSettingsModel.setMaxWidth(Double.MAX_VALUE);
@@ -1065,6 +1066,13 @@ final class PetControlWindow {
         quickSettingsRefresh.setId("quickSettingsRefresh");
         quickSettingsRefresh.setOnAction(event -> refreshQuickSettings(true));
         HBox modelRow = new HBox(8, quickSettingsModel, quickSettingsRefresh);
+        Label answerModelLabel = new Label("最终回答模型");
+        quickSettingsAnswerModel = new ComboBox<>();
+        quickSettingsAnswerModel.setId("quickSettingsAnswerModel");
+        quickSettingsAnswerModel.setMaxWidth(Double.MAX_VALUE);
+        Label answerModelHint = new Label("最终回答使用此模型，其余步骤使用推理模型。");
+        answerModelHint.setWrapText(true);
+        answerModelHint.getStyleClass().add("quick-settings-muted");
         Label safetyLabel = new Label("安全审查");
         quickSettingsSafety = new ComboBox<>();
         quickSettingsSafety.setId("quickSettingsSafety");
@@ -1140,13 +1148,14 @@ final class PetControlWindow {
         quickSettingsApply.setDisable(true);
         quickSettingsApply.setOnAction(event -> applyQuickSettings());
         quickSettingsModel.valueProperty().addListener((obs, old, value) -> quickSettingsChanged());
+        quickSettingsAnswerModel.valueProperty().addListener((obs, old, value) -> quickSettingsChanged());
         quickSettingsSafety.valueProperty().addListener((obs, old, value) -> quickSettingsChanged());
         quickSettingsStream.selectedProperty().addListener((obs, old, value) -> quickSettingsChanged());
         quickSettingsReasoning.valueProperty().addListener((obs, old, value) -> quickSettingsChanged());
         for (Label label : List.of(modelLabel, safetyLabel, reasoningLabel)) label.getStyleClass().add("quick-settings-label");
         VBox header = new VBox(2, eyebrow, title, quickSettingsScope);
         header.getStyleClass().add("quick-settings-header");
-        VBox conversation = new VBox(14, new VBox(6, modelLabel, modelRow),
+        VBox conversation = new VBox(14, new VBox(6, modelLabel, modelRow), new VBox(6, answerModelLabel, quickSettingsAnswerModel, answerModelHint),
                 new VBox(7, reasoningLabel, reasoningSegments, quickSettingsReasoning, quickSettingsReasoningHint),
                 new VBox(6, safetyLabel, quickSettingsSafety, safetyHint), quickSettingsStream);
         conversation.getStyleClass().add("quick-settings-card");
@@ -1178,6 +1187,7 @@ final class PetControlWindow {
                 || quickSettingsModel.getValue() == null || quickSettingsSafety.getValue() == null) return;
         JsonObject draft = new JsonObject();
         draft.addProperty("modelValue", quickSettingsModel.getValue().value());
+        draft.addProperty("answerModelValue", quickSettingsAnswerModel.getValue() == null ? "" : quickSettingsAnswerModel.getValue().value());
         draft.addProperty("reasoningLevel", reasoningValue((int) Math.round(quickSettingsReasoning.getValue())));
         draft.addProperty("safetyMode", quickSettingsSafety.getValue().value());
         draft.addProperty("stream", quickSettingsStream.isSelected());
@@ -1208,6 +1218,7 @@ final class PetControlWindow {
         if (quickSettingsApply.isDisabled() || quickSettingsModel.getValue() == null || quickSettingsSafety.getValue() == null || !quickSettingsReasoningValid) return;
         JsonObject options = new JsonObject();
         options.addProperty("modelValue", quickSettingsModel.getValue().value());
+        options.addProperty("answerModelValue", quickSettingsAnswerModel.getValue() == null ? "" : quickSettingsAnswerModel.getValue().value());
         options.addProperty("safetyMode", quickSettingsSafety.getValue().value());
         options.addProperty("stream", quickSettingsStream.isSelected());
         options.addProperty("reasoningLevel", reasoningValue((int) Math.round(quickSettingsReasoning.getValue())));
@@ -1262,6 +1273,8 @@ final class PetControlWindow {
             quickSettingsSessionId = sessionId;
             String modelValue = quickSettingsDirty && quickSettingsModel.getValue() != null
                     ? quickSettingsModel.getValue().value() : quickSettingText(state, "modelValue");
+            String answerModelValue = quickSettingsDirty && quickSettingsAnswerModel.getValue() != null
+                    ? quickSettingsAnswerModel.getValue().value() : quickSettingText(state, "answerModelValue");
             syncingQuickSettings = true;
             quickSettingsModel.getItems().clear();
             if (state.has("models") && state.get("models").isJsonArray()) {
@@ -1277,6 +1290,19 @@ final class PetControlWindow {
                 quickSettingsModel.getItems().add(selected);
             }
             quickSettingsModel.setValue(selected);
+            quickSettingsAnswerModel.getItems().clear();
+            quickSettingsAnswerModel.getItems().add(new QuickSettingChoice("", "跟随推理模型"));
+            if (state.has("models") && state.get("models").isJsonArray()) {
+                for (var entry : state.getAsJsonArray("models")) {
+                    if (!entry.isJsonObject()) continue;
+                    JsonObject model = entry.getAsJsonObject();
+                    String value = quickSettingText(model, "value");
+                    if (!value.isEmpty()) quickSettingsAnswerModel.getItems().add(new QuickSettingChoice(value, quickSettingText(model, "label")));
+                }
+            }
+            QuickSettingChoice selectedAnswer = quickSettingsAnswerModel.getItems().stream().filter(option -> option.value().equals(answerModelValue)).findFirst().orElse(null);
+            if (selectedAnswer == null && !answerModelValue.isEmpty()) { selectedAnswer = new QuickSettingChoice(answerModelValue, "已选择的模型（目录未列出）"); quickSettingsAnswerModel.getItems().add(selectedAnswer); }
+            quickSettingsAnswerModel.setValue(selectedAnswer == null ? quickSettingsAnswerModel.getItems().get(0) : selectedAnswer);
             quickSettingsReasoningValid = quickSettingFlag(state, "reasoningValid");
             if (!quickSettingsDirty) {
                 String safety = quickSettingText(state, "safetyMode");
@@ -1312,6 +1338,7 @@ final class PetControlWindow {
             quickSettingsScope.setText(quickSettingText(state, "scopeLabel"));
             boolean locked = quickSettingFlag(state, "loading") || quickSettingFlag(state, "busy") || !quickSettingFlag(state, "ready");
             quickSettingsModel.setDisable(locked);
+            quickSettingsAnswerModel.setDisable(locked);
             quickSettingsSafety.setDisable(locked);
             quickSettingsStream.setDisable(locked);
             quickSettingsRefresh.setDisable(quickSettingFlag(state, "loading") || quickSettingFlag(state, "busy"));
@@ -2313,8 +2340,10 @@ final class PetControlWindow {
             System.out.println("[pet-chat] bridge parsed questionLength=" + question.length() + " conversationId=" + conversationId + " mode=" + mode);
             String model = payload.has("llm_model") ? payload.get("llm_model").getAsString() : "";
             String client = payload.has("llm_client") ? payload.get("llm_client").getAsString() : "";
+            String answerModel = payload.has("llm_answer_model") ? payload.get("llm_answer_model").getAsString() : "";
+            String answerClient = payload.has("llm_answer_client") ? payload.get("llm_answer_client").getAsString() : "";
             String reasoningLevel = payload.has("llm_reasoning_level") ? payload.get("llm_reasoning_level").getAsString() : "";
-            sendChatRequest(question, conversationId, mode, safetyMode, client, model, reasoningLevel, attachmentIds, resumable);
+            sendChatRequest(question, conversationId, mode, safetyMode, client, model, answerClient, answerModel, reasoningLevel, attachmentIds, resumable);
         } catch (RuntimeException error) {
             System.err.println("[pet-chat] bridge parse failed: " + error.getMessage());
             deliverChatResponse(jsonObject("error", "Desktop bridge parse failed: " + error.getMessage()));
@@ -2334,6 +2363,8 @@ final class PetControlWindow {
             }
             String model = payload.has("llm_model") ? payload.get("llm_model").getAsString() : "";
             String client = payload.has("llm_client") ? payload.get("llm_client").getAsString() : "";
+            String answerModel = payload.has("llm_answer_model") ? payload.get("llm_answer_model").getAsString() : "";
+            String answerClient = payload.has("llm_answer_client") ? payload.get("llm_answer_client").getAsString() : "";
             String safetyMode = payload.has("safety_review_mode") ? payload.get("safety_review_mode").getAsString() : "";
             String reasoningLevel = payload.has("llm_reasoning_level") ? payload.get("llm_reasoning_level").getAsString() : "";
             String attachmentIds = payload.has("attachment_ids") ? payload.get("attachment_ids").toString() : "[]";
@@ -2348,7 +2379,7 @@ final class PetControlWindow {
             Boolean resumable = bridgeResumable(payload);
             String selectedResponseMode = responseMode, callbackId = requestId, sessionId = conversationId;
             String selectedReasoningLevel = reasoningLevel;
-            Thread worker = new Thread(() -> sendChatStreamRequest(question, sessionId, client, model, safetyMode, selectedReasoningLevel, attachmentIds, resumable, selectedResponseMode, callbackId), "pet-chat-stream");
+            Thread worker = new Thread(() -> sendChatStreamRequest(question, sessionId, client, model, answerClient, answerModel, safetyMode, selectedReasoningLevel, attachmentIds, resumable, selectedResponseMode, callbackId), "pet-chat-stream");
             worker.setDaemon(true);
             worker.start();
         } catch (RuntimeException error) {
@@ -2362,13 +2393,15 @@ final class PetControlWindow {
         return payload.get("resumable").getAsBoolean();
     }
 
-    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String safetyMode, String reasoningLevel, String attachmentIds, Boolean resumable, String responseMode, String requestId) {
+    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String answerClient, String answerModel, String safetyMode, String reasoningLevel, String attachmentIds, Boolean resumable, String responseMode, String requestId) {
         String requestJson = "{\"session_id\":" + jsonString(conversationId == null ? "" : conversationId)
                 + ",\"user_input\":" + jsonString(question == null ? "" : question)
                 + ",\"attachment_ids\":" + (attachmentIds == null ? "[]" : attachmentIds)
                 + ",\"llm\":{\"response_mode\":" + jsonString(responseMode)
                 + (client == null || client.isBlank() ? "" : ",\"client_name\":" + jsonString(client))
                 + (model == null || model.isBlank() ? "" : ",\"model\":" + jsonString(model))
+                + (answerClient == null || answerClient.isBlank() ? "" : ",\"answer_client_name\":" + jsonString(answerClient))
+                + (answerModel == null || answerModel.isBlank() ? "" : ",\"answer_model\":" + jsonString(answerModel))
                 + (reasoningLevel == null || reasoningLevel.isBlank() ? "" : ",\"reasoning_level\":" + jsonString(reasoningLevel)) + "}"
                 + (safetyMode == null || safetyMode.isBlank() ? "" : ",\"safety_review_mode\":" + jsonString(safetyMode))
                 + (resumable == null ? "" : ",\"resumable\":" + resumable) + "}";
@@ -3036,7 +3069,7 @@ final class PetControlWindow {
         });
     }
 
-    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model, String reasoningLevel, String attachmentIds, Boolean resumable) {
+    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model, String answerClient, String answerModel, String reasoningLevel, String attachmentIds, Boolean resumable) {
         Thread worker = new Thread(() -> {
             String responseJson;
             try {
@@ -3046,10 +3079,12 @@ final class PetControlWindow {
                 requestBody.add("attachment_ids", JsonParser.parseString(attachmentIds == null ? "[]" : attachmentIds));
                 if (safetyMode != null && !safetyMode.isBlank()) requestBody.addProperty("safety_review_mode", safetyMode);
                 if (resumable != null) requestBody.addProperty("resumable", resumable);
-                if ((client != null && !client.isBlank()) || (model != null && !model.isBlank()) || (reasoningLevel != null && !reasoningLevel.isBlank())) {
+                if ((client != null && !client.isBlank()) || (model != null && !model.isBlank()) || (answerClient != null && !answerClient.isBlank()) || (answerModel != null && !answerModel.isBlank()) || (reasoningLevel != null && !reasoningLevel.isBlank())) {
                     JsonObject llm = new JsonObject();
                     if (client != null && !client.isBlank()) llm.addProperty("client_name", client);
                     if (model != null && !model.isBlank()) llm.addProperty("model", model);
+                    if (answerClient != null && !answerClient.isBlank()) llm.addProperty("answer_client_name", answerClient);
+                    if (answerModel != null && !answerModel.isBlank()) llm.addProperty("answer_model", answerModel);
                     if (reasoningLevel != null && !reasoningLevel.isBlank()) llm.addProperty("reasoning_level", reasoningLevel);
                     requestBody.add("llm", llm);
                 }

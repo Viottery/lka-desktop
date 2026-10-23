@@ -15,6 +15,11 @@ body.quick-mode #newQuickSessionButton svg { width: 18px; height: 18px; }
 .qs-model-row { display: flex; gap: 6px; align-items: center; }
 .qs-panel select { width: 100%; min-width: 0; height: 37px; padding: 6px 9px; border: 1px solid #dbe8e5; border-radius: 8px; background: white; color: #203c3a; font: inherit; font-size: 12px; text-overflow: ellipsis; }
 .qs-panel small, .qs-help { color: #789491; font-size: 12px; line-height: 1.6; }
+.qs-advanced { margin: -4px 0 16px; border-top: 1px solid #dbe8e5; padding-top: 10px; }
+.qs-advanced summary, .advanced-model-settings summary { color: #53756f; font-size: 12px; cursor: pointer; }
+.qs-advanced .qs-field { margin: 12px 0 8px; }
+.advanced-model-settings { margin-top: 12px; border-top: 1px solid #dbe8e5; padding-top: 9px; }
+.advanced-model-body { padding-top: 10px; }
 .qs-switch { display: flex; align-items: center; justify-content: space-between; padding-top: 16px; border-top: 1px solid #dbe8e5; }
 .qs-switch input { accent-color: #53756f; width: 16px; height: 16px; }
 .qs-help { margin: 6px 0 0; }

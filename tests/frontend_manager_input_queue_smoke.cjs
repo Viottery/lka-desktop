@@ -122,7 +122,23 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await page.locator('.message.assistant').filter({hasText:'原任务已完成'}).waitFor();assert.equal(await page.locator('.message.assistant').filter({hasText:'原任务已完成'}).count(),1);
   // Failed execution pauses the FIFO; resuming follows the backend's new root.
   receipts[1].status='failed';activeRun=null;paused=true;runStatuses.set('root-2','failed');finish('root-2','failed');
-  const priorDraft=await page.locator('#questionInput').inputValue();await page.locator('#questionInput').fill('');await page.getByRole('button',{name:'继续处理消息',exact:true}).waitFor();await page.getByRole('button',{name:'继续处理消息',exact:true}).click();await page.locator('#questionInput').fill(priorDraft);await wait(()=>streams.has('root-3'));runStatuses.set('root-3','running');
+  const priorDraft=await page.locator('#questionInput').inputValue();
+  const pendingPosts=requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').length;
+  await page.locator('#managerInputQueueNotice').waitFor();
+  assert((await page.locator('#managerInputQueueNotice').textContent()).includes('上一轮未完成，消息已收到，等待继续'));
+  assert.equal(await page.locator('#sendButton').getAttribute('data-action'),'send','draft keeps its send action');
+  await page.evaluate(()=>LkaChatContext.openSession('ordinary'));
+  await page.locator('#managerInputQueueNotice').waitFor({state:'hidden'});
+  await page.evaluate(()=>LkaChatContext.openSession('manager-queue'));
+  await page.locator('#managerInputQueueNotice').waitFor();
+  const nextInput=receipts.filter(r=>r.status==='queued'&&!r.run_id).sort((a,b)=>a.sequence-b.sequence)[0].input_id;
+  await page.locator('#managerInputQueueNotice').getByRole('button',{name:'改用推理模型继续',exact:true}).click();
+  await wait(()=>requests.some(r=>r.route.endsWith('/inputs/resume')&&r.body.input_id===nextInput));
+  assert.deepEqual(requests.filter(r=>r.route.endsWith('/inputs/resume')).at(-1).body,{input_id:nextInput,answer_client_name:null,answer_model:null});
+  await wait(()=>streams.has('root-3'));runStatuses.set('root-3','running');
+  assert.equal(await page.locator('#questionInput').inputValue(),priorDraft,'queue continuation preserves unsent draft');
+  assert.equal(requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').length,pendingPosts,'continuation does not resend failed messages');
+  await page.locator('#managerInputQueueNotice').waitFor({state:'hidden'});
   assert(requests.some(r=>r.route.endsWith('/inputs/resume')&&r.method==='POST'));
   // A rejected submission preserves later drafts and blocks later local sends.
   failNext=true;await page.locator('#questionInput').fill('需要重试');await page.locator('#sendButton').click();
@@ -175,6 +191,7 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await page.evaluate(()=>LkaChatContext.openSession('manager-queue'));
   await page.locator('#sendButton[data-action=resume]').waitFor();
   assert.equal(await page.locator('#sendButton').getAttribute('aria-label'),'继续任务');
+  assert.equal(await page.locator('#managerInputQueueNotice button').first().isDisabled(),true,'queue continuation cannot resume an active paused root');
   assert.equal(requests.filter(r=>r.route==='/agent/runs/root-5/stream').length,0,'returning to paused root still does not subscribe');
   // Empty resume preserves the original instruction/run. A new instruction
   // after another pause supersedes only that task, ahead of the saved backlog.
@@ -241,20 +258,21 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await wait(()=>history.some(m=>m.content==='从旧阅读位置发送'));
   const latestQuestion=fresh.locator('.message.user').filter({hasText:'从旧阅读位置发送'}).last();await latestQuestion.waitFor();
   await fresh.waitForFunction(()=>{const box=document.querySelector('#messages'),row=Array.from(box.querySelectorAll('.message.user')).find(x=>x.textContent.includes('从旧阅读位置发送'));if(!row)return false;const b=box.getBoundingClientRect(),r=row.getBoundingClientRect();return r.bottom>b.top&&r.top<b.bottom;});
-  // A persisted empty paused queue is completely quiet. If unfinished
-  // messages later need explicit recovery, reuse the existing composer icon.
+  // A persisted empty paused queue is quiet. Pending messages expose explicit
+  // recovery while keeping the existing empty-composer continuation icon.
   await freshContext.close();receipts=[];history=[];activeRun=null;paused=true;
   const quietContext=await browser.newContext({viewport:{width:1280,height:800}}),quiet=await quietContext.newPage();quiet.on('pageerror',e=>errors.push(e.message));
   await quiet.goto(origin+'/chat.html?mode=work&assistant=global&backend='+encodeURIComponent(origin));
   await quiet.locator('#chatForm[data-input-mode=continuous]').waitFor();
   assert.equal(await quiet.locator('#inputQueueControls,.input-queue-status').count(),0,'paused empty queue creates no visible status UI');
+  assert.equal(await quiet.locator('#managerInputQueueNotice').isVisible(),false,'empty queue has no recovery notice');
   assert.equal(await quiet.locator('#sendButton').getAttribute('data-action'),'send','nothing to resume when queue is empty');
   const resumedBefore=requests.filter(r=>r.route.endsWith('/inputs/resume')).length;
   receipts.push({input_id:'quiet-input',client_message_id:'quiet-input',message_id:'quiet-message',sequence:1,status:'queued',run_id:null});
   history.push({message_id:'quiet-message',role:'user',content:'仍需继续的消息',payload:{client_message_id:'quiet-input'}});
   await quiet.getByRole('button',{name:'继续处理消息',exact:true}).waitFor();
   assert.equal(await quiet.locator('#sendButton').innerText(),'','continuation uses the existing icon');
-  assert.equal(await quiet.locator('#inputQueueControls,.input-queue-status').count(),0);
+  await quiet.locator('#managerInputQueueNotice').waitFor();
   assert.equal(requests.filter(r=>r.route.endsWith('/inputs/resume')).length,resumedBefore,'no automatic continuation');
   await quiet.waitForTimeout(300);await quiet.getByRole('button',{name:'继续处理消息',exact:true}).click();
   await wait(()=>requests.filter(r=>r.route.endsWith('/inputs/resume')).length===resumedBefore+1);
