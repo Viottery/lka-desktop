@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const panel = document.getElementById('qqReaderPanel');
-  if (!panel) return;
+  if (!panel || window.LkaMessageApiDisabled) return;
   const refresh = document.getElementById('qqReaderRefresh');
   const nonce = Math.random().toString(36).slice(2);
   const pending = new Map();

@@ -60,6 +60,9 @@ const server = http.createServer(async (req, res) => {
   if (p === '/plugins/qq-reader/status') return json(res, { enabled: false, connection_state: 'disconnected' });
   if (p === '/plugins/qq-ui/status') return json(res, { enabled: false, ready: false, reading_paired: true });
   if (p === '/favicon.ico') { res.writeHead(204); return res.end(); }
+  // Local mode: a standalone backend and a frontend service without a cloud.
+  if (p === '/client/info') return json(res, { detail: 'Not Found' }, 404);
+  if (p === '/cloud-auth/status') return json(res, { configured: false, logged_in: false, account: null, origin: '', expires_at: 0 });
   unknown.push(req.method + ' ' + p); return json(res, { detail: 'Unmocked ' + p }, 404);
 });
 const within = async (page, selector) => {

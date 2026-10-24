@@ -6,7 +6,7 @@
   <meta http-equiv="Cache-Control" content="no-store">
   <title>理事所 · 工作台</title>
   <link rel="icon" type="image/png" href="./assets/ursus-student-emblem.png">
-  <link rel="stylesheet" href="./chat.css?v=20261023-dual-model">
+  <link rel="stylesheet" href="./chat.css?v=20261023-workspace-up">
   <link rel="stylesheet" href="./markdown.css?v=20260930-markdown">
   <link rel="stylesheet" href="./memory.css?v=20261022-projects2">
   <link rel="stylesheet" href="./matters.css?v=20261022-studio3">
@@ -22,6 +22,8 @@
   <link rel="stylesheet" href="./workbench-layout.css?v=20261020-reading">
   <link rel="stylesheet" href="./workbench-theme.css?v=20261022-bubble-reveal">
   <link rel="stylesheet" href="./workbench-studio.css?v=20261022-rail2">
+  <link rel="stylesheet" href="./cluster.css?v=20261024-cluster">
+  <script src="./lka-host.js?v=20261024-native-cloud"></script>
 </head>
 <body>
   <main class="chat-shell" id="chatShell">
@@ -100,7 +102,7 @@
       <div class="rail-panel files-panel" id="filesPanel" role="tabpanel" hidden>
         <div class="workspace-file-heading"><strong>电脑文件</strong><button id="fileChooseWorkspaceButton" type="button" class="text-action" title="浏览电脑文件夹并切换工作区">切换目录</button></div>
         <p id="fileWorkspaceLabel" class="file-workspace-label" title="当前会话在电脑上的工作目录"></p>
-        <div class="file-toolbar"><button id="fileUpButton" type="button" class="text-action" title="返回上一级">上一级</button><button id="fileUploadButton" type="button" class="file-upload-button" title="把文件保存到当前电脑目录">上传到这里</button><button id="refreshFilesButton" type="button" class="text-action" title="刷新文件列表">刷新</button></div>
+        <div class="file-toolbar"><button id="fileUpButton" type="button" class="text-action" title="已到工作区根目录，无法返回上一级" disabled>上一级</button><button id="fileUploadButton" type="button" class="file-upload-button" title="把文件保存到当前电脑目录">上传到这里</button><button id="refreshFilesButton" type="button" class="text-action" title="刷新文件列表">刷新</button></div>
         <input id="workspaceUploadInput" type="file" multiple hidden>
         <p class="file-transfer-hint">保存到当前目录 · 单个文件最多 256 MiB</p>
         <p id="fileCurrentPath" class="file-current-path">当前工作区</p>
@@ -185,16 +187,16 @@
   <script src="./mobile.js?v=20261021-followup-icon"></script>
   <script src="./image-composer.js?v=20261020-compat"></script>
   <script src="./conversation-position.js?v=20261020-reading"></script>
-  <script src="./chat.js?v=20261023-dual-model"></script>
-  <script src="./memory.js?v=20261022-studio"></script>
-  <script src="./matters-host.js?v=20261020-compat"></script>
+  <script src="./chat.js?v=20261024-native-cloud"></script>
+  <script src="./memory.js?v=20261024-cloud-config"></script>
+  <script src="./matters-host.js?v=20261024-native-cloud-20261020-compat"></script>
   <script src="./global-assistant.js?v=20261022-topics"></script>
   <script src="./matter-store.js?v=20261022-delete"></script>
   <script src="./matter-calendar.js?v=20261019-layout"></script>
   <script src="./matters.js?v=20261022-studio"></script>
   <script src="./projects.js?v=20261022-clarity2"></script>
   <script src="./quick-chat.js?v=20261023-dual-model"></script>
-  <script src="./quick-assistant.js?v=20261021-assistant-sync"></script>
+  <script src="./quick-assistant.js?v=20261024-native-cloud"></script>
   <script src="./quick-presence.js?v=20261022-bubble-reveal"></script>
   <script src="./quick-bubble.js?v=20261022-bubble-reveal"></script>
   <script src="./quick-settings.js?v=20261023-dual-model"></script>
@@ -209,5 +211,6 @@
   <script src="./workspace-picker.js?v=20261008-remote-folders"></script>
   <script src="./workspace-files.js?v=20261008-upload-256m"></script>
   <script src="./workbench-nav.js?v=20261021-ui"></script>
+  <script src="./cluster.js?v=20261024-cluster"></script>
 </body>
 </html>

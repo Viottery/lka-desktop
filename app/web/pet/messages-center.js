@@ -1,7 +1,7 @@
 /* A conversation-first workbench for local evidence and explicit QQ sending. */
 (function () {
   'use strict';
-  if (!window.LkaMessageApi) return;
+  if (!window.LkaMessageApi || window.LkaMessageApiDisabled) return;
   const api = window.LkaMessageApi;
   const byId = id => document.getElementById(id);
   const node = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = String(text); if (cls) n.className = cls; return n; };

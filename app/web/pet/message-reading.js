@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   const host = document.getElementById('messageHistoryPanel');
-  if (!host) return;
+  if (!host || window.LkaMessageApiDisabled) return;
   const el = (tag, text, cls) => { const n = document.createElement(tag); if (text !== undefined) n.textContent = String(text); if (cls) n.className = cls; return n; };
   const root = el('section', undefined, 'message-reading'); root.setAttribute('aria-label', '消息阅读中心');
   host.insertBefore(root, document.getElementById('messagePolicyForm'));

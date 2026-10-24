@@ -1,6 +1,8 @@
 (function () {
   "use strict";
   if (!window.LkaChatContext) return;
+  // Node pages read the shared memory mirror in 设备与账号, not the cloud archive.
+  if (window.LkaHost && window.LkaHost.hosted && window.LkaHost.role === "replica") return;
   var chat = window.LkaChatContext;
   var state = { scope: "global", tab: "entries", rows: [], next: null, selected: null,
     generation: 0, projectId: null, token: "", config: null, schema: null, models: null,
@@ -8,6 +10,16 @@
   var typeNames = { preference: "偏好", project_decision: "项目决策", user_fact: "个人事实" };
   var statusNames = { active: "已生效", candidate: "候选", retracted: "已撤回", superseded: "已替代",
     queued: "排队中", running: "处理中", retry_wait: "等待重试", succeeded: "已完成", failed: "失败", cancelled: "已取消" };
+  var jobDescriptions = {
+    memory_extract: { name: "学习长期记忆", description: "从对话中提取值得长期保留的信息。" },
+    memory_consolidate: { name: "合并整理记忆", description: "整理重复或互补的记忆，保留相关来源。" },
+    context_compact: { name: "整理对话上下文", description: "整理较早的对话，供后续交流使用；原始记录仍保留。" },
+    context_records: { name: "整理对话要点", description: "将对话中的任务、结论与待办整理为可追溯的记录。" },
+    instruction_index: { name: "整理指导文件", description: "整理用户与项目的指导文件，供助理查阅。" },
+    message_analysis: { name: "分析聊天消息", description: "分析已授权的聊天记录，整理话题与重要信息。" },
+    manager_wake: { name: "唤醒助理跟进事项", description: "汇集待处理事件与到期提醒，安排助理继续跟进。" },
+    agent_dispatch: { name: "执行助理任务", description: "启动或继续会话中的助理任务，按要求思考并调用工具。" }
+  };
   var requestSequence = 0, requestNonce = Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
   var bridgePending = {}, streamController = null, lastFocus = null, editorFocus = null, saveNoticeTimer = null;
   function esc(value) { return String(value == null ? "" : value).replace(/[&<>"']/g, function (c) {
@@ -69,7 +81,10 @@
   };
   async function api(path, method, body) {
     method = method || "GET";
-    if (window.petBridge && typeof window.petBridge.requestMemory === "function") {
+    var routingHost = window.LkaHost;
+    if (routingHost) await routingHost.ready;
+    var cloudRequest = !!(routingHost && routingHost.routesViaCloud && routingHost.routesViaCloud(path));
+    if (!cloudRequest && window.petBridge && typeof window.petBridge.requestMemory === "function") {
       return new Promise(function (resolve, reject) {
         var id = "memory-" + requestNonce + "-" + (++requestSequence);
         bridgePending[id] = { resolve: resolve, reject: reject, timer: setTimeout(function () {
@@ -80,13 +95,13 @@
         catch (error) { clearTimeout(bridgePending[id].timer); delete bridgePending[id]; reject(error); }
       });
     }
-    if (document.body.classList.contains("native-composer") && method !== "GET") {
+    if (!cloudRequest && document.body.classList.contains("native-composer") && method !== "GET") {
       throw new Error("桌面通信适配尚未就绪，请更新并重新启动 Java 桌宠后再操作。");
     }
     var controller = new AbortController(), timeout = setTimeout(function () { controller.abort(); }, 25000);
     try {
       var headers = { Accept: "application/json" };
-      if (state.token) headers.Authorization = "Bearer " + state.token;
+      if (state.token && !cloudRequest) headers.Authorization = "Bearer " + state.token;
       if (body !== undefined) headers["Content-Type"] = "application/json";
       var response = await fetch(context().backend + path, { method: method, headers: headers,
         body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal });
@@ -466,7 +481,7 @@
   function renderJobs() {
     el("memoryContent").innerHTML = '<div class="memory-toolbar memory-job-toolbar"><label>任务范围<select id="memoryJobScope"><option value="all">所有后台任务</option><option value="session">当前会话</option></select></label>' +
       '<label>状态<select id="memoryJobStatus"><option value="">全部状态</option>' + ["queued", "running", "retry_wait", "failed", "cancelled", "succeeded"].map(function (s) { return '<option value="' + s + '">' + statusNames[s] + '</option>'; }).join("") +
-      '</select></label><button id="memoryJobRefresh">刷新</button></div><div id="memoryHealth"></div><p class="memory-note">后台整理与当前对话独立。取消不能撤销已完成的结果，也不保证中止已发出的模型调用。</p><div id="memoryJobs">正在读取任务…</div>';
+      '</select></label><button id="memoryJobRefresh">刷新</button></div><div id="memoryHealth"></div><p class="memory-note">这里显示记忆学习、对话整理、助理任务执行等后台工作。取消不能撤销已完成的结果，也不保证中止已发出的模型调用。</p><div id="memoryJobs">正在读取任务…</div>';
     el("memoryJobStatus").onchange = function () { run(null, loadJobs); }; el("memoryJobScope").onchange = function () { run(null, loadJobs); };
     el("memoryJobRefresh").onclick = function () { run(this, loadJobs); };
     run(null, loadJobs); startStream();
@@ -492,10 +507,12 @@
         '<p class="memory-note">' + (workload.cost_pricing_configured ? "近 24 小时估算费用：" + esc(usage.cost.toFixed(4)) + "（按后台配置单价计算，非账单）" : "未配置计费单价，无法估算费用。") + '</p>' +
         (results[0].last_memory_file_error ? '<p class="memory-restart">记忆文件同步异常，请在导出与文件中检查。</p>' : "");
       el("memoryJobs").innerHTML = state.jobs.map(function (job, index) {
+        var description = Object.prototype.hasOwnProperty.call(jobDescriptions, job.kind) ? jobDescriptions[job.kind] :
+          { name: "其他后台任务", description: "由后台服务处理的其他任务。" };
         var retryable = ["memory_extract", "context_compact"].indexOf(job.kind) !== -1 && ["failed", "cancelled"].indexOf(job.status) !== -1;
         var cancellable = ["queued", "running", "retry_wait"].indexOf(job.status) !== -1;
-        return '<article class="memory-job" data-status="' + esc(job.status) + '"><span class="memory-job-dot" aria-hidden="true"></span><strong>' + esc({ memory_extract: "学习记忆", context_compact: "整理上下文", instruction_index: "整理指导文件" }[job.kind] || job.kind) + '</strong> ' +
-          '<span class="memory-tag' + (job.status === "failed" ? ' warning' : '') + '">' + esc(statusNames[job.status] || job.status) + '</span><p>' + esc(job.job_id) + '</p><p>更新于 ' + esc(date(job.updated_at)) + ' · 尝试 ' + esc(job.attempts || 0) + ' 次</p>' +
+        return '<article class="memory-job" data-status="' + esc(job.status) + '"><span class="memory-job-dot" aria-hidden="true"></span><strong>' + esc(description.name) + '</strong> ' +
+          '<span class="memory-tag' + (job.status === "failed" ? ' warning' : '') + '">' + esc(statusNames[job.status] || job.status) + '</span><p>' + esc(description.description) + '</p><p>任务编号：' + esc(job.job_id) + '</p><p>更新于 ' + esc(date(job.updated_at)) + ' · 尝试 ' + esc(job.attempts || 0) + ' 次</p>' +
           (job.error_class ? '<p>失败原因：' + esc(job.error_class) + '</p>' : "") +
           '<div class="memory-actions">' + (retryable ? '<button data-job-index="' + index + '" data-job-action="retry">重试</button>' : "") +
           (cancellable ? '<button data-job-index="' + index + '" data-job-action="cancel">取消任务</button>' : "") + '</div></article>';
@@ -521,7 +538,12 @@
     var generation = state.generation;
     el("memoryContent").innerHTML = '<p class="memory-note">正在读取设置与字段约束…</p>';
     try {
-      var data = await Promise.all([api("/background/config"), api("/background/config/schema"), api("/agent/models")]);
+      var configHost = window.LkaHost;
+      if (configHost) await configHost.ready;
+      // The form's model catalogue must belong to the server whose config is edited.
+      var modelsRequest = configHost && configHost.routesViaCloud && configHost.routesViaCloud("/background/config")
+        ? configHost.request(configHost.cloudBase(), "/agent/models") : api("/agent/models");
+      var data = await Promise.all([api("/background/config"), api("/background/config/schema"), modelsRequest]);
       if (generation !== state.generation) return;
       state.config = data[0]; state.schema = data[1]; state.models = data[2];
       var html = '<p class="memory-note">自动学习开关立即生效；以下系统设置保存后需要重启后端。保存不会中断当前对话。页面不提供后端自重启。</p>' +

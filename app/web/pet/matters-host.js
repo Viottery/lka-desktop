@@ -71,7 +71,10 @@
     method = String(method || "GET").toUpperCase();
     await ready;
     if (!standalone && memory) return memory.request(path, method, body);
-    if (nativeMode) {
+    var routingHost = window.LkaHost;
+    if (routingHost) await routingHost.ready;
+    var cloudRequest = !!(routingHost && routingHost.routesViaCloud && routingHost.routesViaCloud(path));
+    if (nativeMode && !cloudRequest) {
       return new Promise(function (resolve, reject) {
         var id = "memory-" + nonce + "-" + (++sequence);
         pending[id] = { resolve: resolve, reject: reject, timer: setTimeout(function () {
@@ -86,7 +89,7 @@
     var controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 30000);
     try {
       var headers = { Accept: "application/json" };
-      if (token) headers.Authorization = "Bearer " + token;
+      if (token && !cloudRequest) headers.Authorization = "Bearer " + token;
       if (body !== undefined) headers["Content-Type"] = "application/json";
       var response = await fetch(backend() + path, { method: method, headers: headers,
         body: body === undefined ? undefined : JSON.stringify(body), signal: controller.signal });

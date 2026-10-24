@@ -85,6 +85,8 @@ _ROUTES = (
     ("PATCH", r"background/config", set()), ("DELETE", r"background/config", {"expected_revision"}),
     ("GET", r"background/events", {"interval"}),
     ("POST", r"workspaces/index", set()), ("GET", r"openapi\.json", set()),
+    # Credential-free role probe; tells the page whether this backend runs 真理.
+    ("GET", r"client/info", set()),
 )
 _MAX_BODY = 1024 * 1024
 _MAX_RESPONSE = 8 * 1024 * 1024

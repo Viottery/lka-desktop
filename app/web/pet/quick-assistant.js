@@ -32,7 +32,8 @@
   function report(error) {
     if (error.detail === 'management_disabled') return '真理尚未启用；你也可以先使用「新任务」。';
     if (error.status === 409) return '管理状态已变化，请核对最新状态后重试。';
-    if (error.status === 401 || error.status === 403) return '管理连接没有权限，请检查本机配对。';
+    if (error.status === 401 || error.status === 403) return window.LkaHost && window.LkaHost.backendRole === 'replica'
+      ? '云端助理连接未获授权，请在设备面板重新登录云端账号。' : '管理连接没有权限，请检查本机配对。';
     return error.message || '暂时无法读取跟进状态，请稍后重试。';
   }
   function accept(value) {

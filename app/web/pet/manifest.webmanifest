@@ -1,0 +1,10 @@
+{
+  "name": "理事所",
+  "short_name": "理事所",
+  "start_url": "./connect.html",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#f6f8f7",
+  "theme_color": "#17333b",
+  "icons": [{ "src": "./assets/ursus-student-emblem.png", "sizes": "any", "type": "image/png" }]
+}

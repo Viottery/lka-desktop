@@ -16,6 +16,7 @@
     "test:messages": "node tests/frontend_messages_smoke.cjs",
     "test:message-refresh": "node tests/frontend_message_refresh_smoke.cjs",
     "test:mobile": "node tests/frontend_mobile_smoke.cjs",
+    "test:cluster": "node tests/frontend_cluster_smoke.cjs",
     "test:safety-feedback": "node tests/frontend_safety_review_feedback.cjs",
     "test:images": "node tests/frontend_image_composer_smoke.cjs",
     "test:files": "node tests/frontend_workspace_files_smoke.cjs",

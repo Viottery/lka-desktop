@@ -18,9 +18,12 @@
   }
   function sameView(a, b) { return a.sessionId === b.sessionId && a.workspace === b.workspace && a.path === b.path; }
   function sync() {
-    var view = chat.getFileContext(), label = el('fileWorkspaceLabel');
-    label.textContent = view.workspace || '本次任务的独立工作区'; label.title = view.workspace || '';
-    el('fileUploadButton').disabled = preparing || !view.sessionId;
+    var view = chat.getFileContext(), label = el('fileWorkspaceLabel'), direct = chat.get().nodeBoundary;
+    label.textContent = direct ? (view.workspaceId ? '设备工作区 · ' + view.workspaceId : '请选择设备上的工作区') : view.workspace || '本次任务的独立工作区';
+    label.title = direct ? '' : view.workspace || '';
+    el('fileChooseWorkspaceButton').hidden = !!direct;
+    document.querySelector('.file-transfer-hint').textContent = direct ? '保存到当前目录 · 单个文件最多 32 MiB · 同名文件不会被覆盖' : '保存到当前目录 · 单个文件最多 256 MiB';
+    el('fileUploadButton').disabled = preparing || !view.sessionId || direct && !view.workspaceId;
     el('fileUploadButton').textContent = preparing ? '准备目录…' : '上传到这里';
   }
   function stateLabel(item) {
@@ -66,7 +69,14 @@
       list.appendChild(row);
     });
   }
+  // Node workspaces use the node's own create-only transfer API (32 MiB).
+  var NODE_LIMIT = 32 * 1024 * 1024;
+  function nodeView(view) { return !!(view && view.workspaceId); }
   function url(item) {
+    if (nodeView(item.view)) {
+      var relative = item.kind === 'upload' ? [item.view.path, item.filename].filter(Boolean).join('/') : item.filePath;
+      return chat.get().backend + '/local/workspaces/' + encodeURIComponent(item.view.workspaceId) + '/file?path=' + encodeURIComponent(relative);
+    }
     return '/pet/workspace-files/' + encodeURIComponent(item.view.sessionId) + '/' + item.kind
       + '?path=' + encodeURIComponent(item.kind === 'upload' ? item.view.path : item.filePath)
       + '&workspace=' + encodeURIComponent(item.view.workspace);
@@ -86,7 +96,8 @@
         if (settled) return; settled = true;
         item.xhr = null; item.state = state; item.message = message || ''; render(); resolve();
       }
-      xhr.open(item.kind === 'upload' ? 'POST' : 'GET', url(item), true);
+      var direct = nodeView(item.view);
+      xhr.open(item.kind === 'upload' ? (direct ? 'PUT' : 'POST') : 'GET', url(item), true);
       xhr.timeout = 10 * 60 * 1000;
       xhr.responseType = item.kind === 'download' ? 'blob' : 'json';
       xhr.setRequestHeader('Accept', item.kind === 'download' ? 'application/octet-stream' : 'application/json');
@@ -98,7 +109,11 @@
         item.percent = event.lengthComputable ? Math.min(100, Math.round(event.loaded / event.total * 100)) : null; render();
       };
       xhr.onload = function () {
+        if (direct && xhr.status === 409) { done('failed', '设备上已有同名文件。直连上传不会覆盖，请改名后重试。'); return; }
         if (xhr.status < 200 || xhr.status >= 300) { done('failed', errorMessage(xhr.status)); return; }
+        if (item.kind === 'upload' && direct) {
+          done('done', '已保存到设备'); chat.refreshWorkspaceFiles(item.view); return;
+        }
         if (item.kind === 'upload') {
           var result = xhr.response;
           if (!result || typeof result.filename !== 'string' || typeof result.path !== 'string') { done('failed', '电脑未返回有效的保存结果，请刷新文件列表后确认。'); return; }
@@ -133,14 +148,15 @@
   el('workspaceUploadInput').addEventListener('change', async function () {
     var files = Array.prototype.slice.call(this.files || []); this.value = '';
     if (!files.length) return;
-    var view = chat.getFileContext();
-    var oversized = files.filter(function (file) { return file.size > MAX_UPLOAD; });
-    files = files.filter(function (file) { return file.size <= MAX_UPLOAD; });
-    if (oversized.length) notice('这些文件超过 256 MiB，未上传：' + oversized.map(function (file) { return file.name; }).join('、'), true);
+    var view = chat.getFileContext(), limit = nodeView(view) ? NODE_LIMIT : MAX_UPLOAD;
+    var oversized = files.filter(function (file) { return file.size > limit; });
+    files = files.filter(function (file) { return file.size <= limit; });
+    if (oversized.length) notice('这些文件超过 ' + (limit === NODE_LIMIT ? '32' : '256') + ' MiB，未上传：' + oversized.map(function (file) { return file.name; }).join('、'), true);
     if (!files.length || preparing) return;
     preparing = true; sync();
     try {
-      var backendSessionId = await chat.prepareWorkspace(view.sessionId);
+      // Node uploads need only an approved workspace ID, not a backend session.
+      var backendSessionId = nodeView(view) ? view.sessionId : await chat.prepareWorkspace(view.sessionId);
       var current = chat.getFileContext();
       if (current.sessionId !== backendSessionId || current.path !== view.path || view.workspace && current.workspace !== view.workspace) throw new Error('会话或目录已切换，请在目标目录重新选择文件。');
       view = current;
@@ -156,8 +172,9 @@
     downloadButton: function (entry, view) {
       var button = document.createElement('button'); button.type = 'button'; button.className = 'file-download-button';
       button.innerHTML = downloadIcon; button.setAttribute('aria-label', '下载 ' + entry.name); button.title = '下载到这台设备';
-      button.disabled = Number(entry.size_bytes) > MAX_DOWNLOAD;
-      if (button.disabled) button.title = '文件超过 256 MiB 下载限制';
+      var downloadLimit = nodeView(view) ? NODE_LIMIT : MAX_DOWNLOAD;
+      button.disabled = Number(entry.size_bytes) > downloadLimit;
+      if (button.disabled) button.title = '文件超过 ' + (downloadLimit === NODE_LIMIT ? '32' : '256') + ' MiB 下载限制';
       button.addEventListener('click', function () {
         notice('');
         var item = newItem('download', String(entry.name), Number(entry.size_bytes) || 0, view); item.filePath = entry.path;

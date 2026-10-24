@@ -86,6 +86,12 @@
   var globalAssistantLaunch = !managerEmbedding && urlParams.get("assistant") === "global" && !requestedSessionId;
   function isManagerSession(session) { return !!session && session.kind === "manager"; }
   function modelOverridesAllowed(sessionId) { return !managerEmbedding && !isManagerSession(getSessionById(sessionId)); }
+  // A page hosted by a node backend talks to that node directly: workspaces are
+  // approved IDs, files use /local/workspaces and only ordinary sessions exist.
+  var lkaHost = window.LkaHost || null;
+  var hostedPage = !!(lkaHost && lkaHost.hosted);
+  var nodeHosted = hostedPage && lkaHost.role === "replica";
+  if (hostedPage) document.body.classList.add("lka-hosted-page", nodeHosted ? "lka-node-page" : "lka-hub-page");
   document.body.classList.toggle("work-mode", workMode);
   document.body.classList.toggle("quick-mode", !workMode);
 
@@ -94,7 +100,8 @@
   }
 
   // v4: use unified conversation ids as session ids + editable titles.
-  var sessionsKey = "agentic-rag-pet-chat-sessions-v4";
+  // Hosted pages keep a separate cache from the local 8780 workbench.
+  var sessionsKey = "agentic-rag-pet-chat-sessions-v4" + (hostedPage ? "-" + lkaHost.role : "");
   var runCursorKeyPrefix = sessionsKey + "-run-cursor-";
   var activeSessionKey = "agentic-rag-pet-chat-active-session-v4" + (workMode ? "" : "-quick");
   var deletedSessionsKey = sessionsKey + "-deleted";
@@ -428,6 +435,11 @@
     if (reasoning.reasoningSupported) defaults.reasoning_level = runSettings.reasoningLevel;
     if (defaultsSaveStatus) { defaultsSaveStatus.textContent = "正在保存…"; defaultsSaveStatus.classList.remove("error"); }
     defaultsSaveChain = defaultsSaveChain.catch(function () {}).then(async function () {
+      if (nodeHosted) {
+        // Nodes accept only reads of shared defaults; keep the choice in this browser.
+        if (defaultsSaveStatus) defaultsSaveStatus.textContent = "已保存在此浏览器；设备的共享默认值由设备本机设置";
+        return;
+      }
       if (window.petBridge && typeof window.petBridge.saveUiDefaults === "function") {
         var bridgeResult = JSON.parse(window.petBridge.saveUiDefaults(JSON.stringify(defaults)) || "{}");
         if (bridgeResult.error) throw new Error(bridgeResult.error);
@@ -445,6 +457,7 @@
   }
 
   function resolveBackendBaseUrl() {
+    if (hostedPage) return window.location.origin;
     var fallback = "http://127.0.0.1:8765";
     var params = new URLSearchParams(window.location.search || "");
     var configured = safeText(params.get("backend") || params.get("backend_url") || window.LKA_BACKEND_URL).trim();
@@ -705,6 +718,9 @@
       id: conversationId,
       conversation_id: conversationId,
       kind: safeText(rawSession.kind).trim() || "ordinary",
+      remoteExecution: rawSession.remoteExecution || rawSession.remote_execution || rawSession.metadata && rawSession.metadata.remote_execution || null,
+      creationSource: safeText(rawSession.creationSource || rawSession.creation_source || rawSession.metadata && rawSession.metadata.creation_source).trim(),
+      creatorSessionId: safeText(rawSession.creatorSessionId || rawSession.creator_session_id || rawSession.metadata && rawSession.metadata.creator_session_id).trim(),
       backendHistoryVersion: rawSession.backendHistoryVersion === 1 ? 1 : 0,
       historyResetAt: safeText(rawSession.historyResetAt).trim(),
       title: normalizedTitle,
@@ -719,6 +735,8 @@
       // "reserved": the default folder is allocated by path only; the backend creates it on first write.
       workspaceState: rawSession.workspaceState === "reserved" ? "reserved" : "",
       workspaceReserved: !!rawSession.workspaceReserved,
+      nodeWorkspaceId: safeText(rawSession.nodeWorkspaceId).trim(),
+      nodeWorkspaceBound: safeText(rawSession.nodeWorkspaceBound).trim(),
       multiAgentRunId: savedRunId || safeText(rawSession.multiAgentRunId || rawSession.multi_agent_run_id).trim(),
       multiAgentSequence: savedRunId
         ? savedSequence
@@ -1158,6 +1176,9 @@
       id: sessionId,
       conversation_id: sessionId,
       kind: rawSession.kind,
+      remoteExecution: rawSession.metadata && rawSession.metadata.remote_execution || rawSession.remote_execution || null,
+      creationSource: rawSession.metadata && rawSession.metadata.creation_source || rawSession.creation_source || "",
+      creatorSessionId: rawSession.metadata && rawSession.metadata.creator_session_id || rawSession.creator_session_id || "",
       historyResetAt: rawSession.metadata && rawSession.metadata.history_reset_at,
       title: safeText(rawSession.title).trim() || "新会话",
       title_is_custom: !!(rawSession.metadata && rawSession.metadata.title_is_custom),
@@ -1217,6 +1238,9 @@
     }
     if (usefulBackendTitle(remoteSession.backend_title)) existing.backend_title = usefulBackendTitle(remoteSession.backend_title);
     existing.kind = remoteSession.kind;
+    if (remoteSession.remoteExecution) existing.remoteExecution = remoteSession.remoteExecution;
+    if (remoteSession.creationSource) existing.creationSource = remoteSession.creationSource;
+    if (remoteSession.creatorSessionId) existing.creatorSessionId = remoteSession.creatorSessionId;
     existing.workspace_is_custom = existing.workspace_is_custom || remoteSession.workspace_is_custom;
     existing.updated_at = Math.max(Number(existing.updated_at) || 0, Number(remoteSession.updated_at) || 0);
     if (!pendingState && (!existing.backendWorkspace || existing.workspace === existing.backendWorkspace)) {
@@ -1276,6 +1300,7 @@
   }
 
   async function supportsEmptySessionCleanup() {
+    if (nodeHosted) return false; // Nodes do not publish their OpenAPI schema.
     if (!emptyCleanupCapability) emptyCleanupCapability = fetch(backendBaseUrl + "/openapi.json")
       .then(function (response) { return response.ok ? response.json() : null; })
       .then(function (schema) {
@@ -1350,7 +1375,14 @@
       if (!listResponse.ok) throw new Error("HTTP " + listResponse.status);
       var listPayload = await listResponse.json();
       var backendSessions = Array.isArray(listPayload.sessions) ? listPayload.sessions : [];
-      backendSessions.forEach(function (summary) { var cached = getSessionById(summary.session_id); if (cached && summary.kind) cached.kind = summary.kind; });
+      backendSessions.forEach(function (summary) {
+        var cached = getSessionById(summary.session_id);
+        if (cached && summary.kind) cached.kind = summary.kind;
+        var remoteExecution = summary.metadata && summary.metadata.remote_execution || summary.remote_execution;
+        if (cached && remoteExecution) cached.remoteExecution = remoteExecution;
+        if (cached && summary.metadata && summary.metadata.creation_source) cached.creationSource = summary.metadata.creation_source;
+        if (cached && summary.metadata && summary.metadata.creator_session_id) cached.creatorSessionId = summary.metadata.creator_session_id;
+      });
       var needDetails = backendSessions.filter(function (summary) {
         var id = safeText(summary && summary.session_id).trim();
         if (!id || summary.kind === "manager" && id !== activeSessionId && id !== requestedSessionId || deletingSessionIds[id]
@@ -1436,6 +1468,9 @@
       updated_at: timestampToMillis(raw.updated_at), created_at: timestampToMillis(raw.created_at),
       workspace: raw.workspace && raw.workspace.path || "", messages: [defaultGreetingMessage()],
       project_id: raw.project_id || "",
+      remoteExecution: raw.metadata && raw.metadata.remote_execution || raw.remote_execution || null,
+      creationSource: raw.metadata && raw.metadata.creation_source || raw.creation_source || "",
+      creatorSessionId: raw.metadata && raw.metadata.creator_session_id || raw.creator_session_id || "",
       summary_only: true
     };
   }
@@ -1958,6 +1993,17 @@
   }
 
   function renderWorkspaceSummary(session) {
+    if (nodeBoundary() && !isManagerSession(session)) {
+      // The header place switcher already names the device; this line names the workspace.
+      if (workspaceSummary) {
+        workspaceSummary.textContent = session && session.nodeWorkspaceId ? "工作区 · " + session.nodeWorkspaceId : "未选择工作区";
+        workspaceSummary.title = "这台设备上的已批准工作区";
+      }
+      document.body.classList.remove("manager-conversation");
+      syncWorkbenchPanels();
+      window.dispatchEvent(new CustomEvent("lka-session-context", { detail: { sessionId: session ? session.id : "", workspace: session && session.nodeWorkspaceId || "" } }));
+      return;
+    }
     var path = session && safeText(session.workspace).trim();
     if (workspaceInput) workspaceInput.value = path || "";
     if (workspaceSummary) {
@@ -2035,8 +2081,13 @@
     window.dispatchEvent(new CustomEvent("lka-workspace-files", { detail: { sessionId: session ? session.id : "", workspace: session ? session.workspace || "" : "", path: fileRelativePath } }));
     if (filePreview) filePreview.textContent = "选择文件后在这里预览。";
     if (fileCurrentPath) fileCurrentPath.textContent = fileRelativePath || "当前工作区";
-    if (fileUpButton) fileUpButton.disabled = !fileRelativePath;
+    if (fileUpButton) {
+      fileUpButton.disabled = !fileRelativePath;
+      fileUpButton.title = fileRelativePath ? "返回上一级" : "已到工作区根目录，无法返回上一级";
+    }
     if (!session) { showFilePanelMessage("打开会话后查看工作区文件。", false); return; }
+    if (nodeBoundary()) { await loadNodeFileList(session, generation); return; }
+    if (hostedPage) { showFilePanelMessage("云端不托管文件。进入一台电脑后可浏览它的工作区。", false); return; }
     if (session.id.indexOf("conv_") === 0 || session.workspaceState === "reserved") {
       showFilePanelMessage("默认工作区会在第一次写入文件时自动创建；只是聊天或修改其他目录的文件不会创建它。", true);
       return;
@@ -2100,9 +2151,79 @@
     }
   }
 
+  // Node workspaces: choose an approved ID, then browse it with relative paths.
+  async function loadNodeFileList(session, generation) {
+    var approved = await nodeWorkspaces(true);
+    if (generation !== fileRequestGeneration || activeSessionId !== session.id) return;
+    if (!session.nodeWorkspaceId && approved.length === 1) session.nodeWorkspaceId = approved[0];
+    fileList.textContent = "";
+    var oldPicker = filesPanel && filesPanel.querySelector(".node-workspace-picker");
+    if (oldPicker) oldPicker.remove();
+    var heading = filesPanel && filesPanel.querySelector(".workspace-file-heading > strong");
+    if (heading) heading.textContent = "设备文件";
+    if (!approved.length) { showFilePanelMessage("此设备没有为当前连接开放工作区。", false); return; }
+    var picker = document.createElement("label");
+    picker.className = "node-workspace-picker";
+    var caption = document.createElement("span"); caption.textContent = "工作区";
+    var select = document.createElement("select");
+    select.setAttribute("aria-label", "选择这台设备上的工作区");
+    if (!session.nodeWorkspaceId) { var placeholder = document.createElement("option"); placeholder.value = ""; placeholder.textContent = "选择工作区"; select.appendChild(placeholder); }
+    approved.forEach(function (id) { var option = document.createElement("option"); option.value = id; option.textContent = id; select.appendChild(option); });
+    select.value = session.nodeWorkspaceId || "";
+    select.disabled = !!pendingState;
+    select.addEventListener("change", function () {
+      if (!select.value) return;
+      session.nodeWorkspaceId = select.value; fileRelativePath = "";
+      persistSessions(); renderWorkspaceSummary(session);
+      if (session.id.indexOf("conv_") !== 0 && getSessionMessageCount(session) > 0) {
+        bindSessionWorkspace(session, select.value).then(function () { setRunStatus("已切换到工作区 " + select.value); })
+          .catch(function (error) { setRunStatus(error.message, "error"); });
+      }
+      loadFileList();
+    });
+    picker.appendChild(caption); picker.appendChild(select);
+    // The choice sits under the heading, above the toolbar, where the path label is locally.
+    var label = document.getElementById("fileWorkspaceLabel");
+    if (label && label.parentNode) label.parentNode.insertBefore(picker, label.nextSibling); else fileList.appendChild(picker);
+    if (!session.nodeWorkspaceId) { var hint = document.createElement("p"); hint.className = "file-panel-message"; hint.textContent = "选择工作区后，对话与文件都在这个目录中进行。"; fileList.appendChild(hint); return; }
+    var workspaceId = session.nodeWorkspaceId, requestedPath = fileRelativePath;
+    var listing = document.createElement("div"); listing.className = "node-file-listing"; listing.textContent = "正在读取文件…";
+    fileList.appendChild(listing);
+    try {
+      var response = await fetch(nodeFileUrl(workspaceId, "entries", requestedPath), { headers: { Accept: "application/json" } });
+      if (!response.ok) throw new Error(response.status === 403 ? "工作区未授权或暂不可用" : response.status === 404 ? "目录已不存在" : "HTTP " + response.status);
+      var payload = await response.json();
+      if (generation !== fileRequestGeneration || activeSessionId !== session.id) return;
+      listing.textContent = "";
+      var items = Array.isArray(payload.items) ? payload.items : [];
+      if (!items.length) { var empty = document.createElement("p"); empty.className = "file-panel-message"; empty.textContent = "这个目录还没有文件。"; listing.appendChild(empty); }
+      items.forEach(function (item) {
+        var path = [requestedPath, item.name].filter(Boolean).join("/");
+        var entry = { name: safeText(item.name), path: path, type: item.is_directory ? "directory" : "file", size_bytes: Number(item.size) || 0 };
+        var button = document.createElement("button");
+        button.type = "button"; button.className = "file-item" + (item.is_directory ? " directory" : "");
+        var name = document.createElement("span"); name.textContent = (item.is_directory ? "▸  " : "□  ") + entry.name; button.appendChild(name);
+        if (!item.is_directory) { var size = document.createElement("small"); size.textContent = entry.size_bytes >= 1024 ? Math.ceil(entry.size_bytes / 1024) + " KB" : entry.size_bytes + " B"; button.appendChild(size); }
+        button.addEventListener("click", function () { if (item.is_directory) { fileRelativePath = path; loadFileList(); } else previewFile(entry); });
+        var row = document.createElement("div"); row.className = "file-row"; row.setAttribute("role", "listitem"); row.appendChild(button);
+        if (!item.is_directory && window.LkaWorkspaceFiles) row.appendChild(window.LkaWorkspaceFiles.downloadButton(entry, { sessionId: session.id, workspace: workspaceId, path: requestedPath, workspaceId: workspaceId }));
+        listing.appendChild(row);
+      });
+      if (items.length >= 200) { var note = document.createElement("p"); note.className = "file-panel-message"; note.textContent = "仅显示前 200 项，请进入子目录查看。"; listing.appendChild(note); }
+    } catch (error) {
+      if (generation === fileRequestGeneration) listing.textContent = "文件读取失败：" + safeText(error.message || error);
+    }
+  }
+
   async function previewFile(entry) {
     var session = getActiveSession();
     if (!session || !filePreview) return;
+    if (nodeBoundary()) {
+      // Direct node files are downloads; previews stay on the owning computer.
+      selectedFilePath = entry.path;
+      filePreview.textContent = safeText(entry.name) + " · 点击右侧图标下载到这台设备查看。";
+      return;
+    }
     var path = safeText(entry.path);
     selectedFilePath = path;
     filePreview.textContent = "正在预览 " + safeText(entry.name) + "…";
@@ -2141,8 +2262,35 @@
     }
   }
 
+  // Node boundary: the page or the local backend is a cluster node. Workspaces
+  // are then operator-approved IDs, never directories chosen by this computer.
+  function nodeBoundary() { return nodeHosted || !!(lkaHost && lkaHost.backendRole === "replica"); }
+  function noLocalWorkspaceService() { return hostedPage || nodeBoundary(); }
+  var nodeWorkspaceList = null;
+  async function nodeWorkspaces(refresh) {
+    if (nodeWorkspaceList && !refresh) return nodeWorkspaceList;
+    try {
+      var response = await fetch(backendBaseUrl + "/local/workspaces", { headers: { Accept: "application/json" } });
+      var data = response.ok ? await response.json() : { items: [] };
+      nodeWorkspaceList = (data.items || []).map(function (item) { return safeText(item.workspace_id); }).filter(Boolean);
+    } catch (ignored) { nodeWorkspaceList = nodeWorkspaceList || []; }
+    return nodeWorkspaceList;
+  }
+  function nodeFileUrl(workspaceId, kind, path) {
+    return backendBaseUrl + "/local/workspaces/" + encodeURIComponent(workspaceId) + "/" + kind + "?path=" + encodeURIComponent(path || "");
+  }
+
   async function ensureSessionWorkspace(session) {
     if (managerEmbedding || isManagerSession(session)) return "";
+    if (lkaHost) await lkaHost.ready;
+    if (session && noLocalWorkspaceService()) {
+      // Default to the only approved workspace; several require an explicit choice.
+      if (nodeBoundary() && !session.nodeWorkspaceId) {
+        var approved = await nodeWorkspaces();
+        if (approved.length === 1) { session.nodeWorkspaceId = approved[0]; persistSessions(); }
+      }
+      return session.workspace || "";
+    }
     if (!session || session.workspace) return session && session.workspace;
     await defaultsReady;
     var requestKey = session.id;
@@ -2277,17 +2425,26 @@
       applySessionTitle(session);
       return (session.title || "").toLocaleLowerCase().indexOf(searchTerm) !== -1 ||
         (session.workspace || "").toLocaleLowerCase().indexOf(searchTerm) !== -1;
-    }).sort(function (a, b) {
-      return b.updated_at - a.updated_at;
     });
     var includedIds = Object.create(null);
     ordered.forEach(function (session) { includedIds[session.id] = true; });
     historyItems.forEach(function (summary) {
       if (isManagerSession(summary) || isManagerSession(getSessionById(summary.id))) return;
+      var cachedSession = getSessionById(summary.id);
+      if (cachedSession && summary.remoteExecution) cachedSession.remoteExecution = summary.remoteExecution;
+      if (cachedSession && summary.creationSource) cachedSession.creationSource = summary.creationSource;
+      if (cachedSession && summary.creatorSessionId) cachedSession.creatorSessionId = summary.creatorSessionId;
       if (!includedIds[summary.id] && !deletedSessionIds[summary.id] && !deletingSessionIds[summary.id]) {
-        ordered.push(getSessionById(summary.id) || summary);
+        ordered.push(cachedSession || summary);
         includedIds[summary.id] = true;
       }
+    });
+    ordered.sort(function (a, b) {
+      if (!searchTerm) {
+        var groupDifference = sessionExecutionGroup(a).localeCompare(sessionExecutionGroup(b), "zh-CN");
+        if (groupDifference) return groupDifference;
+      }
+      return b.updated_at - a.updated_at;
     });
     if (!ordered.length) {
       var empty = document.createElement("p");
@@ -2300,7 +2457,10 @@
     var lastGroup = "";
     ordered.forEach(function (session) {
       if (!session.summary_only) applySessionTitle(session);
-      var group = searchTerm ? "" : sessionGroupLabel(session.updated_at);
+      var group = "";
+      if (!searchTerm) {
+        group = sessionExecutionGroup(session);
+      }
       if (group && group !== lastGroup) {
         var groupLabel = (existingGroups[group] || []).shift() || document.createElement("p");
         groupLabel.className = "session-group-label";
@@ -2314,6 +2474,16 @@
       var timeText = runState === "running" ? "进行中" : runState === "waiting" ? "待确认" : runState === "paused" ? "已暂停" : formatTimestamp(session.updated_at);
       var folder = safeText(session.workspace).replace(/[\\/]+$/, "").split(/[\\/]/).pop();
       var metaText = sessionPreviewText(session) || (session.summary_only ? (folder && !/^(conv|session)[-_]/.test(folder) ? folder + " · 点击载入" : "点击载入") : "尚未开始");
+      var remote = session.remoteExecution && typeof session.remoteExecution === "object" ? session.remoteExecution : null;
+      if (remote && (remote.task_id || remote.node_id || remote.environment_id)) {
+        var executionLabel = "真理派发 · " + (remote.node_name || remote.device_name || remote.node_id || "指定设备");
+        if (remote.environment_id) executionLabel += " / " + remote.environment_id;
+        if (remote.workspace_id) executionLabel += " · " + remote.workspace_id;
+        metaText = executionLabel + (metaText && metaText !== "尚未开始" ? " · " + metaText : "");
+      } else if (session.creationSource === "assistant") {
+        var assistantExecutionLabel = hostedPage && lkaHost.role === "hub" ? "真理派发 · 云端本机" : "真理派发";
+        metaText = assistantExecutionLabel + (metaText && metaText !== "尚未开始" ? " · " + metaText : "");
+      }
       var item = existingCards[session.id], renaming = renamingSessionId === session.id;
       // Keep hovered actions and an active rename editor mounted during sync.
       if (item && !!item._renaming === renaming) {
@@ -2453,6 +2623,16 @@
     if (renameEditorCreated) {
       focusRenameInputSoon();
     }
+  }
+
+  function sessionExecutionGroup(session) {
+    var remote = session && session.remoteExecution && typeof session.remoteExecution === "object" ? session.remoteExecution : null;
+    if (remote && (remote.task_id || remote.node_id)) {
+      return "执行设备：" + (remote.node_name || remote.device_name || remote.node_id || "未知设备");
+    }
+    if (hostedPage && lkaHost.role === "hub") return "云端会话";
+    if (hostedPage && lkaHost.role === "replica") return "本机 · " + (lkaHost.info && lkaHost.info.node_id || "设备");
+    return "本机会话";
   }
 
   function renderDeletedSessionList() {
@@ -3840,11 +4020,25 @@
     approvalQueueRequestInFlight = true;
     var epoch = approvalQueueEpoch;
     try {
-      var response = await fetch(backendBaseUrl + "/agent/safety-reviews", {
-        headers: { Accept: "application/json" }
-      });
-      if (!response.ok) throw new Error("HTTP " + response.status);
-      var result = await response.json();
+      var result;
+      if (nodeHosted) {
+        // Nodes refuse the global queue; read the active run's own reviews.
+        // A 真理 run's reviews route to the cloud through the host layer.
+        var nodeSession = getActiveSession();
+        var nodeRun = nodeSession ? safeText(nodeSession.multiAgentRunId).trim() : "";
+        result = { reviews: [] };
+        if (nodeRun) {
+          var runResponse = await fetch(backendBaseUrl + "/agent/runs/" + encodeURIComponent(nodeRun) + "/safety-reviews", { headers: { Accept: "application/json" } });
+          if (!runResponse.ok && runResponse.status !== 404 && runResponse.status !== 403) throw new Error("HTTP " + runResponse.status);
+          if (runResponse.ok) result = await runResponse.json();
+        }
+      } else {
+        var response = await fetch(backendBaseUrl + "/agent/safety-reviews", {
+          headers: { Accept: "application/json" }
+        });
+        if (!response.ok) throw new Error("HTTP " + response.status);
+        result = await response.json();
+      }
       if (epoch !== approvalQueueEpoch) return;
       var reviews = Array.isArray(result && result.reviews) ? result.reviews : [];
       pendingSafetyReviews = reviews.filter(function (review) {
@@ -4076,7 +4270,7 @@
   }
 
   async function consumeSavedRunEventStream(session, controller, turnState) {
-    if (window.petBridge && typeof window.petBridge.streamSavedRun === "function") return consumeSavedRunViaBridge(session, controller, turnState);
+    if (!(lkaHost && lkaHost.isCloudSession(session.id)) && window.petBridge && typeof window.petBridge.streamSavedRun === "function") return consumeSavedRunViaBridge(session, controller, turnState);
     var runId = session.multiAgentRunId;
     var afterSequence = Math.max(0, Number(session.multiAgentSequence) || 0);
     var url = backendBaseUrl + "/agent/runs/" + encodeURIComponent(runId)
@@ -4665,6 +4859,7 @@
   }
 
   function sendAgentTurnViaDesktopBridge(payload) {
+    if (lkaHost && lkaHost.isCloudSession(payload.conversation_id || payload.session_id)) return false;
     if (!window.petBridge || typeof window.petBridge.send !== "function") {
       return false;
     }
@@ -4702,6 +4897,7 @@
     }
   };
   function sendAgentStreamViaDesktopBridge(payload, onEvent) {
+    if (lkaHost && lkaHost.isCloudSession(payload.conversation_id || payload.session_id)) return false;
     if (!window.petBridge || typeof window.petBridge.stream !== "function") return false;
     var requestId = "turn-" + Date.now() + "-" + Math.random().toString(36).slice(2);
     var originalPending = managerPendingTurns[payload.conversation_id || payload.session_id] || pendingState;
@@ -4745,6 +4941,7 @@
       liveSession.id = newId;
       liveSession.conversation_id = newId;
       liveSession.workspace = session.workspace;
+      liveSession.nodeWorkspaceId = session.nodeWorkspaceId || "";
     }
     if (Object.prototype.hasOwnProperty.call(liveAnswers, oldId)) {
       liveAnswers[newId] = liveAnswers[oldId]; delete liveAnswers[oldId];
@@ -4761,7 +4958,7 @@
 
   // Explicit user actions (upload, "create now") need the reserved folder on disk.
   async function materializeSessionWorkspace(session) {
-    if (!session || session.workspaceState !== "reserved") return;
+    if (!session || session.workspaceState !== "reserved" || noLocalWorkspaceService()) return;
     var data;
     if (window.petBridge && typeof window.petBridge.materializeSessionWorkspace === "function") {
       data = JSON.parse(window.petBridge.materializeSessionWorkspace(session.id) || "{}");
@@ -4782,7 +4979,7 @@
   async function bindSessionWorkspace(session, requestedWorkspace, assertCurrent) {
     if (isManagerSession(session)) { if (assertCurrent) assertCurrent(); return session.id; }
     if (managerEmbedding) throw new Error("真理会话尚未载入，请重试。");
-    var workspace = requestedWorkspace === undefined ? session.workspace : requestedWorkspace;
+    var workspace = requestedWorkspace === undefined ? (nodeBoundary() ? session.nodeWorkspaceId : session.workspace) : requestedWorkspace;
     var key = session.id + "\n" + (workspace || "");
     if (workspaceBindings[key]) return workspaceBindings[key];
     var binding = bindSessionWorkspaceNow(session, requestedWorkspace, assertCurrent);
@@ -4791,8 +4988,45 @@
     finally { if (workspaceBindings[key] === binding) delete workspaceBindings[key]; }
   }
 
+  // Node sessions exist on the node before the first turn; the workspace is an
+  // approved ID bound through /sessions/{id}/workspace-id, never a local path.
+  async function ensureNodeSession(session, assertCurrent) {
+    if (session.id.indexOf("conv_") !== 0) return session.id;
+    if (assertCurrent) assertCurrent(true);
+    var response = await fetch(backendBaseUrl + "/sessions", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ title: session.title || "新会话", metadata: { source_frontend: "lka-desktop-node", title_is_custom: !!session.title_is_custom } })
+    });
+    var created = await response.json().catch(function () { return {}; });
+    var createdId = createdBackendSessionId(created);
+    if (!response.ok || !createdId) throw new Error("HTTP " + response.status + "：无法在当前设备创建会话");
+    replaceSessionId(session, createdId);
+    return createdId;
+  }
+  async function bindNodeWorkspace(session, requestedWorkspace, assertCurrent) {
+    if (assertCurrent) assertCurrent();
+    var sessionId = await ensureNodeSession(session, assertCurrent);
+    var workspaceId = requestedWorkspace === undefined ? session.nodeWorkspaceId : requestedWorkspace;
+    if (!workspaceId || session.nodeWorkspaceBound === workspaceId) return sessionId;
+    var response = await fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(sessionId) + "/workspace-id", {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ workspace_id: workspaceId })
+    });
+    var data = await response.json().catch(function () { return {}; });
+    if (!response.ok) throw new Error(response.status === 403 ? "这个工作区未获当前连接授权。" : "工作区绑定失败（HTTP " + response.status + "）");
+    session.nodeWorkspaceId = workspaceId; session.nodeWorkspaceBound = workspaceId;
+    session.workspace = safeText(data.path || data.backend_path || session.workspace);
+    session.backendWorkspace = session.workspace; session.workspaceState = "";
+    var live = getSessionById(sessionId);
+    if (live && live !== session) Object.assign(live, { nodeWorkspaceId: workspaceId, nodeWorkspaceBound: workspaceId, workspace: session.workspace, backendWorkspace: session.workspace, workspaceState: "" });
+    persistSessions();
+    if (sessionId === activeSessionId) renderWorkspaceSummary(session);
+    return sessionId;
+  }
+
   async function bindSessionWorkspaceNow(session, requestedWorkspace, assertCurrent) {
     if (isManagerSession(session)) { if (assertCurrent) assertCurrent(); return session.id; }
+    if (nodeBoundary()) return bindNodeWorkspace(session, requestedWorkspace, assertCurrent);
+    if (hostedPage) { if (assertCurrent) assertCurrent(); return ensureNodeSession(session, assertCurrent); }
     if (assertCurrent) assertCurrent();
     var workspace = requestedWorkspace === undefined ? session.workspace : requestedWorkspace;
     if (!workspace) return session.id;
@@ -5868,6 +6102,10 @@
   }
   async function ensureManagerExecutionWorkspace(manager) {
     if (manager.controller.default_execution_workspace) return manager;
+    // A cloud 真理 never receives a directory from this computer; remote work
+    // names its device and workspace through execution_target instead.
+    var cloudHost = typeof window !== "undefined" && window.LkaHost;
+    if (cloudHost && (cloudHost.hosted || cloudHost.cloudRouting)) return manager;
     await defaultsReady;
     var response = await fetch("/pet/session-workspace-parent", {
       method: "POST", headers: { "Content-Type": "application/json" },
@@ -6433,11 +6671,16 @@
     },
     getFileContext: function () {
       var session = getActiveSession();
+      if (nodeBoundary()) {
+        var id = session && session.nodeWorkspaceId || "";
+        return { sessionId: session ? session.id : "", workspace: id, workspaceId: id, path: fileRelativePath };
+      }
       return { sessionId: session ? session.id : "", workspace: session ? session.workspace || "" : "", path: fileRelativePath };
     },
     refreshWorkspaceFiles: function (view) {
       var session = getActiveSession();
-      if (session && session.id === view.sessionId && session.workspace === view.workspace && fileRelativePath === view.path) return loadFileList();
+      var current = session && (nodeBoundary() ? session.nodeWorkspaceId : session.workspace);
+      if (session && session.id === view.sessionId && current === view.workspace && fileRelativePath === view.path) return loadFileList();
     },
     prepareAttachments: async function (sessionId) {
       var session = getSessionById(sessionId);
@@ -6450,7 +6693,7 @@
     },
     get: function () {
       var session = getActiveSession();
-      return { backend: backendBaseUrl, workMode: workMode, sessionId: session ? session.id : "", kind: session ? session.kind : "",
+      return { backend: backendBaseUrl, workMode: workMode, hosted: hostedPage, nodeHosted: nodeHosted, nodeBoundary: nodeBoundary(), sessionId: session ? session.id : "", kind: session ? session.kind : "",
         workspace: session ? session.workspace || "" : "", projectId: session ? session.project_id || "" : "", busy: !!pendingState || !!(session && session.multiAgentRunId && ["queued", "running", "waiting_confirmation", "waiting_user"].indexOf(session.runControlStatus) >= 0) };
     },
     startProjectDraft: function (project) {

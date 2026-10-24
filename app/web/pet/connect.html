@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="referrer" content="no-referrer">
+  <meta name="theme-color" content="#17333b">
+  <title>理事所 · 入口</title>
+  <link rel="icon" type="image/png" href="./assets/ursus-student-emblem.png">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="stylesheet" href="./connect.css?v=20261024-cluster">
+  <script defer src="./connect.js?v=20261024-cluster"></script>
+</head>
+<body>
+  <main class="entry" id="entry" aria-busy="true">
+    <header class="entry-head">
+      <span class="entry-mark" aria-hidden="true"></span>
+      <div><h1>理事所</h1><p id="entryPlace">正在确认连接…</p></div>
+    </header>
+    <p id="entryNotice" class="entry-notice" role="status" aria-live="polite" hidden></p>
+
+    <section id="loginView" class="entry-card" hidden aria-labelledby="loginTitle">
+      <h2 id="loginTitle">登录</h2>
+      <p class="entry-help">使用云端账号登录后，可以和真理对话，或进入已批准的电脑。</p>
+      <form id="loginForm" class="entry-form" autocomplete="on">
+        <label>账号<input id="loginUser" name="username" autocomplete="username" maxlength="64" required autocapitalize="none" spellcheck="false"></label>
+        <label>密码<input id="loginPassword" name="password" type="password" autocomplete="current-password" maxlength="256" required></label>
+        <button class="entry-primary" type="submit">登录</button>
+        <p id="loginError" class="entry-error" role="alert"></p>
+      </form>
+    </section>
+
+    <section id="hubView" class="entry-stack" hidden>
+      <a id="openAssistant" class="entry-hero" href="#">
+        <span class="entry-hero-emblem" aria-hidden="true">✦</span>
+        <span><strong>和真理对话</strong><small>目标、待办、项目与记忆都在云端接续</small></span>
+        <span class="entry-chevron" aria-hidden="true">›</span>
+      </a>
+      <div class="entry-section-head"><h2>我的设备</h2><button id="refreshDevices" class="entry-quiet" type="button">刷新</button></div>
+      <div id="deviceList" class="entry-devices" aria-live="polite"></div>
+      <footer class="entry-foot">
+        <span id="accountLine"></span>
+        <a id="openManage" href="#">账号与设备管理</a>
+        <button id="logoutButton" class="entry-quiet" type="button">退出</button>
+      </footer>
+    </section>
+
+    <section id="redeemView" class="entry-card entry-center" hidden>
+      <span class="entry-spinner" aria-hidden="true"></span>
+      <h2 id="redeemTitle">正在进入设备</h2>
+      <p id="redeemHelp" class="entry-help">等待这台设备接收云端授权，通常需要几秒钟。</p>
+    </section>
+
+    <section id="offlineView" class="entry-stack" hidden>
+      <div class="entry-card">
+        <h2 id="offlineTitle">云端暂时无法连接</h2>
+        <p id="offlineHelp" class="entry-help">下面是这个浏览器之前进入过的设备。连接仍有效时可以直接打开；已过期的需要等云端恢复后重新进入。</p>
+      </div>
+      <div id="fallbackList" class="entry-devices"></div>
+      <button id="retryButton" class="entry-quiet entry-wide" type="button">重新连接云端</button>
+    </section>
+  </main>
+</body>
+</html>

@@ -2,7 +2,7 @@
 (function () {
   'use strict';
   var panel = document.getElementById('messageHistoryPanel');
-  if (!panel) return;
+  if (!panel || window.LkaMessageApiDisabled) return;
   var token = '', policies = [], timer = null, serial = 0, authRevision = 0, actionRevision = 0;
   var editingPolicy = null;
   var pending = new Map();

@@ -343,6 +343,7 @@ npm run test:mobile
 | 消息浏览与原文上下文 | [消息中心交付](docs/frontend_messages_ui_delivery_2026-10-05.md) · [历史消息适配](docs/message_history_frontend.md) |
 | QQ 采集与发送接口 | [Reader 插件](docs/qq_reader_plugin_delivery_2026-10-02.md) · [消息接口](docs/qq_messaging_interfaces_2026-10-04.md) |
 | 分发范围、资源与隐私检查 | [仓库交付文档](docs/repository_delivery.md) |
+| 多台电脑与 Ubuntu 云端安装 | [部署说明](docs/deployment.md) · [多端协同](docs/multi-device.md) |
 | Agent、模型与后端配置 | [LKA Backend](https://github.com/Viottery/lka-backend) |
 
 交付记录保留各阶段的实现与验证情况；当前安装入口以本 README 为准。

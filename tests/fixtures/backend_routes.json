@@ -734,5 +734,285 @@
  {
   "method": "PUT",
   "path": "/sessions/{session_id}/workspace"
+ },
+ {
+  "method": "GET",
+  "path": "/auth/accounts"
+ },
+ {
+  "method": "POST",
+  "path": "/auth/accounts"
+ },
+ {
+  "method": "PATCH",
+  "path": "/auth/accounts/{user_id}"
+ },
+ {
+  "method": "POST",
+  "path": "/auth/accounts/{user_id}/password"
+ },
+ {
+  "method": "POST",
+  "path": "/auth/login"
+ },
+ {
+  "method": "POST",
+  "path": "/auth/logout"
+ },
+ {
+  "method": "GET",
+  "path": "/auth/me"
+ },
+ {
+  "method": "POST",
+  "path": "/auth/password"
+ },
+ {
+  "method": "GET",
+  "path": "/auth/sessions"
+ },
+ {
+  "method": "DELETE",
+  "path": "/auth/sessions/{session_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/client"
+ },
+ {
+  "method": "GET",
+  "path": "/client/info"
+ },
+ {
+  "method": "GET",
+  "path": "/client/{asset}"
+ },
+ {
+  "method": "POST",
+  "path": "/connections/logout"
+ },
+ {
+  "method": "GET",
+  "path": "/connections/me"
+ },
+ {
+  "method": "POST",
+  "path": "/connections/redeem"
+ },
+ {
+  "method": "GET",
+  "path": "/connections/sessions"
+ },
+ {
+  "method": "DELETE",
+  "path": "/connections/sessions/{session_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/devices"
+ },
+ {
+  "method": "POST",
+  "path": "/devices"
+ },
+ {
+  "method": "GET",
+  "path": "/devices/selection"
+ },
+ {
+  "method": "PUT",
+  "path": "/devices/selection"
+ },
+ {
+  "method": "POST",
+  "path": "/devices/selection/resolve"
+ },
+ {
+  "method": "GET",
+  "path": "/devices/{device_id}"
+ },
+ {
+  "method": "PATCH",
+  "path": "/devices/{device_id}"
+ },
+ {
+  "method": "POST",
+  "path": "/devices/{device_id}/connections"
+ },
+ {
+  "method": "POST",
+  "path": "/devices/{device_id}/connections/revoke"
+ },
+ {
+  "method": "POST",
+  "path": "/devices/{device_id}/revoke"
+ },
+ {
+  "method": "POST",
+  "path": "/devices/{device_id}/rotate"
+ },
+ {
+  "method": "GET",
+  "path": "/local/cache"
+ },
+ {
+  "method": "GET",
+  "path": "/local/shared-memory/mutations"
+ },
+ {
+  "method": "POST",
+  "path": "/local/shared-memory/mutations"
+ },
+ {
+  "method": "GET",
+  "path": "/local/shared-memory/mutations/{mutation_id}"
+ },
+ {
+  "method": "GET",
+  "path": "/local/shared-memory/records"
+ },
+ {
+  "method": "GET",
+  "path": "/local/shared-memory/status"
+ },
+ {
+  "method": "GET",
+  "path": "/local/workspaces"
+ },
+ {
+  "method": "POST",
+  "path": "/local/workspaces/{workspace_id}/directories"
+ },
+ {
+  "method": "GET",
+  "path": "/local/workspaces/{workspace_id}/entries"
+ },
+ {
+  "method": "GET",
+  "path": "/local/workspaces/{workspace_id}/file"
+ },
+ {
+  "method": "PUT",
+  "path": "/local/workspaces/{workspace_id}/file"
+ },
+ {
+  "method": "GET",
+  "path": "/local/workspaces/{workspace_id}/status"
+ },
+ {
+  "method": "GET",
+  "path": "/node/connection-grants"
+ },
+ {
+  "method": "POST",
+  "path": "/node/execution/check"
+ },
+ {
+  "method": "POST",
+  "path": "/node/execution/claim"
+ },
+ {
+  "method": "POST",
+  "path": "/node/execution/report"
+ },
+ {
+  "method": "POST",
+  "path": "/node/execution/start"
+ },
+ {
+  "method": "POST",
+  "path": "/node/heartbeat"
+ },
+ {
+  "method": "GET",
+  "path": "/node/sync/changes"
+ },
+ {
+  "method": "POST",
+  "path": "/node/sync/memory-mutations"
+ },
+ {
+  "method": "POST",
+  "path": "/node/sync/memory-records"
+ },
+ {
+  "method": "POST",
+  "path": "/node/sync/proposals"
+ },
+ {
+  "method": "GET",
+  "path": "/node/sync/status"
+ },
+ {
+  "method": "GET",
+  "path": "/remote-execution/targets"
+ },
+ {
+  "method": "GET",
+  "path": "/remote-execution/tasks"
+ },
+ {
+  "method": "GET",
+  "path": "/remote-execution/tasks/{task_id}"
+ },
+ {
+  "method": "POST",
+  "path": "/remote-execution/tasks/{task_id}/answer"
+ },
+ {
+  "method": "POST",
+  "path": "/remote-execution/tasks/{task_id}/cancel"
+ },
+ {
+  "method": "POST",
+  "path": "/remote-execution/tasks/{task_id}/instruction"
+ },
+ {
+  "method": "POST",
+  "path": "/remote-execution/tasks/{task_id}/pause"
+ },
+ {
+  "method": "POST",
+  "path": "/remote-execution/tasks/{task_id}/resume"
+ },
+ {
+  "method": "POST",
+  "path": "/remote-execution/tasks/{task_id}/reviews/{review_id}"
+ },
+ {
+  "method": "POST",
+  "path": "/sessions/{session_id}/workspace-id"
+ },
+ {
+  "method": "GET",
+  "path": "/sync/changes"
+ },
+ {
+  "method": "GET",
+  "path": "/sync/memory-records/conflicts"
+ },
+ {
+  "method": "GET",
+  "path": "/sync/proposals"
+ },
+ {
+  "method": "POST",
+  "path": "/sync/proposals/{node_id}/{proposal_id}/resolve"
+ },
+ {
+  "method": "POST",
+  "path": "/sync/replica/proposals"
+ },
+ {
+  "method": "GET",
+  "path": "/sync/replica/records"
+ },
+ {
+  "method": "GET",
+  "path": "/sync/replica/status"
+ },
+ {
+  "method": "GET",
+  "path": "/sync/status"
  }
 ]

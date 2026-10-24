@@ -850,6 +850,7 @@ body.work-mode .continue-button { display: none; }
 .files-panel { padding: 12px 13px 18px; }
 .file-toolbar { display: flex; justify-content: space-between; gap: 5px; }
 .file-toolbar button { font-size: 12px; }
+#fileUpButton:disabled { cursor: not-allowed; }
 .file-current-path { margin: 8px 3px 12px; color: #547177; font-size: 12px; overflow-wrap: anywhere; }
 .file-list { display: flex; flex-direction: column; gap: 3px; min-height: 74px; max-height: min(35vh, 320px); overflow-y: auto; padding-bottom: 10px; border-bottom: 1px solid var(--line); }
 .file-item { display: flex; align-items: center; justify-content: space-between; gap: 8px; width: 100%; min-height: 34px; padding: 6px 9px; border: 1px solid transparent; border-radius: 8px; background: transparent; color: var(--ink); text-align: left; font-size: 12px; font-weight: 500; }

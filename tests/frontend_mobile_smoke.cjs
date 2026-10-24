@@ -56,6 +56,9 @@ const server = http.createServer(async (req, res) => {
   if (p === '/plugins/message-reading/messages/policies') return json(res, { policies: [] });
   if (p === '/plugins/message-reading/messages/reading/overview') return json(res, { coverage: [], topics: [], insights: [], unseen_count: 0 });
   if (p === '/favicon.ico') { res.writeHead(204); return res.end(); }
+  // Local mode: a standalone backend and a frontend service without a cloud.
+  if (p === '/client/info') return json(res, { detail: 'Not Found' }, 404);
+  if (p === '/cloud-auth/status') return json(res, { configured: false, logged_in: false, account: null, origin: '', expires_at: 0 });
   unknown.push(req.method + ' ' + p); return json(res, { detail: 'Unmocked synthetic endpoint ' + p }, 404);
 });
 function event(type, data = {}) { assert(stream && !stream.writableEnded, 'held stream available'); stream.write('event: ' + type + '\ndata: ' + JSON.stringify({ type, ...data }) + '\n\n'); }

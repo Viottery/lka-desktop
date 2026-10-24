@@ -3,6 +3,10 @@
   var params = new URLSearchParams(location.search);
   // Embedded conversations must never create another assistant workspace.
   if (params.get('embedded') || !window.LkaChatContext || !window.LkaMatterHost) return;
+  // 真理 runs on the cloud. A node page reaches it directly; until the cloud
+  // is signed in, the entry offers sign-in instead of a broken conversation.
+  var lkaHost = window.LkaHost, viaHub = !!(lkaHost && lkaHost.hosted && lkaHost.role === 'replica');
+  function cloudReady() { return !viaHub || lkaHost.cloudRouting; }
   var chat = window.LkaChatContext;
   if (!chat.get().workMode) return;
   var host = window.LkaMatterHost, manager = null, opened = false;
@@ -48,12 +52,20 @@
     el('gaToggle').textContent = changing ? '正在更新…' : active ? '暂停管理' : '启用管理';
     // Rendered as a switch: on = management active.
     el('gaToggle').setAttribute('role', 'switch'); el('gaToggle').setAttribute('aria-checked', String(!!active)); el('gaToggle').title = active ? '暂停管理' : '启用管理';
-    el('gaModeHelp').textContent = active ? '助手可整理事项、委托任务。暂停管理后，已委托的任务仍会独立运行。' : '管理暂停时仍可对话、查看进展。启用后，助手可整理事项和委托任务。';
+    // "管理" allows organizing and dispatching. Waking up on its own when a task
+    // finishes is a separate server setting; say which one applies.
+    var autonomy = manager && manager.autonomy, auto = !!(autonomy && autonomy.autonomous_enabled);
+    var wake = !manager || !autonomy ? '' : auto ? '任务完成后，真理会在后台自动汇报。' : '任务完成后不会自动汇报；结果会等你下次发消息时处理（后台自动处理需在服务端开启）。';
+    el('gaModeHelp').textContent = (active ? '助手可整理事项、委托任务。暂停管理后，已委托的任务仍会独立运行。' : '管理暂停时仍可对话、查看进展。启用后，助手可整理事项和委托任务。') + (active && wake ? ' ' + wake : '');
   }
   function managerPath(suffix) { return '/managers/' + encodeURIComponent(manager.session.session_id) + (suffix || ''); }
   function chatUrl(sessionId, runId) {
-    var url = new URL('./chat.html', location.href); url.search = '';
-    url.searchParams.set('mode', 'work'); url.searchParams.set('backend', host.backend);
+    var url = new URL('./chat.html', location.href), current = new URLSearchParams(location.search); url.search = '';
+    url.searchParams.set('mode', 'work');
+    // Hosted pages carry their host role; local pages keep the gateway address.
+    if (window.LkaHost && window.LkaHost.hosted) url.searchParams.set('host', window.LkaHost.role);
+    else url.searchParams.set('backend', host.backend);
+    if (current.get('layout') === 'mobile') url.searchParams.set('layout', 'mobile');
     url.searchParams.set('session_id', sessionId);
     if (runId) url.searchParams.set('run_id', runId);
     return url.href;
@@ -70,7 +82,23 @@
     if (!title) title = first;
     return Array.from(title).length > 28 ? Array.from(title).slice(0, 27).join('') + '…' : title;
   }
-  function runLink(row, sessionId, runId, title) { if (!sessionId || !runId) return; var link = node('a', 'ga-record-link', title); link.href = chatUrl(sessionId, runId); link.target = '_blank'; link.rel = 'noopener'; row.appendChild(link); }
+  // Opens in this page: a remote task goes to its review detail (approvals live
+  // in the task report on the cloud); an ordinary task switches the conversation.
+  // The href keeps host/layout/run for a deliberate new tab, which restores its
+  // own session from the shared cookie.
+  function runLink(row, sessionId, runId, title, run) {
+    if (!sessionId || !runId) return;
+    var link = node('a', 'ga-record-link', title); link.href = chatUrl(sessionId, runId);
+    link.addEventListener('click', function (event) {
+      if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      event.preventDefault();
+      var remote = run && run.remote_execution;
+      if (remote && remote.task_id && window.LkaCluster) { window.LkaCluster.openRemoteTask(remote.task_id); return; }
+      close();
+      Promise.resolve(chat.openSession(sessionId)).catch(function (error) { notice(problem(error), true); });
+    });
+    row.appendChild(link);
+  }
   function render() {
     var list = el('gaRecords'); list.replaceChildren();
     el('gaBadge').hidden = !pending.length; el('gaBadge').textContent = pending.length;
@@ -78,9 +106,11 @@
     if (tab === 'attention') {
       if (!pending.length) list.appendChild(empty(attentionLimited ? '还有等待提醒需要核对' : '暂时不需要你处理', '任务需要补充信息或操作确认时，会在这里提醒。'));
       pending.forEach(function (run) {
-        var question = run.pending_user_question;
-        var row = record(run.status === 'waiting_confirmation' ? '任务等待你的确认' : '任务需要补充信息', '待处理', question && (question.question || question.prompt) || '打开原任务查看具体内容，并在那里处理。');
-        runLink(row, run.session_id, run.run_id, '打开原任务'); list.appendChild(row);
+        var question = run.pending_user_question, remote = run.remote_execution;
+        var heading = run.status === 'waiting_confirmation' ? '任务等待你的确认' : '任务需要补充信息';
+        var where = remote ? '在 ' + (remote.node_id || '设备') + (remote.workspace_id ? ' · ' + remote.workspace_id : '') + ' 上执行。' : '';
+        var row = record(heading, remote ? '远程任务' : '待处理', where + (question && (question.question || question.prompt) || (remote ? '查看操作详情并批准或拒绝。' : '打开原任务查看具体内容，并在那里处理。')));
+        runLink(row, run.session_id, run.run_id, remote ? (run.status === 'waiting_confirmation' ? '查看并确认' : '查看并回答') : '打开原任务', run); list.appendChild(row);
       });
       if (attentionLimited) { list.appendChild(node('p', 'ga-list-note', '等待提醒较多，每次核对20项。已确认的待处理任务会保留，直到确认其状态变化。')); var next = node('button', 'ga-more', '继续核对等待提醒'); next.type = 'button'; next.onclick = refresh; list.appendChild(next); }
     } else if (tab === 'goals') {
@@ -102,7 +132,7 @@
         // Older backends send no topic; keep the generic label for them.
         var row = record(delivery.topic || '一份跟进结果已送达', '', '');
         row.querySelector('.ga-record-heading').appendChild(node('small', 'ga-record-when', time(delivery.created_at)));
-        runLink(row, delivery.session_id, delivery.run_id, '查看本次对话记录'); list.appendChild(row);
+        runLink(row, delivery.session_id, delivery.run_id, '查看本次对话记录', null); list.appendChild(row);
       });
       if (rows.length) list.appendChild(node('p', 'ga-list-note', '交付表示已有回复；目标是否完成，以目标状态和结果内容为准。'));
     }
@@ -206,6 +236,7 @@
   }
   function publishController() { if (manager && chat.acceptAssistantSettings) chat.acceptAssistantSettings(manager); }
   function prepare() {
+    if (!cloudReady()) return Promise.resolve(null);
     if (preparing) return preparing;
     var scope = authEpoch;
     preparing = (async function () {
@@ -238,6 +269,11 @@
     document.body.classList.remove('global-assistant-loading'); document.body.classList.add('global-assistant-error'); render();
   }
   async function connect(options) {
+    if (!cloudReady()) {
+      // The entry stays: sign in to the cloud from this device, then talk.
+      if (window.LkaCluster) window.LkaCluster.openCloudSignIn();
+      return;
+    }
     if (opening) return opening;
     var current = authEpoch, selected = ++selectionEpoch, manual = !!(options && options.refresh);
     if (!manager) connecting();
@@ -312,6 +348,9 @@
   document.addEventListener('visibilitychange', function () { if (!document.hidden) refresh(); });
   window.setInterval(function () { if (!document.hidden) refresh(); }, 8000);
   window.LkaGlobalAssistant = { open: open, close: close, isOpen: function () { return opened; } };
-  prepare().catch(function () { /* Ordinary work remains available when background preparation fails. */ });
-  if (params.get('assistant') === 'global') open(); else selection();
+  // On a node page, wait for the hub check; sign-in later replays auth-changed.
+  (viaHub ? lkaHost.hubReady : Promise.resolve()).then(function () {
+    return prepare().then(function () { if (viaHub && params.get('assistant') === 'global' && cloudReady()) open(); });
+  }).catch(function () { /* Ordinary work remains available when background preparation fails. */ });
+  if (!viaHub && params.get('assistant') === 'global') open(); else selection();
 })();
