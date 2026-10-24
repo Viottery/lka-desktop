@@ -1,0 +1,7 @@
+{
+  "backend_mode": "external",
+  "frontend_ports": [8780],
+  "backend_ports": [8765],
+  "qq_dependencies": false,
+  "backup_paths": []
+}

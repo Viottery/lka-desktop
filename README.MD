@@ -230,6 +230,14 @@ Invoke-RestMethod http://127.0.0.1:8765/health
 
 </details>
 
+### Windows 一键更新
+
+双击根目录 `Check-LKA-Update.cmd` 检查版本；任务结束、退出前端与本次要更新的
+原生后端后，双击 `Update-LKA.cmd` 备份并应用更新，再用原快捷方式启动。
+默认只更新 Windows 前端；纯 Windows 安装可配置同时更新配套后端。
+配置、数据库和配对凭据留在本机，失败可按保存的版本继续。
+具体模式、备份范围及发布步骤见 [Windows 更新说明](docs/windows-updates.md)。
+
 ### 3. 配置与日常操作
 
 | 内容 | 位置或操作 |

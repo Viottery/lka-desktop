@@ -21,6 +21,7 @@ param(
     [ValidateRange(100, 4096)][int]$PetWidth = 360,
     [ValidateRange(100, 4096)][int]$PetHeight = 520,
     [switch]$NoPet,
+    [switch]$RequireNode,
     [switch]$OpenBrowser,
     [switch]$NoOpen
 )
@@ -114,6 +115,16 @@ function Get-RecordedProcess {
     } catch { return $null }
 }
 
+function Test-ProcessHasArgument {
+    param([int]$ProcessId, [string]$Argument)
+    $native = Get-CimInstance Win32_Process -Filter "ProcessId = $ProcessId" -ErrorAction Stop
+    if (-not $native -or [string]::IsNullOrWhiteSpace($native.CommandLine)) { return $false }
+    $tokens = [regex]::Matches($native.CommandLine, '"[^"]*"|[^\s]+') | ForEach-Object {
+        $_.Value.Trim([char]'"')
+    }
+    return $tokens -contains $Argument
+}
+
 function Wait-Service {
     param($Process, [string]$Url, [string]$Name, [string]$ErrorLog)
     $deadline = (Get-Date).AddSeconds(45)
@@ -140,12 +151,15 @@ function Wait-Service {
 
 function Start-NativeService {
     param([string]$Name, [string]$Root, [string]$Python, [string[]]$Arguments,
-          [int]$Port, [string]$Url, [hashtable]$EnvironmentOverrides)
+          [int]$Port, [string]$Url, [hashtable]$EnvironmentOverrides, [switch]$RequireNode)
     $recordPath = Join-Path $runtimeDir "lka-native-$Name-$Port.json"
     $outLog = Join-Path $logsDir "lka-native-$Name-$Port.out.log"
     $errLog = Join-Path $logsDir "lka-native-$Name-$Port.err.log"
     $process = Get-RecordedProcess $recordPath $Root $Python
     if ($null -ne $process) {
+        if ($RequireNode -and $Name -eq 'backend' -and -not (Test-ProcessHasArgument -ProcessId $process.Id -Argument '--require-node')) {
+            throw "The recorded backend PID $($process.Id) was not started with --require-node. It was left running; stop it yourself before starting this node."
+        }
         Wait-Service $process $Url $Name $errLog
         Write-Host "Reusing native $Name (PID $($process.Id)): $Url"
         return $process
@@ -178,8 +192,10 @@ function Start-NativeService {
 }
 
 try {
+    $backendArguments = @($backendLauncher, 'personal', '--host', '127.0.0.1', '--port', "$BackendPort")
+    if ($RequireNode) { $backendArguments += '--require-node' }
     $backend = Start-NativeService -Name backend -Root $BackendRoot -Python $backendPython `
-        -Arguments @($backendLauncher, 'personal', '--host', '127.0.0.1', '--port', "$BackendPort") `
+        -Arguments $backendArguments -RequireNode:$RequireNode `
         -Port $BackendPort -Url $backendUrl -EnvironmentOverrides @{
             PYTHONUTF8 = '1'; PYTHONIOENCODING = 'utf-8';
             LKA_DATA_DIR = (Join-Path $BackendRoot 'data\runtime');

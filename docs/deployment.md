@@ -21,6 +21,14 @@
 
 把代码更新到与后端配套的发布版本后，按仓库 README 的验证步骤检查。每台设备使用各自的云端登录；新设备首次登录时重新认证。Windows DPAPI 配对凭据绑定 Windows 用户，不要复制到另一台电脑或另一用户。不要把普通会话数据库克隆到每台设备；设备连接和授权通过云端设备入口建立。
 
+Windows 若此副本后端配置为 `sync.role="replica"`，可用 `run-lka-native-windows.ps1 -RequireNode` 启动；
+该参数会将 `--require-node` 传给本机后端，并在复用时核验当前后端进程确实带有该参数。
+默认启动方式保持原有行为。
+
+Windows 源码安装后续可使用根目录 `Check-LKA-Update.cmd`、`Update-LKA.cmd`
+检查与应用更新。默认保留外部 WSL/云端后端，纯 Windows 节点可明确配置为更新前后端。
+配置实际端口与外部备份路径后使用，详见 [Windows 更新](windows-updates.md)。
+
 ## Ubuntu 22.04 云端静态工作台
 
 Ubuntu 云端托管浏览器页面和 LKA 后端 API，不安装或启动 Java 桌宠。部署配套 `lka_backend`，启用云端/hub 配置、HTTPS 反向代理和访问控制；在后端配置中把 `[client].workbench_dir` 指向此仓库的 `app/web/pet` 目录。若由 Web 服务器直接提供静态文件，则将 `/desktop-pet/` 映射到该目录，并把其余 API 路径代理给后端。`/desktop-pet/connect.html` 应由同一 HTTPS 源提供。不要将后端 API 暴露到未受保护的公网地址。
