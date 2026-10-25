@@ -33,7 +33,8 @@
     "test:conversation-position": "node tests/conversation_position_test.cjs",
     "test:conversation-continuity": "node tests/frontend_conversation_continuity_smoke.cjs",
     "test:assistant-lifecycle": "node tests/frontend_assistant_lifecycle_smoke.cjs",
-    "test:manager-input-queue": "node tests/frontend_manager_input_queue_smoke.cjs"
+    "test:manager-input-queue": "node tests/frontend_manager_input_queue_smoke.cjs",
+    "test:opened-session-runs": "node tests/frontend_open_existing_run_smoke.cjs"
   },
   "devDependencies": {
     "playwright-core": "1.59.1"

@@ -72,7 +72,7 @@ const hubServer = http.createServer(async (req, res) => {
   const url = new URL(req.url, 'http://x'), p = url.pathname;
   if (cors(req, res)) return;
   const raw = await body(req);
-  hub.requests.push({ method: req.method, path: p, csrf: req.headers['x-csrf-token'] || '', origin: req.headers.origin || '' });
+  hub.requests.push({ method: req.method, path: p, query: url.search, csrf: req.headers['x-csrf-token'] || '', origin: req.headers.origin || '' });
   if (!hub.online && !p.startsWith('/desktop-pet/')) { res.writeHead(503); return res.end(); }
   if (staticFile(req, res, p)) return;
   if (p === '/favicon.ico') { res.writeHead(204); return res.end(); }
@@ -121,6 +121,18 @@ const hubServer = http.createServer(async (req, res) => {
     return json(res, { events, next_after: null });
   }
   if (p === '/managers/manager-main/deliveries' || p === '/managers/manager-main/executions') return json(res, { deliveries: [], executions: [], next_after: null });
+  if (p === '/agent/runs/remote-run/stream') {
+    const after = Number(url.searchParams.get('after_sequence') || 0);
+    const progress = [
+      { run_id: 'remote-run', sequence: 1, type: 'tool_started', message: '设备正在读取项目目录', created_at: stamp, payload: { tool_name: 'filesystem.list_directory' } },
+      { run_id: 'remote-run', sequence: 2, type: 'llm_started', message: '设备正在整理目录结果', created_at: stamp, payload: {} }
+    ];
+    if (after >= 2) progress.push({ run_id: 'remote-run', sequence: 3, type: 'tool_completed', message: '设备已完成目录读取', created_at: stamp, payload: { tool_name: 'filesystem.list_directory', status: 'completed' } });
+    // Repeated first frame deliberately checks client sequence dedup after reconnect.
+    res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
+    progress.forEach(event => res.write('id: remote-run:' + event.sequence + '\nevent: ' + event.type + '\ndata: ' + JSON.stringify(event) + '\n\n'));
+    return res.end();
+  }
   if (p === '/agent/runs/remote-run') return json(res, { run_id: 'remote-run', session_id: 'remote-session', trace_id: 't', status: reviews[hub.reviewStep] ? 'waiting_confirmation' : 'completed', created_at: stamp,
     remote_execution: { task_id: 'remote_task_t1', node_id: 'desk-a', environment_id: 'linux', workspace_id: 'work' } });
   if (p === '/sessions/manager-main') return json(res, { session: managerSession, messages: [{ message_id: 'm1', role: 'agent', content: '你好，我是真理。', payload: {} }] });
@@ -363,6 +375,11 @@ function listen(server) { return new Promise(resolve => server.listen(0, '127.0.
         await remoteTaskCard.getByText(/审批模式：请求 skip · 实际 manual（设备策略）/).waitFor();
         await remoteTaskCard.getByText('来源：真理会话 manager-main').waitFor();
         await remoteTaskCard.getByText('执行会话：delegated-execution-01').waitFor();
+        const process = remoteTaskCard.locator('.cl-progress');
+        await process.getByText('设备正在读取项目目录', { exact: false }).waitFor();
+        await process.getByText('设备已完成目录读取', { exact: false }).waitFor();
+        assert.equal(await process.locator('li', { hasText: '设备正在读取项目目录' }).count(), 1, 'reconnected process frames are deduplicated');
+        assert(hub.requests.some(r => r.path === '/agent/runs/remote-run/stream' && Number(new URLSearchParams(r.query || '').get('after_sequence')) >= 2), 'remote task opening connects and reconnects by persisted event cursor');
         const first = page.locator('.cl-review[data-review-id="rev-list-0001"]');
         await first.waitFor();
         assert.match(await first.innerText(), /filesystem\.list_directory[\s\S]*work\/reports/, 'tool name and target path visible');
@@ -487,6 +504,7 @@ function listen(server) { return new Promise(resolve => server.listen(0, '127.0.
       'explicit workspace choice when several are approved', 'node sidebar links to hub and lists only this node’s dispatched tasks',
       'remote session history is grouped by actual execution node with source, environment and workspace',
       'remote task cards show requested/effective review mode and source session',
+      'opening a remote task replays process without sending, reconnects by cursor, and deduplicates frames',
       'no cloud-only calls on node pages', 'cloud offline fallback list and direct reopen', 'revoked node asks to re-enter, no silent switch'] }, null, 2));
   } catch (error) { console.error(error.stack || error); process.exitCode = 1; }
   finally { await browser.close(); hubServer.close(); Object.values(nodes).forEach(() => {}); process.exit(process.exitCode || 0); }

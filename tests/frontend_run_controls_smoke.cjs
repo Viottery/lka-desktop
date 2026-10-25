@@ -11,6 +11,7 @@ const CHROME = process.env.CHROME_PATH || 'C:/Program Files/Google/Chrome/Applic
 const requests = [];
 const liveStreams = new Map();
 const runStatuses = new Map();
+const sessionRuns = new Map();
 const replaceAttempts = new Map();
 const errors = [];
 const previewDir = path.resolve(ROOT, '../../../.runtime/run-controls-preview');
@@ -74,6 +75,11 @@ const server = http.createServer(async (req, res) => {
   }
   if (url.pathname === '/pet/session-workspace') return json(res, 200, { path: 'C:/synthetic/workspace' });
   if (/^\/sessions\/[^/]+\/workspace$/.test(url.pathname)) return json(res, 200, { project_id: 'synthetic-project' });
+  const sessionRunsMatch = url.pathname.match(/^\/sessions\/([^/]+)\/runs$/);
+  if (sessionRunsMatch && req.method === 'GET') {
+    const sessionId = decodeURIComponent(sessionRunsMatch[1]);
+    return json(res, 200, { session_id: sessionId, runs: sessionRuns.get(sessionId) || [] });
+  }
   if (/^\/sessions\/[^/]+$/.test(url.pathname)) return json(res, 200, {
     session: { session_id: decodeURIComponent(url.pathname.split('/')[2]), title: 'Synthetic task', metadata: {}, workspace: { path: 'C:/synthetic/workspace' } },
     messages: []
@@ -82,6 +88,8 @@ const server = http.createServer(async (req, res) => {
   if (url.pathname === '/agent/turn/stream' && req.method === 'POST') {
     const runId = 'run-' + activeLayout;
     runStatuses.set(runId, 'running');
+    const sessionId = body.session_id || body.conversation_id;
+    if (sessionId) sessionRuns.set(sessionId, [{ run_id: runId, session_id: sessionId, status: 'running', created_at: new Date().toISOString() }]);
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store', 'connection': 'keep-alive' });
     liveStreams.set(runId, res);
     writeEvent(res, runId, 'run_started', { run_id: runId, sequence: 10, status: 'running' });
@@ -107,6 +115,9 @@ const server = http.createServer(async (req, res) => {
       if (attempt === 1) return json(res, 409, { detail: 'synthetic_replace_conflict' });
       const newRunId = 'replacement-' + runId;
       runStatuses.set(newRunId, 'running');
+      for (const [sessionId, runs] of sessionRuns) {
+        if (runs.some(run => run.run_id === runId)) sessionRuns.set(sessionId, [{ run_id: newRunId, session_id: sessionId, status: 'running', created_at: new Date().toISOString() }]);
+      }
       return json(res, 200, { run_id: newRunId, status: 'running' });
     }
     if (!action && req.method === 'GET') return json(res, 200, { run_id: runId, status: runStatuses.get(runId) || 'running' });

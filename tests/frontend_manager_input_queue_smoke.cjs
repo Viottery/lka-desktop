@@ -5,7 +5,7 @@ const fs = require('node:fs');
 const path = require('node:path');
 const http = require('node:http');
 const { chromium } = require(process.env.PLAYWRIGHT_MODULE || 'playwright-core');
-const ROOT = path.resolve(__dirname, '../app/web/pet');
+const ROOT = process.env.FRONTEND_ROOT || path.resolve(__dirname, '../app/web/pet');
 const stamp = new Date().toISOString(), requests = [], errors = [], streams = new Map();
 let activeRun = 'root-1', paused = false, holdPost, holdUpload, holdGet, probeFailures = 0, resumeRun = 3, failNext = false, dropNext = false;
 const runStatuses = new Map([['root-1', 'running']]);
@@ -58,7 +58,7 @@ const server = http.createServer(async(req,res)=>{
   const send=()=>json(res,201,{attachment_id:'att_0123456789abcdef0123456789abcdef',kind:'document',filename:'synthetic.txt',media_type:'text/plain',size_bytes:5});
   if(holdUpload){holdUpload.release=send;return;}send();return;
  }
- if(route.endsWith('/runs'))return json(res,200,{session_id:route.split('/')[2],runs:activeRun?[{run_id:activeRun,parent_run_id:null,status:runStatuses.get(activeRun)||'running',created_at:stamp}]:[],next_offset:null});
+ if(route.endsWith('/runs')){const sessionId=route.split('/')[2],latestReceipt=[...receipts].reverse().find(r=>r.run_id),latestRunId=activeRun||(latestReceipt&&latestReceipt.run_id);return json(res,200,{session_id:sessionId,runs:sessionId==='manager-queue'&&latestRunId?[{run_id:latestRunId,session_id:sessionId,parent_run_id:null,status:runStatuses.get(latestRunId)||'completed',created_at:stamp}]:[],next_offset:null});}
  if(route==='/sessions/manager-queue')return json(res,200,detail());
  if(route==='/sessions/ordinary')return json(res,200,detail('ordinary','ordinary'));
  if(route==='/pet/session-workspace')return json(res,200,{path:'/synthetic/work'});
@@ -177,8 +177,8 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   await page.locator('#questionInput').fill('');await page.getByRole('button',{name:'继续处理消息',exact:true}).waitFor();holdGet={};await wait(()=>holdGet.release);
   const releaseOldGet=holdGet.release;holdGet=null;await page.getByRole('button',{name:'继续处理消息',exact:true}).click();await wait(()=>streams.has('root-4'));releaseOldGet();
   await new Promise(r=>setTimeout(r,100));assert.equal(await page.evaluate(()=>JSON.parse(localStorage.getItem('agentic-rag-pet-chat-sessions-v4')).find(s=>s.kind==='manager').multiAgentRunId),'root-4');
-  // A root first observed while ordinary is already paused: fetch its durable
-  // status, do not open an SSE that will never advance, and render resume.
+  // A manager root first observed while ordinary is paused remains a background
+  // status update; opening the manager later replays it without resuming it.
   await page.evaluate(()=>LkaChatContext.openSession('ordinary'));
   receipts.find(r=>r.run_id==='root-4').status='completed';runStatuses.set('root-4','completed');
   const pausedReceipt={input_id:'paused-input',client_message_id:'paused-input',message_id:'paused-message',sequence:receipts.length+1,status:'running',run_id:'root-5'};
@@ -186,13 +186,14 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   activeRun='root-5';paused=true;runStatuses.set('root-5','paused');finish('root-4','completed');
   await wait(()=>requests.some(r=>r.route==='/agent/runs/root-5'));
   await page.waitForFunction(()=>JSON.parse(localStorage.getItem('agentic-rag-pet-chat-sessions-v4')).find(s=>s.kind==='manager').runControlStatus==='paused');
-  assert.equal(requests.filter(r=>r.route==='/agent/runs/root-5/stream').length,0,'newly discovered paused root is not subscribed');
+  assert.equal(requests.filter(r=>r.route==='/agent/runs/root-5/stream').length,0,'background discovery does not subscribe to a paused manager root');
   assert.equal(await page.locator('#questionInput').inputValue(),'普通会话草稿');
   await page.evaluate(()=>LkaChatContext.openSession('manager-queue'));
   await page.locator('#sendButton[data-action=resume]').waitFor();
   assert.equal(await page.locator('#sendButton').getAttribute('aria-label'),'继续任务');
   assert.equal(await page.locator('#managerInputQueueNotice button').first().isDisabled(),true,'queue continuation cannot resume an active paused root');
-  assert.equal(requests.filter(r=>r.route==='/agent/runs/root-5/stream').length,0,'returning to paused root still does not subscribe');
+  assert(requests.some(r=>r.route==='/agent/runs/root-5/stream'),'opening the paused manager session replays its process read-only');
+  assert(!requests.some(r=>r.route==='/agent/runs/root-5/resume'&&r.method==='POST'),'returning to paused root still does not resume it');
   // Empty resume preserves the original instruction/run. A new instruction
   // after another pause supersedes only that task, ahead of the saved backlog.
   const beforeResumePosts=requests.filter(r=>r.route.endsWith('/inputs')&&r.method==='POST').length;
@@ -221,10 +222,12 @@ const wait = async predicate => {for(let i=0;i<200;i++){if(predicate())return;aw
   // The native quick composer's generic bridge uses the same queued path.
   await page.close();await ordinary.close();
   const nativeContext=await browser.newContext(),native=await nativeContext.newPage();native.on('pageerror',e=>errors.push(e.message));
-  probeFailures=1;await native.goto(origin+'/chat.html?assistant=quick&backend='+encodeURIComponent(origin));
+  probeFailures=1;holdGet={};await native.goto(origin+'/chat.html?assistant=quick&backend='+encodeURIComponent(origin));
   await native.locator('#runStatus').filter({hasText:'暂时无法核对消息队列'}).waitFor();
+  await wait(()=>holdGet.release);
   await native.locator('#questionInput').fill('探测期间的草稿');assert.equal(await native.locator('#sendButton').isDisabled(),true,'unknown capability never falls back after transient failure');
   assert.equal(await native.evaluate(()=>__petChatSubmitText('探测期间的草稿')),false);
+  const releaseProbe=holdGet.release;holdGet=null;releaseProbe();
   await native.locator('#chatForm[data-input-mode=continuous]').waitFor();
   await native.evaluate(()=>{
    window.nativeRequests=[];window.nativeDraft='';window.petBridge={setComposerBusy(){},setComposerAction(){},setQuickPanelHeight(){},focusComposer(){},setComposerDraft:text=>window.nativeDraft=text,

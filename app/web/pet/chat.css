@@ -1037,7 +1037,7 @@ body.quick-mode .backend-offline h3 { font-size: 12px; margin: 0 0 5px; }
 .message .run-timeline li { padding: 3px 0; color: #809087; font-weight: 400; }
 .message .run-timeline li[aria-current="step"] { color: #536f5f; font-weight: 400; }
 .agent-live-output .message-content[hidden] { display: none; }
-body.run-progress-inline .run-status:not(.error) { display: none; }
+body.run-progress-inline #runStatus:not(.error) { display: none; }
 .quick-tooltip { font-family: "Noto Sans SC", "Microsoft YaHei UI", sans-serif; font-weight: 400; font-style: normal; }
 body.quick-mode .message .run-timeline { font-size: 12px; }
 

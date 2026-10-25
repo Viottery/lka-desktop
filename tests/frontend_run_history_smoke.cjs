@@ -20,7 +20,7 @@ function json(res,n,x){res.writeHead(n,{'content-type':'application/json','cache
 const server=http.createServer(async(req,res)=>{
  const u=new URL(req.url,'http://fixture'),p=u.pathname.replace(/^\/mock/,'');
  if(!u.pathname.startsWith('/mock')){
-  if(u.pathname==='/font'){res.writeHead(200,{'content-type':'font/collection'});return fs.createReadStream('/mnt/c/Windows/Fonts/msyh.ttc').pipe(res);}
+  if(u.pathname==='/font'){const fontPath=process.platform==='win32'?'C:/Windows/Fonts/msyh.ttc':'/mnt/c/Windows/Fonts/msyh.ttc';res.writeHead(200,{'content-type':'font/collection'});return fs.createReadStream(fontPath).pipe(res);}
   const f=path.resolve(ROOT,'.'+u.pathname);if(f.startsWith(ROOT+path.sep)&&fs.existsSync(f)&&fs.statSync(f).isFile()){res.writeHead(200,{'content-type':f.endsWith('.js')?'text/javascript':f.endsWith('.css')?'text/css':'text/html'});return fs.createReadStream(f).pipe(res);}return json(res,404,{});
  }
  requests.push({p,method:req.method,query:u.searchParams.toString()});

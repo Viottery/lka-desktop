@@ -9,7 +9,7 @@
   // The Java pet window counts as the pet: no device switching there.
   var nativeWindow = !!window.petBridge || document.body.classList.contains('native-composer');
   var mobile = document.body.classList.contains('mobile-workbench');
-  var state = { tab: 'overview', devices: [], deviceOffset: 0, deviceMore: false, tasks: new Map(), commandIds: new Map(), decisions: new Map(), watchers: new Map(), focusTask: '',
+  var state = { tab: 'overview', devices: [], deviceOffset: 0, deviceMore: false, tasks: new Map(), commandIds: new Map(), decisions: new Map(), watchers: new Map(), focusTask: '', progressStreams: new Map(),
     memoryDraft: null, memoryDraftId: '', sharedRecords: [], sharedWritable: false, lastFocus: null, generation: 0 };
   function $(id) { return document.getElementById(id); }
   function node(tag, className, text) { var item = document.createElement(tag); if (className) item.className = className; if (text !== undefined && text !== null) item.textContent = String(text); return item; }
@@ -75,6 +75,7 @@
     });
   }
   function render() {
+    stopAllTaskProgress();
     var generation = ++state.generation;
     renderTabs(); notice('');
     $('clPlace').textContent = placeLabel();
@@ -93,7 +94,7 @@
     overlay.hidden = false; render();
     setTimeout(function () { $('clClose').focus({ preventScroll: true }); }, 0);
   }
-  function close() { overlay.hidden = true; state.generation++; if (state.lastFocus && state.lastFocus.focus) state.lastFocus.focus({ preventScroll: true }); }
+  function close() { stopAllTaskProgress(); overlay.hidden = true; state.generation++; if (state.lastFocus && state.lastFocus.focus) state.lastFocus.focus({ preventScroll: true }); }
   $('clClose').addEventListener('click', close);
   overlay.addEventListener('click', function (event) { if (event.target === overlay) close(); });
   document.addEventListener('keydown', function (event) {
@@ -427,7 +428,10 @@
     summary.appendChild(node('small', '', when(task.updated_at)));
     item.appendChild(summary);
     var detail = node('div', 'cl-task-body'); item.appendChild(detail);
-    item.addEventListener('toggle', function () { if (item.open) loadTask(task.task_id, detail); });
+    item.addEventListener('toggle', function () {
+      if (item.open) loadTask(task.task_id, detail).catch(fail);
+      else stopTaskProgress(task.task_id);
+    });
     return item;
   }
   // Remote approvals: review_id → {taskId, decision, status: submitting|submitted|failed}.
@@ -497,9 +501,110 @@
     }, 3000);
     state.watchers.set(taskId, timer);
   }
+  function stopTaskProgress(taskId) {
+    var entry = state.progressStreams.get(taskId);
+    if (!entry) return;
+    entry.controller.abort(); if (entry.timer) clearTimeout(entry.timer);
+    state.progressStreams.delete(taskId);
+  }
+  function stopAllTaskProgress() { Array.from(state.progressStreams.keys()).forEach(stopTaskProgress); }
+  function attachTaskProgress(taskId, task, detail) {
+    if (!task.run_id) return;
+    var base = cloud(), previous = state.progressStreams.get(taskId);
+    if (previous && previous.runId === task.run_id && previous.base === base && !previous.controller.signal.aborted) {
+      detail.appendChild(previous.box); return;
+    }
+    stopTaskProgress(taskId);
+    var box = node('section', 'cl-progress'); box.appendChild(node('h4', '', '运行过程'));
+    var label = node('p', 'cl-muted', '正在连接运行过程…'); label.setAttribute('role', 'status'); box.appendChild(label);
+    var list = node('ol', 'run-history-list'); box.appendChild(list); detail.appendChild(box);
+    var entry = { box: box, label: label, list: list, detail: detail, taskId: taskId, runId: task.run_id,
+      base: base, controller: new AbortController(), sequence: 0, count: 0, retries: 0, timer: null, status: task.state };
+    state.progressStreams.set(taskId, entry);
+    function current() {
+      var card = detail.closest('details');
+      return state.progressStreams.get(taskId) === entry && !entry.controller.signal.aborted
+        && !overlay.hidden && detail.isConnected && card && card.open && cloud() === base;
+    }
+    function frame(block) {
+      var name = '', lines = [];
+      block.split(/\r?\n/).forEach(function (line) {
+        if (line.indexOf('event:') === 0) name = line.slice(6).trim();
+        else if (line.indexOf('data:') === 0) lines.push(line.slice(5).trimStart());
+      });
+      if (!lines.length || !current()) return;
+      var event = JSON.parse(lines.join('\n'));
+      if (event.run_id && event.run_id !== entry.runId) throw new Error('运行过程归属不匹配');
+      if (name === 'heartbeat' || event.type === 'heartbeat') return;
+      var sequence = Number(event.sequence);
+      if (!Number.isSafeInteger(sequence) || sequence <= entry.sequence) return;
+      entry.sequence = sequence;
+      name = event.type || name;
+      var payload = event.payload || {}, text = typeof event.message === 'string' ? event.message : '';
+      if (name === 'llm_delta' || name === 'task_working_state_updated') return;
+      if (payload.tool_name && text.indexOf(payload.tool_name) < 0) text = payload.tool_name + (text ? ' · ' + text : '') + (payload.status ? ' · ' + payload.status : '');
+      if (text) {
+        var row = node('li', '', (event.created_at ? when(event.created_at) + ' · ' : '') + text.slice(0, 1600));
+        row.dataset.sequence = String(sequence); list.appendChild(row); entry.count++;
+        while (list.children.length > 160) list.removeChild(list.firstChild);
+      }
+      var statuses = { run_created: 'queued', run_started: 'running', run_resumed: 'running',
+        run_paused: 'paused', run_completed: 'completed', run_failed: 'failed', run_cancelled: 'cancelled', run_timed_out: 'timed_out' };
+      if (statuses[name]) entry.status = statuses[name];
+      label.textContent = (taskStates[entry.status] || entry.status || '已连接') + (event.created_at ? ' · 最近活动 ' + when(event.created_at) : '');
+      var summaryState = detail.closest('details').querySelector('summary .cl-state');
+      if (summaryState && statuses[name]) summaryState.textContent = taskStates[entry.status] || entry.status;
+    }
+    async function consume() {
+      var reader = null;
+      try {
+        if (!current()) return;
+        var response = await fetch(base + '/agent/runs/' + encodeURIComponent(entry.runId) + '/stream?after_sequence=' + entry.sequence,
+          { credentials: 'include', headers: { Accept: 'text/event-stream' }, signal: entry.controller.signal });
+        if (!current()) return;
+        if (!response.ok) throw Object.assign(new Error('运行过程连接失败 HTTP ' + response.status), { status: response.status });
+        if (!response.body || !/text\/event-stream/i.test(response.headers.get('content-type') || '')) throw new Error('当前服务未提供运行过程连接');
+        label.textContent = '已连接，等待运行事件';
+        reader = response.body.getReader();
+        var decoder = new TextDecoder(), buffer = '';
+        while (current()) {
+          var part = await reader.read(); if (!current()) return;
+          buffer += decoder.decode(part.value || new Uint8Array(), { stream: !part.done });
+          if (buffer.length > 2 * 1024 * 1024) throw new Error('运行事件超出显示限制');
+          var match;
+          while ((match = /\r?\n\r?\n/.exec(buffer))) {
+            frame(buffer.slice(0, match.index)); buffer = buffer.slice(match.index + match[0].length);
+          }
+          if (part.done) { if (buffer.trim()) frame(buffer); break; }
+        }
+        if (!current()) return;
+        if (terminal.indexOf(entry.status) >= 0 || entry.status === 'paused') {
+          label.textContent = (taskStates[entry.status] || entry.status) + (entry.count ? '' : ' · 此任务没有已回传的过程记录');
+          if (entry.status !== task.state) loadTask(taskId, detail, null, true).catch(fail);
+          return;
+        }
+        throw new Error('运行过程连接已断开');
+      } catch (error) {
+        if (!current() || error.name === 'AbortError') return;
+        if ([401, 403, 404].indexOf(error.status) < 0 && entry.retries < 4) {
+          var delay = [500, 1000, 2000, 4000][entry.retries++];
+          label.textContent = '连接断开，正在重新连接运行过程…'; entry.timer = setTimeout(consume, delay); return;
+        }
+        label.textContent = error.message + '；任务状态以设备回报为准。';
+        box.appendChild(button('重连运行过程', function () {
+          entry.retries = 0; return consume();
+        }, 'cl-button cl-quiet'));
+      } finally {
+        if (reader) { try { await reader.cancel(); } catch (ignored) {} }
+      }
+    }
+    consume();
+  }
   async function loadTask(taskId, detail, append, quiet) {
+    var generation = state.generation;
     if (!append && !quiet) detail.textContent = '正在读取…';
     var task = await api('/remote-execution/tasks/' + encodeURIComponent(taskId) + '?limit=20&offset=' + (append ? append.next_offset : 0));
+    if (generation !== state.generation || !detail.isConnected || overlay.hidden || !detail.closest('details').open) return;
     if (append) task.reports = (append.reports || []).concat(task.reports || []);
     state.tasks.set(taskId, task);
     // A decision is settled once the latest complete report no longer lists it.
@@ -521,6 +626,7 @@
     }
     if (task.owner_session_id) detail.appendChild(node('p', 'cl-muted', '来源：真理会话 ' + task.owner_session_id));
     if (task.session_id) detail.appendChild(node('p', 'cl-muted', '执行会话：' + task.session_id));
+    attachTaskProgress(taskId, task, detail);
     if (task.state === 'unknown') detail.appendChild(node('p', 'cl-warn', '设备没有确认最后的结果。已发生的外部操作可能已经生效，系统不会自动重做或换设备重放。'));
     if (task.state === 'resuming') detail.appendChild(node('p', 'cl-muted', '恢复指令已排队，等待设备报告继续执行。无需重复点击。'));
     var reports = task.reports || [], latest = reports[reports.length - 1], complete = task.next_offset === null || task.next_offset === undefined;
@@ -1037,7 +1143,10 @@
     addNodeTaskEntry();
     // The Java window counts as the pet: no switching there.
     if (host.hosted || !nativeWindow && host.cloud.configured) addPlaceSwitcher();
-    expiredBanner(); host.onChange(expiredBanner);
+    expiredBanner(); host.onChange(function () {
+      expiredBanner();
+      state.progressStreams.forEach(function (entry, id) { if (entry.base !== cloud()) stopTaskProgress(id); });
+    });
     if (cloudClient() && !host.cloud.loggedIn) open('account');
     else if (new URLSearchParams(window.location.search).get('panel') === 'cluster') open();
   });
