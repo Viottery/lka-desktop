@@ -10,6 +10,7 @@ public final class PetChatBridge {
     private Consumer<String> memoryRequestHandler;
     private Consumer<String> openMattersHandler;
     private Consumer<String> qqReaderStatusRequestHandler;
+    private Runnable workbenchErrorHandler;
     private Consumer<String> savedRunStreamRequestHandler;
     private Consumer<String> savedRunStreamCancelHandler;
     private Consumer<Double> quickPanelHeightHandler;
@@ -146,6 +147,14 @@ public final class PetChatBridge {
 
     public void requestMemory(String payloadJson) {
         if (memoryRequestHandler != null) memoryRequestHandler.accept(payloadJson);
+    }
+
+    void setWorkbenchErrorHandler(Runnable handler) {
+        workbenchErrorHandler = handler;
+    }
+
+    public void showWorkbenchError() {
+        if (workbenchErrorHandler != null) workbenchErrorHandler.run();
     }
 
     void setQQReaderStatusRequestHandler(Consumer<String> handler) {

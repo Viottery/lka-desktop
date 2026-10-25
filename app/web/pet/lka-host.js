@@ -22,7 +22,7 @@
   var nativeFetch = window.fetch.bind(window);
   var listeners = [], resolved = false, hubResolved = false;
   var host = {
-    hosted: hosted,
+    hosted: hosted, clientMode: 'local',
     role: hosted ? requested : 'local',
     backendRole: hosted ? requested : 'unknown',
     origin: window.location.origin,
@@ -126,14 +126,15 @@
     var rest = relativeRest(url);
     // Cloud-owned requests made during startup wait until the routing decision exists.
     if (rest && STARTUP_OWNED.test(rest.rest) && (!hosted && !resolved || nodePage && !hubResolved)) {
-      return (hosted ? host.hubReady : host.ready).then(function () { return window.fetch(input, init); });
+      return (hosted ? host.hubReady : localProbe || host.ready).then(function () { return window.fetch(input, init); });
     }
     // A node never answers for 真理 or 待办; without the hub, fail fast and quietly.
-    if (nodePage && rest && NODE_CLOUD_OWNED.test(rest.rest) && !host.cloudRouting) return unavailable();
+    if (rest && !host.cloudRouting && ((nodePage && assistantOwned(rest.rest))
+        || (!hosted && host.clientMode !== 'cloud' && host.backendRole !== 'local' && assistantOwned(rest.rest)))) return unavailable();
     var rewritten = cloudTarget(url);
     if (rewritten) {
       return nativeFetch(rewritten, hosted ? hubInit(init, method) : init).then(async function (response) {
-        if (hosted) hubLost(response); else if (response.status === 401) refreshCloud();
+        if (hosted) hubLost(response); else if (response.status === 401) { applyCloud(Object.assign({}, host.cloudStatus, { logged_in: false })); refreshCloud(); }
         if ((response.headers.get('content-type') || '').indexOf('application/json') >= 0) {
           var learned = response.clone().json().then(function (data) { learn(data, 0); saveRouting(); }).catch(function () {});
           // Callers can read this manager's session as soon as fetch resolves.
@@ -214,7 +215,7 @@
   host.setCsrf = setCsrf;
   host.onChange = function (listener) { listeners.push(listener); };
   host.snapshot = function () {
-    return { hosted: host.hosted, role: host.role, backendRole: host.backendRole, identity: host.identity, principal: host.principal,
+    return { hosted: host.hosted, clientMode: host.clientMode, role: host.role, backendRole: host.backendRole, identity: host.identity, principal: host.principal,
       csrf: !!host.csrf, info: host.info, cloud: Object.assign({}, host.cloud), cloudRouting: host.cloudRouting };
   };
   host.directory = function () {
@@ -241,22 +242,59 @@
     return !!cloudTarget(candidate.href);
   };
 
+  host.routingReady = function () { return hosted ? host.hubReady : localProbe || host.ready; };
+  host.requiresCloudTransport = function (path) {
+    if (typeof path !== 'string' || path.charAt(0) !== '/' || path.indexOf('//') === 0) return false;
+    return host.clientMode === 'cloud' || hosted || (host.backendRole !== 'local' && assistantOwned(path.slice(1)));
+  };
+
+  // Identity probes must settle even when the service accepts a connection but stalls.
   async function readJson(path) {
-    var response = await nativeFetch(path, { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' } });
-    var data = null;
-    try { data = await response.json(); } catch (ignored) { data = null; }
-    return { status: response.status, ok: response.ok, data: data };
+    var controller = new AbortController(), timer = setTimeout(function () { controller.abort(); }, 6000);
+    try {
+      var response = await nativeFetch(path, { cache: 'no-store', credentials: 'same-origin', headers: { Accept: 'application/json' }, signal: controller.signal });
+      var data = null;
+      try { data = await response.json(); } catch (ignored) { data = null; }
+      return { status: response.status, ok: response.ok, data: data };
+    } finally { clearTimeout(timer); }
   }
   function applyCloud(cloud) {
     cloud = cloud || {};
+    host.cloudStatus = cloud;
+    host.clientMode = cloud.client_mode === 'cloud' ? 'cloud' : 'local';
+    if (host.clientMode === 'cloud') window.LkaMessageApiDisabled = true;
     host.cloud = { configured: !!cloud.configured, loggedIn: !!cloud.logged_in, account: cloud.account || null, origin: cloud.origin || '', expiresAt: cloud.expires_at || 0 };
     host.cloudRouting = host.backendRole === 'replica' && host.cloud.loggedIn;
     emit();
   }
-  async function refreshCloud() {
-    if (hosted) return;
-    var status = await readJson('/cloud-auth/status').catch(function () { return { ok: false }; });
-    applyCloud(status.ok ? status.data : null);
+  var localProbe = null;
+  function refreshCloud() {
+    if (hosted) return Promise.resolve(host.snapshot());
+    if (localProbe) return localProbe;
+    resolved = false;
+    localProbe = (async function () {
+      // Retry both halves of routing: a failed startup role probe must recover
+      // after login or reconnect, without requiring a page reload.
+      var results = await Promise.all([
+        readJson('/cloud-auth/status').catch(function () { return { status: 0 }; }),
+        readJson('/workbench/client/info').catch(function () { return { status: 0 }; })
+      ]);
+      var service = results[0], local = results[1];
+      if (!service.ok && service.status !== 0) {
+        var direct = await readJson('/client/info').catch(function () { return { ok: false }; });
+        if (direct.ok && direct.data && (direct.data.role === 'hub' || direct.data.role === 'replica')) {
+          window.location.replace(entryUrl()); return host.snapshot();
+        }
+      }
+      if (local.ok && local.data && local.data.role) {
+        host.backendRole = local.data.role; host.info = local.data;
+      }
+      // Keep the known deployment mode and owner when a transient probe fails.
+      // Authentication is unavailable until a successful status probe confirms it.
+      applyCloud(service.ok && service.data ? service.data : Object.assign({}, host.cloudStatus, { logged_in: false }));
+      return host.snapshot();
+    }()).finally(function () { resolved = true; localProbe = null; });
+    return localProbe;
   }
   host.refreshCloud = refreshCloud;
 
@@ -317,22 +355,7 @@
 
   host.ready = (async function () {
     if (!hosted) {
-      // Only the 8780 frontend service answers /cloud-auth/status. Without it the
-      // page sits on a backend origin opened without a host marker.
-      var service = await readJson('/cloud-auth/status').catch(function () { return { status: 0 }; });
-      if (!service.ok && service.status !== 0) {
-        var direct = await readJson('/client/info').catch(function () { return { ok: false }; });
-        if (direct.ok && direct.data && (direct.data.role === 'hub' || direct.data.role === 'replica')) {
-          window.location.replace(entryUrl()); return host.snapshot();
-        }
-      }
-      // The local backend's role decides whether cloud-owned features route to /cloud.
-      var local = await readJson('/workbench/client/info').catch(function () { return { status: 0 }; });
-      host.backendRole = local.ok && local.data && local.data.role ? local.data.role : 'local';
-      host.info = local.ok ? local.data : null;
-      applyCloud(service.ok ? service.data : null);
-      resolved = true;
-      return host.snapshot();
+      return refreshCloud();
     }
     var info;
     try { info = await readJson('/client/info'); }

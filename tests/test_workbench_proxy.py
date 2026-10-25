@@ -7,6 +7,7 @@ import httpx
 from fastapi import FastAPI
 
 from app.api.routes.workbench_proxy import router, _route, _upstream
+from app.api.routes import cloud_gateway
 
 RealClient = httpx.AsyncClient
 
@@ -28,6 +29,8 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.app = FastAPI()
         self.app.include_router(router)
+        self.app.include_router(cloud_gateway.router)
+        cloud_gateway._session.set("", None, 0, "")
         self.calls = []
         self.streams = []
         async def upstream(request):
@@ -38,6 +41,11 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=stream)
             return httpx.Response(200, json={"sessions": [{"session_id": "synthetic"}]})
         self.transport = httpx.MockTransport(upstream)
+
+    def set_cloud_session(self, token="saved-account-token", origin="https://hub.example.ts.net"):
+        with patch.dict(os.environ, {"LKA_CLOUD_ORIGIN": origin}, clear=False):
+            cloud_gateway._session.set(token, {"username": "owner"} if token else None,
+                                       4102444800 if token else 0, origin)
 
     async def request(self, path="sessions?limit=50", method="GET", headers=None, payload=None,
                       content=None, host="127.0.0.1:8780", peer="127.0.0.1", env=None):
@@ -52,6 +60,14 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
             async with RealClient(transport=httpx.ASGITransport(app=self.app, client=(peer, 3210)),
                                   base_url="http://" + host) as client:
                 return await client.request(method, "/workbench/" + path, headers=headers, json=payload, content=content)
+
+    async def test_exact_turn_correlation_query_reaches_backend(self):
+        response = await self.request("sessions/synthetic/runs?limit=2&client_request_id=input-unique")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0].url.path, "/sessions/synthetic/runs")
+        self.assertEqual(self.calls[0].url.params["client_request_id"], "input-unique")
+        self.assertEqual(self.calls[0].url.params["limit"], "2")
 
     async def test_verification_context_is_built_once_off_the_event_loop(self):
         import asyncio
@@ -187,6 +203,8 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(self.calls), before)
 
     async def test_explicit_route_allowlist(self):
+        self.assertTrue(_route("GET", "sessions/s1", {"message_limit", "before_message_id", "after_message_id"}))
+        self.assertFalse(_route("GET", "sessions/s1", {"unexpected"}))
         self.assertTrue(_route("GET", "sessions/s1/files", {"limit"}))
         self.assertTrue(_route("POST", "agent/turn", set()))
         self.assertTrue(_route("POST", "agent/runs/run_1/interrupt", set()))
@@ -198,6 +216,62 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(_route("POST", "matters/m1/restore", set()))
         self.assertFalse(_route("DELETE", "matters/m1", {"arbitrary"}))
         self.assertTrue(_route("POST", "sessions/s1/workspace/materialize", set()))
+
+    async def test_cloud_only_workbench_uses_saved_native_session_for_ordinary_api(self):
+        self.set_cloud_session()
+        headers = {"Origin": "http://127.0.0.1:8780", "Authorization": "Bearer browser-secret",
+                   "Cookie": "local=session; control=secret", "X-LKA-Messages-Control-Token": "control-secret"}
+        listed = await self.request("sessions?limit=50", headers=headers,
+            env={"LKA_CLIENT_MODE": "cloud", "LKA_CLOUD_ORIGIN": "https://hub.example.ts.net"})
+        self.assertEqual(listed.status_code, 200)
+        request = self.calls[-1]
+        self.assertEqual(str(request.url), "https://hub.example.ts.net/sessions?limit=50")
+        self.assertEqual(request.headers["x-lka-account-token"], "saved-account-token")
+        self.assertEqual(request.headers["x-lka-client"], "native")
+        for name in ("authorization", "cookie", "origin", "x-lka-messages-control-token"):
+            self.assertNotIn(name, request.headers)
+        self.assertNotIn("saved-account-token", listed.text)
+        self.assertNotIn("browser-secret", listed.text)
+        self.assertNotIn("control-secret", listed.text)
+
+        sent = await self.request("agent/turn", "POST", headers=headers,
+            payload={"session_id": "s1", "user_input": "hello"},
+            env={"LKA_CLIENT_MODE": "cloud", "LKA_CLOUD_ORIGIN": "https://hub.example.ts.net"})
+        self.assertEqual(sent.status_code, 200)
+        request = self.calls[-1]
+        self.assertEqual(request.url.path, "/agent/turn")
+        self.assertEqual(__import__("json").loads(request.content), {"session_id": "s1", "user_input": "hello"})
+        self.assertEqual(request.headers["x-lka-account-token"], "saved-account-token")
+
+    async def test_cloud_only_requires_login_valid_origin_and_local_same_origin_page(self):
+        env = {"LKA_CLIENT_MODE": "cloud", "LKA_CLOUD_ORIGIN": "https://hub.example.ts.net"}
+        self.assertEqual((await self.request("sessions", env=env)).status_code, 401)
+        self.set_cloud_session()
+        self.assertEqual((await self.request("sessions", env={"LKA_CLIENT_MODE": "cloud"})).status_code, 503)
+        self.assertEqual((await self.request("sessions", headers={"Origin": "http://evil.example"}, env=env)).status_code, 403)
+        self.assertEqual((await self.request("sessions", host="desk.example.ts.net:8780", peer="100.64.0.8",
+                                             env={**env, "LKA_WORKBENCH_ORIGINS": "http://desk.example.ts.net:8780"})).status_code, 403)
+
+    async def test_cloud_only_sse_stream_is_relayed_from_hub(self):
+        self.set_cloud_session()
+        response = await self.request("agent/turn/stream", "POST", payload={"user_input": "test"},
+            env={"LKA_CLIENT_MODE": "cloud", "LKA_CLOUD_ORIGIN": "https://hub.example.ts.net"})
+        self.assertEqual(response.status_code, 200)
+        self.assertTrue(response.headers["content-type"].startswith("text/event-stream"))
+        self.assertEqual(response.content[:24], b"event: token\ndata: raw\n\n")
+        self.assertEqual(self.calls[-1].url, "https://hub.example.ts.net/agent/turn/stream")
+        self.assertEqual(self.calls[-1].headers["x-lka-account-token"], "saved-account-token")
+
+    async def test_cloud_only_allowlist_and_normal_mode_stay_separate(self):
+        self.set_cloud_session()
+        env = {"LKA_CLIENT_MODE": "cloud", "LKA_CLOUD_ORIGIN": "https://hub.example.ts.net"}
+        self.assertEqual((await self.request("plugins/qq-ui/messages/send", "POST", env=env)).status_code, 404)
+        self.assertEqual(self.calls, [])
+        self.assertEqual((await self.request("sessions", env={"LKA_CLIENT_MODE": "typo"})).status_code, 503)
+        self.assertEqual(self.calls, [])
+        local = await self.request("sessions?limit=50")
+        self.assertEqual(local.status_code, 200)
+        self.assertEqual(str(self.calls[-1].url), "http://127.0.0.1:8765/sessions?limit=50")
 
     async def test_run_interrupt_and_replace_are_forwarded_same_origin(self):
         import json

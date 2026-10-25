@@ -1,4 +1,5 @@
 """Synthetic cloud gateway tests; no real hub, credentials, data or model calls."""
+import gzip
 import json
 import os
 import re
@@ -41,6 +42,8 @@ class CloudGatewayTests(unittest.IsolatedAsyncioTestCase):
                 return httpx.Response(200, json={"synthetic": True})
             if path == "/managers/default":
                 return httpx.Response(401, json={"detail": "Account authentication required"})
+            if path == "/sessions/synthetic-history":
+                return httpx.Response(200, content=gzip.compress(json.dumps({"session": {"session_id": "synthetic-history"}, "messages": [], "message_page": {"has_more": False}}).encode()), headers={"Content-Encoding": "gzip", "Content-Type": "application/json"})
             if path == "/devices":
                 return httpx.Response(200, json={"items": [{"node_id": "desktop-a"}]})
             return httpx.Response(404, json={"detail": "nope"})
@@ -62,6 +65,25 @@ class CloudGatewayTests(unittest.IsolatedAsyncioTestCase):
         response = await self.request("/cloud-auth/login", "POST", {"username": "owner", "password": "correct-horse"})
         self.assertEqual(response.status_code, 200)
         return response
+
+    async def test_exact_turn_correlation_query_reaches_hub(self):
+        await self.login()
+        self.calls.clear()
+        await self.request("/cloud/sessions/synthetic/runs?limit=2&client_request_id=input-unique")
+        self.assertEqual(len(self.calls), 1)
+        self.assertEqual(self.calls[0].url.path, "/sessions/synthetic/runs")
+        self.assertEqual(self.calls[0].url.params["client_request_id"], "input-unique")
+        self.assertEqual(self.calls[0].url.params["limit"], "2")
+
+    async def test_paged_history_accepts_gzip_and_relays_decoded_json(self):
+        await self.login()
+        response = await self.request("/cloud/sessions/synthetic-history?message_limit=30&after_message_id=m_1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json()["message_page"], {"has_more": False})
+        self.assertNotIn("content-encoding", response.headers)
+        self.assertEqual(self.calls[-1].headers["accept-encoding"], "gzip")
+        self.assertEqual(self.calls[-1].url.params["after_message_id"], "m_1")
+        self.assertEqual((await self.request("/cloud/sessions/synthetic-history?unexpected=1")).status_code, 404)
 
     async def test_login_keeps_token_in_process_and_never_returns_it(self):
         response = await self.login()

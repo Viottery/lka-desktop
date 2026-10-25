@@ -987,6 +987,8 @@ final class PetControlWindow {
         raiseItem.setOnAction(event -> actions.raiseModel());
         MenuItem lowerItem = new MenuItem("形态下移");
         lowerItem.setOnAction(event -> actions.lowerModel());
+        MenuItem closePetItem = new MenuItem("仅关闭桌宠（保留服务）");
+        closePetItem.setOnAction(event -> actions.shutdownDesktopPet());
         MenuItem shutdownAllItem = new MenuItem("退出桌宠与后端");
         shutdownAllItem.getStyleClass().add("danger-menu-item");
         shutdownAllItem.setOnAction(event -> shutdownDesktopAndBackend());
@@ -1030,7 +1032,7 @@ final class PetControlWindow {
 
         CustomMenuItem panelItem = new CustomMenuItem(scroll, false);
         panelItem.getStyleClass().add("quick-settings-menu-item");
-        menuButton.getItems().setAll(panelItem);
+        menuButton.getItems().setAll(panelItem, new SeparatorMenuItem(), closePetItem);
         menuButton.setOnShowing(event -> {
             refreshSettingsState();
             resizeSettings.run();
@@ -1467,12 +1469,22 @@ final class PetControlWindow {
             openWorkbenchSession("", "", true);
             return;
         }
-        if (webView == null) return;
+        if (webView == null) {
+            showNativeImageError("会话页面尚未准备好，请稍后重试打开工作台");
+            return;
+        }
         try {
-            webView.getEngine().executeScript(
-                    "window.__petChatOpenWorkbench && window.__petChatOpenWorkbench()");
+            Object available = webView.getEngine().executeScript(
+                    "(function(){if(typeof window.__petChatOpenWorkbench!=='function')return false;"
+                    + "Promise.resolve(window.__petChatOpenWorkbench()).then(function(ok){"
+                    + "if(ok===false)window.petBridge.showWorkbenchError();},function(){window.petBridge.showWorkbenchError();});"
+                    + "return true;})()");
+            if (!Boolean.TRUE.equals(available)) {
+                showNativeImageError("会话页面尚未准备好，请稍后重试打开工作台");
+            }
         } catch (RuntimeException error) {
             System.err.println("[pet-chat] workbench handoff failed: " + error.getMessage());
+            showNativeImageError("无法打开工作台，请稍后重试");
         }
     }
 
@@ -1563,6 +1575,7 @@ final class PetControlWindow {
                 chatBridge.setMemoryRequestHandler(this::handleMemoryRequest);
                 chatBridge.setOpenMattersHandler(this::openMatters);
                 chatBridge.setWorkspaceReserveHandlers(this::reserveSessionWorkspace, this::materializeSessionWorkspace);
+                chatBridge.setWorkbenchErrorHandler(() -> showNativeImageErrorLater("无法打开工作台，请稍后重试"));
                 chatBridge.setQQReaderStatusRequestHandler(this::handleQQReaderStatusRequest);
                 chatBridge.setSavedRunStreamRequestHandler(this::handleSavedRunStreamRequest);
                 chatBridge.setSavedRunStreamCancelHandler(this::cancelSavedRunStream);
@@ -2329,7 +2342,6 @@ final class PetControlWindow {
 
     private void handleBridgePayload(String payloadJson) {
         try {
-            System.out.println("[pet-chat] bridge payload raw=" + compact(payloadJson, 600));
             JsonObject payload = JsonParser.parseString(payloadJson).getAsJsonObject();
             String question = payload.has("question") ? payload.get("question").getAsString() : "";
             String conversationId = payload.has("conversation_id") ? payload.get("conversation_id").getAsString() : "";
@@ -2337,13 +2349,14 @@ final class PetControlWindow {
             String safetyMode = payload.has("safety_review_mode") ? payload.get("safety_review_mode").getAsString() : "";
             String attachmentIds = payload.has("attachment_ids") ? payload.get("attachment_ids").toString() : "[]";
             Boolean resumable = bridgeResumable(payload);
+            String clientRequestId = bridgeClientRequestId(payload);
             System.out.println("[pet-chat] bridge parsed questionLength=" + question.length() + " conversationId=" + conversationId + " mode=" + mode);
             String model = payload.has("llm_model") ? payload.get("llm_model").getAsString() : "";
             String client = payload.has("llm_client") ? payload.get("llm_client").getAsString() : "";
             String answerModel = payload.has("llm_answer_model") ? payload.get("llm_answer_model").getAsString() : "";
             String answerClient = payload.has("llm_answer_client") ? payload.get("llm_answer_client").getAsString() : "";
             String reasoningLevel = payload.has("llm_reasoning_level") ? payload.get("llm_reasoning_level").getAsString() : "";
-            sendChatRequest(question, conversationId, mode, safetyMode, client, model, answerClient, answerModel, reasoningLevel, attachmentIds, resumable);
+            sendChatRequest(question, conversationId, mode, safetyMode, client, model, answerClient, answerModel, reasoningLevel, attachmentIds, resumable, clientRequestId);
         } catch (RuntimeException error) {
             System.err.println("[pet-chat] bridge parse failed: " + error.getMessage());
             deliverChatResponse(jsonObject("error", "Desktop bridge parse failed: " + error.getMessage()));
@@ -2377,13 +2390,58 @@ final class PetControlWindow {
                 }
             }
             Boolean resumable = bridgeResumable(payload);
+            String clientRequestId = bridgeClientRequestId(payload);
             String selectedResponseMode = responseMode, callbackId = requestId, sessionId = conversationId;
             String selectedReasoningLevel = reasoningLevel;
-            Thread worker = new Thread(() -> sendChatStreamRequest(question, sessionId, client, model, answerClient, answerModel, safetyMode, selectedReasoningLevel, attachmentIds, resumable, selectedResponseMode, callbackId), "pet-chat-stream");
+            Thread worker = new Thread(() -> sendChatStreamRequest(question, sessionId, client, model, answerClient, answerModel, safetyMode, selectedReasoningLevel, attachmentIds, resumable, selectedResponseMode, callbackId, clientRequestId), "pet-chat-stream");
             worker.setDaemon(true);
             worker.start();
         } catch (RuntimeException error) {
             deliverChatStreamFailure("Desktop stream bridge parse failed: " + error.getMessage(), conversationId, requestId);
+        }
+    }
+
+    private String bridgeClientRequestId(JsonObject payload) {
+        if (!payload.has("client_request_id") || payload.get("client_request_id").isJsonNull()) return "";
+        if (!payload.get("client_request_id").isJsonPrimitive()
+                || !payload.getAsJsonPrimitive("client_request_id").isString()) {
+            throw new IllegalArgumentException("Invalid client_request_id");
+        }
+        String value = payload.get("client_request_id").getAsString();
+        if (!value.matches("[A-Za-z0-9._:-]{1,128}")) throw new IllegalArgumentException("Invalid client_request_id");
+        return value;
+    }
+
+    static JsonObject turnTransportFailure(String error, String sessionId, String requestId,
+                                           String clientRequestId, String runId, boolean uncertain) {
+        JsonObject result = new JsonObject();
+        result.addProperty("error", error);
+        result.addProperty("session_id", sessionId == null ? "" : sessionId);
+        if (requestId != null && !requestId.isBlank()) result.addProperty("request_id", requestId);
+        if (clientRequestId != null && !clientRequestId.isBlank()) result.addProperty("client_request_id", clientRequestId);
+        if (runId != null && !runId.isBlank()) result.addProperty("run_id", runId);
+        if (uncertain) result.addProperty("transport_uncertain", true);
+        return result;
+    }
+
+    static final class TurnStreamState {
+        String runId = "";
+        boolean terminal;
+
+        void accept(String eventName, String dataJson) {
+            JsonObject event = JsonParser.parseString(dataJson).getAsJsonObject();
+            if (event.has("parent_run_id") && !event.get("parent_run_id").isJsonNull()
+                    && !event.get("parent_run_id").getAsString().isBlank()) return;
+            String eventRunId = event.has("run_id") && !event.get("run_id").isJsonNull()
+                    ? event.get("run_id").getAsString() : "";
+            if (!eventRunId.isBlank()) {
+                if (runId.isBlank()) runId = eventRunId;
+                else if (!runId.equals(eventRunId)) return;
+            }
+            if (!runId.isBlank() && switch (eventName) {
+                case "run_completed", "run_failed", "run_cancelled", "run_timed_out", "run_paused" -> true;
+                default -> false;
+            }) terminal = true;
         }
     }
 
@@ -2393,8 +2451,10 @@ final class PetControlWindow {
         return payload.get("resumable").getAsBoolean();
     }
 
-    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String answerClient, String answerModel, String safetyMode, String reasoningLevel, String attachmentIds, Boolean resumable, String responseMode, String requestId) {
+    private void sendChatStreamRequest(String question, String conversationId, String client, String model, String answerClient, String answerModel, String safetyMode, String reasoningLevel, String attachmentIds, Boolean resumable, String responseMode, String requestId, String clientRequestId) {
+        TurnStreamState streamState = new TurnStreamState();
         String requestJson = "{\"session_id\":" + jsonString(conversationId == null ? "" : conversationId)
+                + (clientRequestId == null || clientRequestId.isBlank() ? "" : ",\"client_request_id\":" + jsonString(clientRequestId))
                 + ",\"user_input\":" + jsonString(question == null ? "" : question)
                 + ",\"attachment_ids\":" + (attachmentIds == null ? "[]" : attachmentIds)
                 + ",\"llm\":{\"response_mode\":" + jsonString(responseMode)
@@ -2416,8 +2476,11 @@ final class PetControlWindow {
                     .build();
             HttpResponse<Stream<String>> response = httpClient.send(request, HttpResponse.BodyHandlers.ofLines());
             if (response.statusCode() < 200 || response.statusCode() >= 300) {
-                String error = response.body().reduce("", (a, b) -> a + b);
-                deliverChatStreamFailure("HTTP " + response.statusCode() + ": " + error, conversationId, requestId);
+                String error;
+                try (Stream<String> lines = response.body()) { error = lines.reduce("", (a, b) -> a + b); }
+                catch (RuntimeException interruptedBody) { error = "Response body interrupted."; }
+                deliverChatResponse(turnTransportFailure("HTTP " + response.statusCode() + ": " + error,
+                        conversationId, requestId, clientRequestId, "", response.statusCode() >= 500).toString());
                 return;
             }
             String eventName = "message";
@@ -2427,14 +2490,25 @@ final class PetControlWindow {
                     if (line.startsWith("event:")) eventName = line.substring(6).trim();
                     else if (line.startsWith("data:")) { if (data.length() > 0) data.append('\n'); data.append(line.substring(5).trim()); }
                     else if (line.isBlank() && data.length() > 0) {
+                        streamState.accept(eventName, data.toString());
                         deliverChatStreamEvent(eventName, data.toString(), requestId);
                         eventName = "message"; data.setLength(0);
                     }
                 }
             }
-            if (data.length() > 0) deliverChatStreamEvent(eventName, data.toString(), requestId);
+            if (data.length() > 0) {
+                streamState.accept(eventName, data.toString());
+                deliverChatStreamEvent(eventName, data.toString(), requestId);
+            }
+            if (!streamState.terminal) {
+                deliverChatResponse(turnTransportFailure("Agent event stream closed before a terminal event.",
+                        conversationId, requestId, clientRequestId, streamState.runId, true).toString());
+            }
         } catch (Exception error) {
-            deliverChatStreamFailure("Desktop stream bridge failed: " + error.getMessage(), conversationId, requestId);
+            if (!streamState.terminal) {
+                deliverChatResponse(turnTransportFailure("Desktop stream bridge connection interrupted.",
+                        conversationId, requestId, clientRequestId, streamState.runId, true).toString());
+            }
         }
     }
 
@@ -3069,12 +3143,13 @@ final class PetControlWindow {
         });
     }
 
-    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model, String answerClient, String answerModel, String reasoningLevel, String attachmentIds, Boolean resumable) {
+    private void sendChatRequest(String question, String conversationId, String mode, String safetyMode, String client, String model, String answerClient, String answerModel, String reasoningLevel, String attachmentIds, Boolean resumable, String clientRequestId) {
         Thread worker = new Thread(() -> {
             String responseJson;
             try {
                 JsonObject requestBody = new JsonObject();
                 requestBody.addProperty("session_id", conversationId == null ? "" : conversationId);
+                if (clientRequestId != null && !clientRequestId.isBlank()) requestBody.addProperty("client_request_id", clientRequestId);
                 requestBody.addProperty("user_input", question == null ? "" : question);
                 requestBody.add("attachment_ids", JsonParser.parseString(attachmentIds == null ? "[]" : attachmentIds));
                 if (safetyMode != null && !safetyMode.isBlank()) requestBody.addProperty("safety_review_mode", safetyMode);
@@ -3090,7 +3165,7 @@ final class PetControlWindow {
                 }
                 String requestJson = requestBody.toString();
                 String targetUrl = backendBaseUrl + "/agent/turn";
-                System.out.println("[pet-chat] http request url=" + targetUrl + " body=" + compact(requestJson, 600));
+                System.out.println("[pet-chat] http request starting");
                 HttpRequest request = HttpRequest.newBuilder()
                         .uri(URI.create(targetUrl))
                         .version(HttpClient.Version.HTTP_1_1)
@@ -3101,15 +3176,17 @@ final class PetControlWindow {
                         .build();
                 HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString(StandardCharsets.UTF_8));
                 if (response.statusCode() >= 200 && response.statusCode() < 300) {
-                    responseJson = response.body();
-                    System.out.println("[pet-chat] chat-api OK status=" + response.statusCode() + " body=" + compact(responseJson, 700));
+                    responseJson = JsonParser.parseString(response.body()).getAsJsonObject().toString();
+                    System.out.println("[pet-chat] chat-api OK status=" + response.statusCode());
                 } else {
-                    responseJson = jsonObject("error", "HTTP " + response.statusCode() + ": " + response.body());
-                    System.err.println("[pet-chat] chat-api FAIL status=" + response.statusCode() + " body=" + response.body());
+                    responseJson = turnTransportFailure("HTTP " + response.statusCode() + ": " + response.body(),
+                            conversationId, "", clientRequestId, "", response.statusCode() >= 500).toString();
+                    System.err.println("[pet-chat] chat-api FAIL status=" + response.statusCode());
                 }
             } catch (Exception error) {
-                responseJson = jsonObject("error", error.getMessage() == null ? error.toString() : error.getMessage());
-                System.err.println("[pet-chat] chat-api ERROR " + responseJson);
+                responseJson = turnTransportFailure("Desktop chat bridge connection interrupted.",
+                        conversationId, "", clientRequestId, "", true).toString();
+                System.err.println("[pet-chat] chat-api transport interrupted");
             }
             deliverChatResponse(responseJson);
         }, "pet-chat-http");

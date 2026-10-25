@@ -154,6 +154,32 @@ The Java Spine desktop pet uses the local build skeleton's `Relax`, `Interact`,
 Run `gradlew.bat verifyPetMotion --offline` in `desktop-pet-java` to check the
 roam-target rules without opening a desktop session.
 
+The pet settings include **仅关闭桌宠（保留服务）**. This exits only the Java pet
+and its quick window; frontend, Agent backend and QQ services keep running.
+
+### Conversation history
+
+The quick window and workbench initially read the latest 30 backend messages.
+Later refreshes request newer messages by ID and follow additional pages when
+needed. **加载更早消息** reads the preceding page; repeated clicks can reach the
+entire history. Those explicitly loaded pages remain in the open window while
+browser persistence keeps only the latest 180 messages. Ordinary automatic
+refreshes also keep the recent in-memory cache bounded to 180 messages.
+
+A cleared history or invalid cursor discards the old page cache and reloads the
+latest page. Cache identity includes the backend, host role and active account;
+responses from a previous identity cannot repopulate it. Older servers without
+paging metadata retain their existing complete-response behavior and render the
+latest 180 visible messages. Older local proxies rejecting the new query keys
+fall back once to their existing session-detail endpoint.
+
+Isolated checks (no real backend or personal data):
+
+```text
+node tests/session_history_test.cjs
+node tests/frontend_session_history_smoke.cjs
+```
+
 ### Quick conversation layout
 
 The native quick window starts as a 390 × 118 logical-pixel input note. After
@@ -262,8 +288,10 @@ Install or validate Java 21 (Temurin) for this project:
 powershell.exe -NoProfile -ExecutionPolicy Bypass -File .\scripts\setup-java-env.ps1 -InstallPrereqs
 ```
 
-The script validates `java -version`, refreshes shell PATH from registry,
-and exports `JAVA_HOME` for the current session.
+The script first validates an existing `JAVA_HOME` as a Java 21 JDK, including
+portable installations. If it is invalid, it refreshes PATH from the registry and
+checks the PATH installation. It exports the selected `JAVA_HOME` and prepends
+its `bin` directory to PATH for the current session.
 
 ## JavaFX Window Entry
 

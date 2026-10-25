@@ -38,10 +38,11 @@ _ROUTES = (
     ("GET", r"sessions/" + _ID + r"/attachments/att_[0-9a-f]{32}", set()),
     ("GET", r"sessions/" + _ID + r"/attachments/att_[0-9a-f]{32}/raw", set()),
     ("GET", r"sessions/deleted", {"limit", "offset", "q"}),
-    ("GET", r"sessions/" + _ID, set()), ("PATCH", r"sessions/" + _ID, set()),
+    ("GET", r"sessions/" + _ID, {"message_limit", "before_message_id", "after_message_id"}),
+    ("PATCH", r"sessions/" + _ID, set()),
     ("DELETE", r"sessions/" + _ID, {"only_if_empty", "expected_updated_at"}),
     ("POST", r"sessions/" + _ID + r"/restore", set()),
-    ("GET", r"sessions/" + _ID + r"/runs", {"limit", "offset"}),
+    ("GET", r"sessions/" + _ID + r"/runs", {"limit", "offset", "client_request_id"}),
     ("GET", r"sessions/" + _ID + r"/inputs", set()),
     ("POST", r"sessions/" + _ID + r"/inputs", set()),
     ("POST", r"sessions/" + _ID + r"/inputs/resume", set()),
@@ -199,6 +200,17 @@ async def workbench_proxy(path: str, request: Request):
     require_workbench_page(request)
     if not _route(request.method, path, set(request.query_params.keys())):
         raise HTTPException(404, "Unsupported workbench request")
+    # Cloud-only clients use the same browser-facing allowlist, but forward to
+    # the configured hub with the local native session. Import lazily because
+    # the cloud gateway reuses this module's request checks and route limits.
+    mode = os.environ.get("LKA_CLIENT_MODE", "local").strip().lower()
+    if mode not in {"local", "cloud"}:
+        raise HTTPException(503, "Unsupported client mode")
+    if mode == "cloud":
+        from app.api.routes import cloud_gateway
+
+        cloud_gateway._require_local(request)
+        return await cloud_gateway._forward(request, path)
     is_attachment_upload = request.method == "POST" and bool(
         re.fullmatch(r"sessions/" + _ID + r"/attachments", path)
     )

@@ -203,7 +203,16 @@ def plan_component(root, component, target, old):
     # A local commit or divergent development branch must never be discarded.
     git(root, "merge-base", "--is-ancestor", old, target)
     names = git(root, "ls-tree", "-r", "--name-only", target).splitlines()
-    if any(private_target(name, component) for name in names):
+    # Only this published synthetic fixture may occupy a normally private path.
+    # Confirm a regular Git blob in the release tree, never a local file/symlink.
+    fixture = "evals/fixtures/files/local_ops_project/logs/system.log"
+    def allowed_fixture(name):
+        if component != "backend" or name != fixture:
+            return False
+        entry = git(root, "ls-tree", target, "--", name)
+        return entry.startswith(("100644 blob ", "100755 blob "))
+
+    if any(private_target(name, component) and not allowed_fixture(name) for name in names):
         raise UpdateError(f"{component}: release contains a private/runtime path.")
     changes = git(root, "diff", "--name-only", old, target).splitlines()
     return {

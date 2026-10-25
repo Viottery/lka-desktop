@@ -29,6 +29,31 @@ Windows 源码安装后续可使用根目录 `Check-LKA-Update.cmd`、`Update-LK
 检查与应用更新。默认保留外部 WSL/云端后端，纯 Windows 节点可明确配置为更新前后端。
 配置实际端口与外部备份路径后使用，详见 [Windows 更新](windows-updates.md)。
 
+## Windows 仅运行客户端
+
+如果本机只需要桌宠和界面，可设置 `LKA_CLIENT_MODE=cloud`，同时配置
+`LKA_CLOUD_ORIGIN=https://hub.your-tailnet.ts.net` 和本机私有目录中的
+`LKA_CLOUD_SESSION_PATH`。普通会话、工具执行、记忆和助理均访问云端；
+其他电脑的会话与工作区通过顶栏位置菜单进入对应设备。
+
+此模式运行本仓库的前端 Python 服务，不启动本机 Agent 后端。可以在加载上述环境变量后运行：
+
+```powershell
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --host 127.0.0.1 --port 8780
+```
+
+打开 `http://127.0.0.1:8780/desktop-pet/chat.html?mode=work&backend=http%3A%2F%2F127.0.0.1%3A8780%2Fworkbench`，
+首次在账号面板登录云端。桌宠可单独启动：
+
+```powershell
+.\scripts\start-desktop-pet-java.ps1 -NoServer -Spine -BaseUrl http://127.0.0.1:8780 -BackendUrl http://127.0.0.1:8780/workbench
+```
+
+账号会话保存在 Windows 当前用户的 DPAPI 文件中，浏览器和 Java 参数中不包含凭据。
+`/workbench` 仍执行接口和查询参数白名单，且云端客户端仅允许本机页面访问。
+云端断开时，此客户端不能执行本机会话；需要离线执行的电脑应部署独立节点。
+本模式不自动接入 QQ，应关闭本机消息读取和发送集成并保留已有 QQ 配置。
+
 ## Ubuntu 22.04 云端静态工作台
 
 Ubuntu 云端托管浏览器页面和 LKA 后端 API，不安装或启动 Java 桌宠。部署配套 `lka_backend`，启用云端/hub 配置、HTTPS 反向代理和访问控制；在后端配置中把 `[client].workbench_dir` 指向此仓库的 `app/web/pet` 目录。若由 Web 服务器直接提供静态文件，则将 `/desktop-pet/` 映射到该目录，并把其余 API 路径代理给后端。`/desktop-pet/connect.html` 应由同一 HTTPS 源提供。不要将后端 API 暴露到未受保护的公网地址。

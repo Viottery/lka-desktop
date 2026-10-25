@@ -33,7 +33,12 @@
   }
   var standaloneBackend = standalone ? resolveBackend() : "";
   function backend() { return standalone ? standaloneBackend : resolveBackend(); }
-  function namespace() { return backend() + "|auth:" + authScope; }
+  function namespace() {
+    var routingHost = window.LkaHost;
+    var cloud = routingHost && routingHost.requiresCloudTransport && routingHost.requiresCloudTransport('/matters');
+    var account = routingHost && (routingHost.cloud.account || routingHost.hub.account || routingHost.principal);
+    return backend() + "|auth:" + authScope + (cloud ? "|cloud:" + (routingHost.cloud.origin || routingHost.hub.origin || routingHost.origin) + "|account:" + (account && (account.user_id || account.username) || "anonymous") : "");
+  }
   function parseResponse(status, text) {
     var payload;
     try { payload = text ? JSON.parse(text) : {}; } catch (ignored) { payload = {}; }
@@ -66,14 +71,26 @@
       try { operation.resolve(parseResponse(Number(status), text)); } catch (error) { operation.reject(error); }
     };
   } else readyResolve();
+  var routingReady = window.LkaHost && (window.LkaHost.routingReady ? window.LkaHost.routingReady() : window.LkaHost.ready);
+  if (routingReady) ready = Promise.all([ready, routingReady]);
+  var routeNamespace = namespace(), routeIdentityReady = !routingReady;
+  if (routingReady) Promise.resolve(routingReady).then(function () { routeNamespace = namespace(); routeIdentityReady = true; });
+  if (window.LkaHost && window.LkaHost.onChange) window.LkaHost.onChange(function () {
+    var next = namespace();
+    if (next === routeNamespace) return;
+    routeNamespace = next;
+    if (!routeIdentityReady) return;
+    closeAssistant();
+    window.dispatchEvent(new CustomEvent("lka-matter-auth-changed", { detail: { namespace: next, backend: backend() } }));
+  });
   async function request(path, method, body) {
     if (typeof path !== "string" || path.charAt(0) !== "/" || path.indexOf("//") === 0 || /[\\\r\n]/.test(path)) throw failure("无效的接口路径。", 0);
     method = String(method || "GET").toUpperCase();
     await ready;
     if (!standalone && memory) return memory.request(path, method, body);
     var routingHost = window.LkaHost;
-    if (routingHost) await routingHost.ready;
-    var cloudRequest = !!(routingHost && routingHost.routesViaCloud && routingHost.routesViaCloud(path));
+    if (routingHost) await (routingHost.routingReady ? routingHost.routingReady() : routingHost.ready);
+    var cloudRequest = !!(routingHost && (routingHost.requiresCloudTransport ? routingHost.requiresCloudTransport(path) : routingHost.routesViaCloud && routingHost.routesViaCloud(path)));
     if (nativeMode && !cloudRequest) {
       return new Promise(function (resolve, reject) {
         var id = "memory-" + nonce + "-" + (++sequence);

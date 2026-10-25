@@ -328,6 +328,35 @@ class UpdateTests(unittest.TestCase):
                 self.front, "frontend", git(self.front, "rev-parse", "HEAD"), self.old["frontend"]
             )
 
+    def test_release_accepts_only_regular_tracked_synthetic_log_fixture(self):
+        name = "evals/fixtures/files/local_ops_project/logs/system.log"
+        fixture = self.back / name
+        fixture.parent.mkdir(parents=True)
+        fixture.write_text("Synthetic event: test worker started\n")
+        git(self.back, "add", "-f", name)
+        git(self.back, "commit", "-m", "synthetic evaluation fixture")
+        target = git(self.back, "rev-parse", "HEAD")
+        plan = updater.plan_component(self.back, "backend", target, self.old["backend"])
+        self.assertEqual(plan["target"], target)
+        # A regular tracked blob is required, not a symlink at the allowed name.
+        git(self.back, "update-index", "--cacheinfo", "120000", git(self.back, "hash-object", name), name)
+        git(self.back, "commit", "-m", "invalid fixture symlink")
+        with self.assertRaisesRegex(updater.UpdateError, "private/runtime"):
+            updater.plan_component(self.back, "backend", git(self.back, "rev-parse", "HEAD"), target)
+
+    def test_release_rejects_other_private_paths_even_under_fixture_tree(self):
+        for name in ("logs/system.log", "evals/fixtures/other/logs/system.log",
+                     "evals/fixtures/files/local_ops_project/logs/session.dpapi",
+                     "evals/fixtures/files/local_ops_project/.env"):
+            with self.subTest(name=name):
+                path = self.back / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("private placeholder\n")
+                git(self.back, "add", "-f", name)
+                git(self.back, "commit", "-m", "invalid private release")
+                with self.assertRaisesRegex(updater.UpdateError, "private/runtime"):
+                    updater.plan_component(self.back, "backend", git(self.back, "rev-parse", "HEAD"), self.old["backend"])
+
     def test_only_one_updater_can_hold_lock_and_lock_releases(self):
         with updater.update_lock(self.front):
             with self.assertRaisesRegex(updater.UpdateError, "Another update"):

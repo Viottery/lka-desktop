@@ -69,7 +69,7 @@ const server = http.createServer(async (req, res) => {
     return json(res, 200, { project_id: 'synthetic-project' });
   }
   if (url.pathname === '/agent/turn/stream') {
-    if (failAgentTurn) return json(res, 502, { detail: 'synthetic_agent_failure' });
+    if (failAgentTurn) return json(res, failAgentTurn, { detail: 'synthetic_agent_failure' });
     res.writeHead(200, { 'content-type': 'text/event-stream', 'cache-control': 'no-store' });
     res.write('event: llm_started\ndata: {"stage":"synthetic"}\n\n');
     pushStreamEvent = (event, data) => res.write('event: ' + event + '\ndata: ' + JSON.stringify(Object.assign({ type: event }, data)) + '\n\n');
@@ -79,11 +79,12 @@ const server = http.createServer(async (req, res) => {
     res.write('event: run_completed\ndata: {}\n\n');
     return res.end();
   }
-  if (url.pathname === '/agent/turn') return failAgentTurn ? json(res, 502, { detail: 'synthetic_agent_failure' }) : json(res, 200, { answer: '**合成回复**' });
+  if (url.pathname === '/agent/turn') return failAgentTurn ? json(res, failAgentTurn, { detail: 'synthetic_agent_failure' }) : json(res, 200, { answer: '**合成回复**' });
   if (url.pathname === '/sessions/synthetic-workbench-existing') return json(res, 200, {
     session: { session_id: 'synthetic-workbench-existing', title: '合成已有会话', metadata: {}, workspace: { path: 'C:/synthetic/existing' } },
     messages: [{ role: 'user', content: '已有会话里的合成问题' }, { role: 'assistant', content: '**已有会话里的合成回答**' }]
   });
+  if (/^\/sessions\/[^/]+\/runs$/.test(url.pathname)) return json(res, 200, { session_id: decodeURIComponent(url.pathname.split('/')[2]), runs: [], next_offset: null });
   if (/^\/sessions\/[^/]+$/.test(url.pathname)) return json(res, 404, { detail: 'synthetic_not_found' });
   return json(res, 404, { detail: 'not_mocked' });
 });
@@ -373,8 +374,8 @@ const server = http.createServer(async (req, res) => {
     assert(await bridgePage.locator('#messages').evaluate(log => Math.abs(log.scrollTop - 65) < 2), 'editing a draft does not jump away from history');
     await bridgeContext.close();
 
-    // Non-streaming HTTP failure keeps the submitted text and renders a marked error.
-    failAgentTurn = true;
+    // A definitive 400 rejection keeps the submitted text and renders a marked error.
+    failAgentTurn = 400;
     const failedContext = await browser.newContext();
     const failedPage = await failedContext.newPage();
     failedPage.on('pageerror', error => failures.push(error.message));
@@ -392,6 +393,33 @@ const server = http.createServer(async (req, res) => {
     assert.equal(failures.length, 0, failures.join('\n'));
     assert.equal(externalAttempts.length, 0, 'all browser network requests stay on the synthetic origin');
     await failedContext.close();
+
+    // A 502 may hide accepted work; keep the submission uncertain and never replay it.
+    failAgentTurn = 502;
+    const uncertainContext = await browser.newContext();
+    const uncertainPage = await uncertainContext.newPage();
+    uncertainPage.on('pageerror', error => failures.push(error.message));
+    await uncertainPage.addInitScript(() => localStorage.setItem('agentic-rag-pet-run-settings-v1', JSON.stringify({ stream: false })));
+    await uncertainPage.route('**/*', route => { if (new URL(route.request().url()).origin !== origin) { externalAttempts.push(new URL(route.request().url()).origin); return route.abort(); } return route.continue(); });
+    await uncertainPage.goto(origin + '/chat.html?mode=work&backend=' + encodeURIComponent(origin));
+    await uncertainPage.waitForFunction(() => typeof window.__petChatSubmitText === 'function');
+    await uncertainPage.locator('#streamToggle').uncheck();
+    const turnPostsBefore = requests.filter(r => r.method === 'POST' && /^\/agent\/turn(?:\/stream)?$/.test(r.path)).length;
+    const runReadsBefore = requests.filter(r => r.method === 'GET' && /\/runs$/.test(r.path)).length;
+    assert.equal(await uncertainPage.evaluate(() => window.__petChatSubmitText('连接不确定路径合成用户消息')), true);
+    await uncertainPage.waitForFunction(() => JSON.parse(localStorage.getItem('agentic-rag-pet-chat-sessions-v4') || '[]').some(s => s.connectionUncertain && s.pendingClientRequestId));
+    await uncertainPage.waitForFunction(() => document.querySelector('#runStatus').textContent.includes('尚未确认'));
+    const uncertainSession = await uncertainPage.evaluate(() => JSON.parse(localStorage.getItem('agentic-rag-pet-chat-sessions-v4')).find(s => s.connectionUncertain));
+    assert(uncertainSession.messages.some(m => m.role === 'user' && m.text === '连接不确定路径合成用户消息'), 'uncertain request retains submitted user text');
+    assert(uncertainSession.pendingClientRequestId, 'uncertain request retains exact correlation for later GET reconciliation');
+    assert(!uncertainSession.timelineEvents.some(event => event.type === 'run_failed' || event.type === 'run_completed'), 'transport failure creates no terminal run event');
+    assert.equal(await uncertainPage.locator('#messages .message.error').count(), 0, 'uncertain outcome creates no assistant error bubble');
+    for (let attempt = 0; attempt < 100 && requests.filter(r => r.method === 'GET' && /\/runs$/.test(r.path)).length < runReadsBefore + 2; attempt++) await new Promise(resolve => setTimeout(resolve, 20));
+    assert(requests.filter(r => r.method === 'GET' && /\/runs$/.test(r.path)).length >= runReadsBefore + 2, 'uncertain submission uses bounded read-only reconciliation');
+    assert.equal(requests.filter(r => r.method === 'POST' && /^\/agent\/turn(?:\/stream)?$/.test(r.path)).length - turnPostsBefore, 1, 'uncertain turn sends exactly one POST');
+    assert.equal(failures.length, 0, failures.join('\n'));
+    assert.equal(externalAttempts.length, 0, 'all uncertainty requests stay on the synthetic origin');
+    await uncertainContext.close();
     // Quick mode: compact start, then a resizable reading area with complete history.
     const quickContext = await browser.newContext({ viewport: { width: 420, height: 174 } });
     const quick = await quickContext.newPage();
@@ -698,7 +726,7 @@ const server = http.createServer(async (req, res) => {
     assert.equal(failures.length, 0, failures.join('\n'));
     await sourceContext.close(); await destinationContext.close();
 
-    console.log(JSON.stringify({ result: 'PASS', requests: requests.length, checks: ['workbench panels independently collapse and restore, reclaim width, remember visibility, preserve draft/history/tab, isolate hidden focus and adapt to drawers', 'workspace browser navigation/filter/pagination/cancel, confirmed binding, rollback and phone layout', 'new workbench sends reveal latest question and live output after layout; draft editing preserves history position', 'current workbench handoff for empty/running/completed tasks; first-binding dedup and launch failure', 'immediate first user visibility and localStorage persistence', 'workspace bind and backend session ID replacement', 'focus synchronization and single user bubble', 'single assistant answer with markdown', 'native fake bridge chat and __petChatReceive', 'next draft retained during reply', 'non-streaming request failure retains user and shows error', 'synthetic-origin-only network', 'held SSE stream shows real partial text before terminal, no process text as answer, final calibration', 'assistant_message text only, interleaved tool names in both modes; no JSON/operation/reason, event dedup, failure states, collapse and safe Markdown', 'compact quick window, project draft, taller viewport-filling transcript, Enter and editable busy draft, visible approval, collapse and native composer', 'full-width reply, readable Markdown, complete history without context header, stable reading offset, viewport resize and icon tooltips'] }, null, 2));
+    console.log(JSON.stringify({ result: 'PASS', requests: requests.length, checks: ['workbench panels independently collapse and restore, reclaim width, remember visibility, preserve draft/history/tab, isolate hidden focus and adapt to drawers', 'workspace browser navigation/filter/pagination/cancel, confirmed binding, rollback and phone layout', 'new workbench sends reveal latest question and live output after layout; draft editing preserves history position', 'current workbench handoff for empty/running/completed tasks; first-binding dedup and launch failure', 'immediate first user visibility and localStorage persistence', 'workspace bind and backend session ID replacement', 'focus synchronization and single user bubble', 'single assistant answer with markdown', 'native fake bridge chat and __petChatReceive', 'next draft retained during reply', 'definitive 400 retains user and shows error; uncertain 502 preserves correlation without fake failure or duplicate POST', 'synthetic-origin-only network', 'held SSE stream shows real partial text before terminal, no process text as answer, final calibration', 'assistant_message text only, interleaved tool names in both modes; no JSON/operation/reason, event dedup, failure states, collapse and safe Markdown', 'compact quick window, project draft, taller viewport-filling transcript, Enter and editable busy draft, visible approval, collapse and native composer', 'full-width reply, readable Markdown, complete history without context header, stable reading offset, viewport resize and icon tooltips'] }, null, 2));
   } catch (error) {
     console.error(error.stack || error);
     process.exitCode = 1;

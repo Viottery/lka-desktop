@@ -46,8 +46,9 @@ _ROUTES = (
     ("GET", r"managers/" + _ID + r"/events", {"after", "limit"}),
     ("GET", r"managers/" + _ID + r"/executions", {"after", "limit"}),
     ("GET", r"managers/" + _ID + r"/deliveries", {"after", "limit"}),
-    ("GET", r"sessions/" + _ID, set()), ("PATCH", r"sessions/" + _ID, set()),
-    ("GET", r"sessions/" + _ID + r"/runs", _PAGE),
+    ("GET", r"sessions/" + _ID, {"message_limit", "before_message_id", "after_message_id"}),
+    ("PATCH", r"sessions/" + _ID, set()),
+    ("GET", r"sessions/" + _ID + r"/runs", _PAGE | {"client_request_id"}),
     ("GET", r"sessions/" + _ID + r"/inputs", set()),
     ("POST", r"sessions/" + _ID + r"/inputs", set()),
     ("POST", r"sessions/" + _ID + r"/inputs/resume", set()),
@@ -190,6 +191,12 @@ def cloud_origin() -> str:
     return raw if valid else ""
 
 
+def client_mode() -> str:
+    """Return the supported frontend mode; unknown values fail closed."""
+    raw = os.environ.get("LKA_CLIENT_MODE", "local").strip().lower()
+    return raw if raw in {"local", "cloud"} else "invalid"
+
+
 def _require_local(request: Request) -> None:
     if not is_local_page(request):
         raise HTTPException(403, "Cloud gateway is available only to this computer")
@@ -246,7 +253,9 @@ def _detail(raw: bytes) -> str | None:
 @router.get("/cloud-auth/status")
 async def cloud_status(request: Request):
     _require_local(request)
-    return Response(json.dumps(await asyncio.to_thread(_public_status)), media_type="application/json", headers={"Cache-Control": "no-store"})
+    status = await asyncio.to_thread(_public_status)
+    status["client_mode"] = client_mode()
+    return Response(json.dumps(status), media_type="application/json", headers={"Cache-Control": "no-store"})
 
 
 @router.post("/cloud-auth/login")
@@ -354,6 +363,8 @@ async def _forward(request: Request, path: str):
     if is_attachment and request.headers.get("x-filename"):
         headers["X-Filename"] = request.headers["x-filename"]
     streaming = path.endswith("/stream") or path == "background/events"
+    # httpx decodes gzip before the bounded response relay; never forward stale encoding headers.
+    headers["Accept-Encoding"] = "identity" if streaming else "gzip"
     timeout = httpx.Timeout(connect=10, read=None if streaming else 600 if is_attachment else 30,
                             write=600 if is_attachment else 30, pool=10)
     try:

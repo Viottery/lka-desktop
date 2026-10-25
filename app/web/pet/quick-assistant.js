@@ -91,12 +91,22 @@
     })();
     return polling;
   }
-  async function home() {
-    if (typeof chat.openAssistant !== 'function') return;
-    try { var value = await chat.openAssistant(); if (value && isCurrent(value.session.session_id)) { accept(value); render(); refresh(); } }
+  var reconnecting = false;
+  async function home(retry) {
+    if (typeof chat.openAssistant !== 'function' || reconnecting) return;
+    try {
+      if (retry === true && window.LkaHost) {
+        reconnecting = true; el('qaRetry').disabled = true;
+        // Probe before openAssistant creates its selection epoch: a changed
+        // account invalidates the previous assistant while reconnecting.
+        if (window.LkaHost.hosted && window.LkaHost.refreshHub) await window.LkaHost.refreshHub();
+        else if (window.LkaHost.refreshCloud) await window.LkaHost.refreshCloud();
+      }
+      var value = await chat.openAssistant(); if (value && isCurrent(value.session.session_id)) { accept(value); render(); refresh(); } }
     catch (error) { message(report(error)); }
+    finally { reconnecting = false; render(); }
   }
-  el('qaHome').onclick = home; el('qaRetry').onclick = home;
+  el('qaHome').onclick = home; el('qaRetry').onclick = function () { return home(true); };
   el('qaManage').onclick = async function () {
     if (!state || !isCurrent(state.session.session_id) || toggling) return;
     var scope = epoch, id = state.session.session_id; toggling = true; render(); message('');

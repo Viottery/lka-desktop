@@ -37,6 +37,7 @@
   function notice(text, error) { var bar = $('clNotice'); if (!bar) return; bar.textContent = text || ''; bar.hidden = !text; bar.classList.toggle('is-error', !!error); }
   function fail(error) { if (error && error.name === 'AbortError') return; notice(error && error.message || String(error), true); }
   function mode() { return host.hosted ? host.role : 'local'; }
+  function cloudClient() { return !host.hosted && host.clientMode === 'cloud'; }
   function cloud() { return host.cloudBase(); }
   function api(path, options) {
     var base = cloud();
@@ -84,7 +85,7 @@
     var snapshot = host.snapshot();
     if (mode() === 'hub') return '云端' + (snapshot.principal && snapshot.principal.username ? ' · ' + snapshot.principal.username : '');
     if (mode() === 'replica') return '设备 · ' + (snapshot.info && snapshot.info.node_id || '本机') + (host.hub.loggedIn ? ' · 云端已连接' : host.hub.reachable ? ' · 云端未登录' : ' · 云端离线');
-    return '这台电脑' + (snapshot.cloud.loggedIn ? ' · 云端已登录' : snapshot.cloud.configured ? ' · 云端未登录' : '');
+    return (cloudClient() ? '云端客户端' : '这台电脑') + (snapshot.cloud.loggedIn ? ' · 云端已登录' : snapshot.cloud.configured ? ' · 云端未登录' : '');
   }
   function open(tab) {
     state.lastFocus = document.activeElement;
@@ -148,7 +149,9 @@
     }
     // Local 8780 workbench.
     var role = snapshot.backendRole;
-    var localCard = card('这台电脑', role === 'replica' ? '本机后端是集群节点：普通会话和文件在本机，真理、待办与记忆来自云端。'
+    var localCard = card(cloudClient() ? '云端客户端' : '这台电脑', cloudClient()
+      ? '本机仅运行界面和桌宠，会话与助理由云端处理；其他电脑的工作区可从顶栏位置菜单进入。'
+      : role === 'replica' ? '本机后端是集群节点：普通会话和文件在本机，真理、待办与记忆来自云端。'
       : role === 'hub' ? '本机后端就是云端。' : '本机后端独立运行，现有功能保持不变。', 'cl-card-here');
     body.appendChild(localCard);
     if (!snapshot.cloud.configured) {
@@ -205,7 +208,9 @@
       var password = pass.value; pass.value = '';
       try {
         await host.request('', '/cloud-auth/login', { method: 'POST', json: { username: user.value.trim(), password: password } });
-        await host.refreshCloud(); notice('已登录云端。'); render();
+        await host.refreshCloud();
+        if (cloudClient()) { window.location.reload(); return; }
+        notice('已登录云端。'); render();
       } catch (error) { fail(error); } finally { submit.disabled = false; }
     });
     return form;
@@ -817,7 +822,7 @@
   }
   function hereId() { return mode() === 'replica' ? host.info && host.info.node_id || '' : ''; }
   function placeName() {
-    if (mode() === 'hub') return '云端';
+    if (mode() === 'hub' || cloudClient()) return '云端';
     if (mode() === 'replica') {
       var id = hereId(), saved = host.directory().devices.find(function (device) { return device.node_id === id; });
       return saved && saved.name || id || '这台设备';
@@ -860,11 +865,11 @@
     var hubLink = hubWorkbenchLink();
     // The cloud workbench: 真理, 待办, 项目 and 记忆 in one place.
     if (mode() !== 'local' || host.cloud.loggedIn) list.appendChild(placeRow({
-      title: '云端工作台', detail: mode() === 'local' ? '在浏览器中打开' : '真理、待办、项目与记忆', current: mode() === 'hub', online: mode() === 'hub' || host.hub.reachable || host.cloud.loggedIn,
-      href: mode() === 'hub' ? null : hubLink || null, disabled: mode() !== 'hub' && !hubLink,
-      onClick: mode() === 'hub' ? function () { closePlaceMenu(true); } : null
+      title: '云端工作台', detail: mode() === 'local' && !cloudClient() ? '在浏览器中打开' : '真理、待办、项目与记忆', current: mode() === 'hub' || cloudClient(), online: mode() === 'hub' || host.hub.reachable || host.cloud.loggedIn,
+      href: mode() === 'hub' || cloudClient() ? null : hubLink || null, disabled: mode() !== 'hub' && !cloudClient() && !hubLink,
+      onClick: mode() === 'hub' || cloudClient() ? function () { closePlaceMenu(true); } : null
     }));
-    if (mode() === 'local') list.appendChild(placeRow({ title: '这台电脑', detail: '本机工作台', current: true, online: true, onClick: function () { closePlaceMenu(true); } }));
+    if (mode() === 'local' && !cloudClient()) list.appendChild(placeRow({ title: '这台电脑', detail: '本机工作台', current: true, online: true, onClick: function () { closePlaceMenu(true); } }));
     var devices = placeMenu.devices || host.directory().devices || [];
     devices.filter(function (device) { return !device.revoked; }).forEach(function (device) {
       var id = device.node_id || device.device_id, current = id && id === here;
@@ -1033,7 +1038,8 @@
     // The Java window counts as the pet: no switching there.
     if (host.hosted || !nativeWindow && host.cloud.configured) addPlaceSwitcher();
     expiredBanner(); host.onChange(expiredBanner);
-    if (new URLSearchParams(window.location.search).get('panel') === 'cluster') open();
+    if (cloudClient() && !host.cloud.loggedIn) open('account');
+    else if (new URLSearchParams(window.location.search).get('panel') === 'cluster') open();
   });
   function openCloudSignIn() {
     if (mode() === 'local') { open('account'); return; }

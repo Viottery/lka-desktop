@@ -82,8 +82,8 @@
   async function api(path, method, body) {
     method = method || "GET";
     var routingHost = window.LkaHost;
-    if (routingHost) await routingHost.ready;
-    var cloudRequest = !!(routingHost && routingHost.routesViaCloud && routingHost.routesViaCloud(path));
+    if (routingHost) await (routingHost.routingReady ? routingHost.routingReady() : routingHost.ready);
+    var cloudRequest = !!(routingHost && (routingHost.requiresCloudTransport ? routingHost.requiresCloudTransport(path) : routingHost.routesViaCloud && routingHost.routesViaCloud(path)));
     if (!cloudRequest && window.petBridge && typeof window.petBridge.requestMemory === "function") {
       return new Promise(function (resolve, reject) {
         var id = "memory-" + requestNonce + "-" + (++requestSequence);

@@ -102,6 +102,21 @@ function Join-NativeArguments {
     }) -join ' ')
 }
 
+function Test-ProcessStartTime {
+    param([DateTime]$Actual, $Recorded)
+    try {
+        # PS7 may deserialize JSON dates as DateTime; PS5 leaves strings.
+        if ($Recorded -is [DateTime]) {
+            $expected = $Recorded.ToUniversalTime()
+        } else {
+            $expected = [DateTimeOffset]::Parse([string]$Recorded,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::AssumeUniversal).UtcDateTime
+        }
+        return $Actual.ToUniversalTime().Ticks -eq $expected.Ticks
+    } catch { return $false }
+}
+
 function Get-RecordedProcess {
     param([string]$RecordPath, [string]$Root, [string]$Executable)
     if (-not (Test-Path -LiteralPath $RecordPath)) { return $null }
@@ -110,7 +125,7 @@ function Get-RecordedProcess {
         if ($record.root -ne $Root -or $record.executable -ne $Executable) { return $null }
         $process = Get-Process -Id $record.process_id -ErrorAction Stop
         if ($process.Path -ne $Executable) { return $null }
-        if ($process.StartTime.ToUniversalTime().ToString('o') -ne $record.started_at) { return $null }
+        if (-not (Test-ProcessStartTime $process.StartTime $record.started_at)) { return $null }
         return $process
     } catch { return $null }
 }
@@ -221,7 +236,7 @@ try {
     for ($index = $started.Count - 1; $index -ge 0; $index--) {
         $entry = $started[$index]
         $process = Get-Process -Id $entry.process.Id -ErrorAction SilentlyContinue
-        if ($process -and $process.StartTime.ToUniversalTime().ToString('o') -eq $entry.started_at) {
+        if ($process -and (Test-ProcessStartTime $process.StartTime $entry.started_at)) {
             & "$env:SystemRoot\System32\taskkill.exe" /PID $process.Id /T /F | Out-Null
         }
         Remove-Item -LiteralPath $entry.record -Force -ErrorAction SilentlyContinue

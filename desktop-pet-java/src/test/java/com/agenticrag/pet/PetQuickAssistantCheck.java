@@ -55,6 +55,7 @@ public final class PetQuickAssistantCheck {
         });
         server.start();
         String base = "http://127.0.0.1:" + server.getAddress().getPort();
+        java.util.concurrent.atomic.AtomicInteger petCloses = new java.util.concurrent.atomic.AtomicInteger();
         PetControlActions actions = new PetControlActions() {
             public List<PetModelOption> listModels() { return List.of(); }
             public String getActiveModelId() { return ""; }
@@ -68,7 +69,7 @@ public final class PetQuickAssistantCheck {
             public void decreaseScale() {}
             public void raiseModel() {}
             public void lowerModel() {}
-            public void shutdownDesktopPet() {}
+            public void shutdownDesktopPet() { petCloses.incrementAndGet(); }
         };
         PetControlWindow control = new PetControlWindow(actions, base + "/desktop-pet/chat.html?mode=quick&backend=" + base, ".", List.of());
         try {
@@ -126,11 +127,48 @@ public final class PetQuickAssistantCheck {
                 check(((Number) script("document.querySelectorAll('iframe').length")).intValue() == 0, "composer remains in main WebView");
                 return null;
             });
+            testWorkbenchFailures(control, stage);
+            testPetOnlyClose(control, petCloses);
             testImePosition(control, stage, composer);
             testQuickSettings(control, stage);
             System.out.println("PASS: default quick assistant URL; reusable manager draft/root and native composer; visible assistant/new-task actions at 340px; manager/ordinary workbench dispatch");
         } finally { control.dispose(); server.stop(0); Platform.exit(); }
     }
+    private static void testWorkbenchFailures(PetControlWindow control, Stage stage) throws Exception {
+        fx(() -> script("window.fixtureWorkbenchCallback=window.__petChatOpenWorkbench"));
+        for (String callback : List.of("undefined", "function(){throw new Error('fixture failure');}",
+                "function(){return Promise.resolve(false);}", "function(){return Promise.reject(new Error('fixture failure'));}")) {
+            fx(() -> {
+                script("window.fixtureKind='ordinary';window.__petChatOpenWorkbench=" + callback);
+                var status = (javafx.scene.control.Label) field(control, "nativeImageStatus");
+                status.setText("");
+                Method open = PetControlWindow.class.getDeclaredMethod("openWorkbench");
+                open.setAccessible(true); open.invoke(control);
+                return null;
+            });
+            waitFor(() -> {
+                var status = (javafx.scene.control.Label) field(control, "nativeImageStatus");
+                return status.isVisible() && !status.getText().isBlank();
+            });
+            check((boolean) fx(stage::isShowing), "failed workbench handoff keeps quick window visible");
+        }
+        fx(() -> script("window.__petChatOpenWorkbench=window.fixtureWorkbenchCallback"));
+    }
+
+    private static void testPetOnlyClose(PetControlWindow control, java.util.concurrent.atomic.AtomicInteger closes) throws Exception {
+        fx(() -> {
+            var menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
+            var close = menu.getItems().stream()
+                    .filter(item -> "仅关闭桌宠（保留服务）".equals(item.getText()))
+                    .findFirst().orElseThrow();
+            close.fire();
+            check(closes.get() == 1, "pet-only menu directly invokes pet lifecycle action");
+            check(!((java.util.concurrent.atomic.AtomicBoolean) field(control, "shutdownInProgress")).get(),
+                    "pet-only menu never enters service shutdown path");
+            return null;
+        });
+    }
+
     private static void testImePosition(PetControlWindow control, Stage stage, TextArea composer) throws Exception {
         boolean original = (boolean) fx(() -> field(control, "bubbleMode"));
         String originalDraft = (String) fx(composer::getText);
@@ -195,7 +233,7 @@ public final class PetQuickAssistantCheck {
     private static void testQuickSettings(PetControlWindow control, Stage stage) throws Exception {
         fx(() -> {
             javafx.scene.control.MenuButton menu = (javafx.scene.control.MenuButton) field(control, "settingsMenuButton");
-            check(menu.getItems().size() == 1 && menu.getItems().getFirst() instanceof javafx.scene.control.CustomMenuItem item && !item.isHideOnClick(), "one persistent custom settings sheet");
+            check(menu.getItems().size() == 3 && menu.getItems().getFirst() instanceof javafx.scene.control.CustomMenuItem item && !item.isHideOnClick(), "persistent settings sheet and direct pet-only close menu");
             menu.show();
             return null;
         });
@@ -267,7 +305,7 @@ public final class PetQuickAssistantCheck {
             var scroll = (javafx.scene.control.ScrollPane) ((javafx.scene.control.CustomMenuItem) menu.getItems().getFirst()).getContent();
             var pet = (javafx.scene.control.TitledPane) scroll.getContent().lookup("#quickSettingsPetSection");
             pet.setExpanded(true);
-            check(pet.getContent().lookupAll(".button").size() == 11, "all legacy pet actions retained in expandable section");
+            check(pet.getContent().lookupAll(".button").size() == 11, "legacy actions retained in expandable section");
             pet.setExpanded(false);
             String output = System.getProperty("lka.quickSettingsShots", "");
             if (!output.isBlank()) {
