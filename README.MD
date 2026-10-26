@@ -1,158 +1,177 @@
 <div align="center">
 
-<img src="docs/assets/readme-hero.svg" width="100%" alt="LKA Desktop：桌宠快速任务与大窗口工作台的交互示意">
+<img src="docs/assets/readme-hero.svg" width="100%" alt="LKA Desktop：桌宠快速任务与工作台">
 
 <h1>理事所 · LKA Desktop</h1>
 
 <p>
-在桌宠旁提问，需要时到工作台继续处理。<br>
-一个连接 LKA 后端的 Windows 桌面前端，可以聊天、查看资料、管理项目和浏览消息。
+LKA 的桌面与浏览器前端。<br>
+Windows 桌宠负责快速提问，工作台用于会话、文件、项目、记忆和消息。
 </p>
 
 <p>
-<img alt="Windows 桌宠" src="https://img.shields.io/badge/Windows-桌宠-0078D4?style=flat-square&logo=windows&logoColor=white">
-<img alt="浏览器工作台" src="https://img.shields.io/badge/浏览器-工作台-2b6cb0?style=flat-square">
+<img alt="Windows" src="https://img.shields.io/badge/Windows-desktop-0078D4?style=flat-square&logo=windows&logoColor=white">
 <img alt="Python" src="https://img.shields.io/badge/Python-3.12%2B-3776AB?style=flat-square&logo=python&logoColor=white">
-<img alt="Java 21" src="https://img.shields.io/badge/Java-21-ED8B00?style=flat-square&logo=openjdk&logoColor=white">
+<img alt="Java" src="https://img.shields.io/badge/Java-21-ED8B00?style=flat-square&logo=openjdk&logoColor=white">
+<img alt="Web" src="https://img.shields.io/badge/HTML%2FCSS%2FJS-no%20bundler-555?style=flat-square">
 </p>
 
 <p>
-<a href="#capabilities">界面介绍</a> &nbsp; / &nbsp;
-<a href="#everyday">日常使用</a> &nbsp; / &nbsp;
-<a href="#getting-started">开始使用</a> &nbsp; / &nbsp;
-<a href="#qq">QQ 可选接入</a> &nbsp; / &nbsp;
-<a href="#development">开发与验证</a> &nbsp; / &nbsp;
-<a href="#documentation">阅读文档</a>
+<a href="#overview">概览</a> ·
+<a href="#ui">界面</a> ·
+<a href="#deployment">部署结构</a> ·
+<a href="#quickstart">快速开始</a> ·
+<a href="#qq">QQ 接入</a> ·
+<a href="#dev">开发</a> ·
+<a href="#docs">文档</a>
 </p>
 
 </div>
 
 ---
 
-## ✧ 快速提问和工作台，两种使用方式
+<br>
 
-点击桌宠，默认打开与真理的持续对话；需要独立处理一件事时，选择「新任务」。
-需要读长回复、处理文件或做项目任务时，切换到工作台，查看会话、工作区和运行过程。
+<a id="overview"></a>
 
-> [!NOTE]
-> **理事所是应用名称，真理是桌宠角色的名称。**
-> 桌宠、快速任务与工作台共享聊天界面和后端会话，可以先简单提问，再接着处理更复杂的任务。
+## 🧭 概览
 
-工作台、手机/平板与桌宠快速任务都可以粘贴或选择图片和文档，预览后与文字一起发送。
-支持 PDF、Office、表格、Markdown 等文件，每轮图片和文档合计最多 4 个附件。
-详见[文件、图片与文字混合输入](docs/image-input.md)。
+理事所是应用名，真理是桌宠角色的名字。点击桌宠默认进入与真理的持续对话，
+需要单独处理一件事时选「新任务」；长回复、文件和项目任务转到工作台继续，会话是同一个。
 
-桌宠快速窗口以对话和待处理提醒为主，保留「新任务」入口。工作台侧栏的「真理」提供完整的持续对话、待处理、目标与交付记录：
-目标只显示简短标题，每条交付记录标出它对应的主题。需要后端管理智能体接口，详见[真理](docs/global-assistant.md)。
+本仓库包含：
 
-真理在界面加载时提前连接，回复期间可以连续发送消息，后续消息按顺序处理。
-切换普通任务后仍跟踪真理的进展；各会话保留草稿和阅读位置。
+- 共享的聊天界面、桌面工作台和移动工作台（原生 HTML / CSS / JS，无打包步骤）
+- Java 21 桌宠与原生窗口桥接（Spine 动画）
+- Python 前端服务：静态页面、后端接口白名单转发、云端登录代理、可选 QQ 插件
 
-普通任务支持暂停、继续，以及暂停后发送新指令接替原任务。真理的消息排队与运行暂停分开控制。
-详见[任务控制](docs/run-controls.md)。
+对话生成、工具执行、记忆和消息分析由 [LKA Backend](https://github.com/Viottery/lka-backend) 完成。
 
-手机与桌面工作台还可以浏览电脑目录、切换工作区、上传文件到当前目录，并下载工作成果。
-详见[跨终端文件](docs/workspace-files.md)。
+<br>
 
-本仓库提供桌面交互、浏览器页面、前端适配服务和可选 QQ 插件。
-对话生成、工具执行、记忆、项目与消息分析由独立的
-[Local Knowledge Agent OS 后端](https://github.com/Viottery/lka-backend)负责。
+<a id="ui"></a>
 
-<a id="capabilities"></a>
-
-## ✦ 界面里可以做什么
+## ✦ 界面
 
 <table>
 <tr>
-<td width="50%" valign="top">
-<h3>🪶 桌宠与快速任务</h3>
-<p>右键桌宠，就能打开窗口提问。</p>
-<p>Java 桌宠使用 Spine 动画，支持拖动、点击与双击互动。
-右键打开快速任务窗口，输入并发送问题，需要时再进入工作台。</p>
+<td width="33%" valign="top">
+
+<h4>🪶 桌宠与快速窗口</h4>
+拖动、点击、双击互动；右键打开快速窗口，以对话和待处理提醒为主
+
 </td>
-<td width="50%" valign="top">
-<h3>🖥️ 大窗口工作台</h3>
-<p>在同一个窗口里查看对话、文件和执行过程。</p>
-<p>浏览器中查看会话、文件、运行设置与执行过程。
-Markdown 回复支持标题、列表、表格、链接和代码块，方便阅读长回复。</p>
+<td width="33%" valign="top">
+
+<h4>🖥️ 工作台</h4>
+会话列表、工作区、运行设置可分别收起；Markdown 渲染，查看执行过程与运行记录
+
 </td>
-</tr>
-<tr>
-<td width="50%" valign="top">
-<h3>📁 会话与工作区</h3>
-<p>需要写文件时才创建工作目录。</p>
-<p>新会话只预留默认工作区路径，第一次有文件写进去、上传文件或手动创建时才建立文件夹；
-只是聊天不会留下空目录。也可以切换到已有目录。
-桌宠默认进入持续对话的真理；「新任务」另开独立任务。删除的会话进入回收站，可恢复。</p>
-</td>
-<td width="50%" valign="top">
-<h3>🧠 记忆、项目与待办</h3>
-<p>查看记忆，按文件夹整理项目，管理待办和规划。</p>
-<p>项目对应电脑上的一个文件夹，项目里的对话共用这个文件夹和项目记忆。
-待办支持日历安排、规划分阶段，删除后可撤销。
-模型与推理档位可在输入框下方直接切换，并保存为后续任务的默认设置。</p>
+<td width="33%" valign="top">
+
+<h4>🧑‍💼 真理</h4>
+持续对话、待处理、目标与交付记录；回复期间可连续发送，消息按顺序处理
+
 </td>
 </tr>
 <tr>
-<td width="50%" valign="top">
-<h3>💬 消息中心</h3>
-<p>查看消息摘要，也可以打开原消息。</p>
-<p>接入消息数据后，浏览会话、检索消息、查看话题和重要信息，
-打开对应的原消息及前后聊天记录。群名与人物昵称优先使用已有数据，
-非文字内容显示类型说明或可用媒体入口。</p>
+<td width="33%" valign="top">
+
+<h4>⏯️ 任务控制</h4>
+普通任务可暂停、继续，或暂停后发送新指令接替；后端要求审查时在界面确认
+
 </td>
-<td width="50%" valign="top">
-<h3>🔎 运行与操作确认</h3>
-<p>查看任务进度，按提示确认具体操作。</p>
-<p>查看执行状态和运行记录，在后端要求人工审查时确认具体操作。
-Agent 处理任务时，仍可编辑下一条消息；发送按钮会根据运行状态更新。</p>
+<td width="33%" valign="top">
+
+<h4>📎 附件输入</h4>
+图片、PDF、Office、表格、Markdown，每轮最多 4 个，预览后与文字一起发送
+
+</td>
+<td width="33%" valign="top">
+
+<h4>📁 工作区与文件</h4>
+首次写入时才创建目录；浏览电脑目录、切换工作区、上传与下载
+
+</td>
+</tr>
+<tr>
+<td width="33%" valign="top">
+
+<h4>🧠 记忆 · 项目 · 待办</h4>
+项目对应一个文件夹并共享项目记忆；待办支持日历和分阶段规划，删除可撤销
+
+</td>
+<td width="33%" valign="top">
+
+<h4>💬 消息中心</h4>
+会话浏览、检索、话题与重要信息，打开原消息及前后记录
+
+</td>
+<td width="33%" valign="top">
+
+<h4>📱 移动工作台</h4>
+手机用会话抽屉和底部导航，平板保留侧栏；功能与桌面一致
+
 </td>
 </tr>
 </table>
 
-<a id="everyday"></a>
+模型和推理档位在输入框下方切换，并保存为默认值。删除的会话进入回收站，可恢复。
+打开已有会话时会恢复进行中的任务进度流。
 
-## 💬 日常可以这样用
+<br>
 
-### 先在快速窗口提问，再到工作台继续
+<a id="deployment"></a>
 
-右键桌宠，输入一个问题。短任务直接在快速窗口完成；需要继续分析时打开工作台，
-沿用同一个会话。**Enter 发送，Shift + Enter 换行。**
+## ☁️ 部署结构
 
-工作台顶部左、右两侧的面板图标，可独立收起或展开会话列表、工作区与设置。
-收起后对话区自动扩展；大屏面板的显示状态会在本机浏览器中保存，刷新后沿用。
-窄屏按需打开抽屉，关闭抽屉不会改动大屏的显示偏好。
+前端可以连接单机后端，也可以接入云端 hub 和多台电脑节点。
 
-### 选择任务的工作目录
+```mermaid
+flowchart LR
+    subgraph Win["🪟 Windows 电脑"]
+        Pet["Java 桌宠"] --> FE["前端服务 :8780<br/>白名单转发 · /cloud 网关"]
+        Browser["浏览器工作台"] --> FE
+        QQ["QQ 插件（可选）"] --> FE
+    end
+    FE -->|loopback| Local["本机 / WSL 后端 :8765<br/>replica 节点"]
+    Local <-->|同步 · 任务| Hub["☁️ 云端 hub<br/>真理 · 待办 · 项目 · 共享记忆"]
+    Phone["📱 手机"] -->|HTTPS /desktop-pet/connect.html| Hub
+    Phone -.->|一次性授权| Local
+    classDef hub fill:#ede9fe,stroke:#6b46c1,color:#1a1a1a
+    classDef node fill:#e0f2fe,stroke:#0369a1,color:#1a1a1a
+    classDef phone fill:#fef3c7,stroke:#b45309,color:#1a1a1a
+    class Hub hub
+    class Local,FE node
+    class Phone phone
+```
 
-需要保存结果时，工作区默认建在 Windows 的
-`文档/Local Knowledge Agent/Workspaces` 下；只是聊天或修改其他目录的文件时不会创建。
-可以在界面中指定默认父目录，或把当前会话切换到已有项目目录。
-在工作台里浏览和预览文件，再让后端处理这个目录里的任务。
+| 位置 | 提供什么 |
+| :--- | :--- |
+| 本机工作台（:8780） | 全部功能，含消息中心与 QQ；设置 `LKA_CLOUD_ORIGIN` 后可登录云端，顶栏出现位置菜单 |
+| 云端页面 | 真理、待办、项目、记忆，以及「设备与账号」面板；不含消息与 QQ |
+| 节点页面 | 该电脑的普通会话和工作区文件，真理与待办来自云端；新运行强制人工审查 |
+| 仅客户端模式 | `LKA_CLIENT_MODE=cloud`，不启动本机后端，所有请求经前端服务转到云端 |
 
-### 看消息摘要，再打开原文
+- 云端和每台电脑在各自的 HTTPS 地址托管 `app/web/pet`：后端设置 `[client].workbench_dir`，或用 Tailscale Serve / 反向代理把 `/desktop-pet/` 指向该目录。
+- 统一入口是云端的 `/desktop-pet/connect.html`。顶栏位置菜单列出云端和已登记电脑，选择后直接申请授权跳转。
+- 登录保存在 HttpOnly cookie；Windows 可用 `LKA_CLOUD_SESSION_PATH` 以 DPAPI 加密保存云端会话，不保存密码。
+- 云端离线时，入口会列出这个浏览器进入过的设备，连接有效的仍可直接打开。
 
-启用消息接入后，先在消息中心看话题与重要信息，
-需要细节时打开来源，阅读对应消息和相邻历史。
-摘要和分析由后端更新，前端显示已经处理好的结果。
+细节见 [多端协同](docs/multi-device.md) 与 [部署说明](docs/deployment.md)。
 
-### 保存常用的模型和设置
+<br>
 
-从后端读取的模型列表中选择模型，调整运行设置和工作区默认位置。
-后续任务使用已保存的选择，需要不同设置时再切换。
+<a id="quickstart"></a>
 
-<a id="getting-started"></a>
+## 🚀 快速开始
 
-## 🚀 开始使用
+需要 Windows 与 Python 3.12+，桌宠另需 Java 21。先按
+[后端 README](https://github.com/Viottery/lka-backend#readme) 启动后端。
+> [!NOTE]
+> 以下命令在本仓库根目录的 PowerShell 中执行。
 
-**准备环境：** Windows、Python 3.12+；使用桌宠还需要 Java 21。
-浏览器模式可先跳过 Java。请先按照
-[后端 README](https://github.com/Viottery/lka-backend#readme)
-安装、配置模型并启动 LKA 后端。
-
-以下命令在本仓库根目录的 **Windows PowerShell** 中执行。
-
-### 1. 安装前端依赖
+#### ① 安装依赖
 
 ```powershell
 python -m venv .venv
@@ -160,216 +179,146 @@ python -m venv .venv
 if (-not (Test-Path .env)) { Copy-Item .env.example .env }
 ```
 
-页面使用原生 HTML、CSS 与 JavaScript，没有单独的前端打包步骤。
-Node.js 用于可选浏览器回归测试。
-
-### 2. 连接已运行的后端
-
-后端默认地址为 `http://127.0.0.1:8765`，前端服务默认地址为
-`http://127.0.0.1:8780`。先检查后端可访问：
+#### ② 确认后端可访问
 
 ```powershell
 Invoke-RestMethod http://127.0.0.1:8765/health
 ```
 
-**先体验浏览器界面：**
+#### ③ 启动
 
 ```powershell
+# 只用浏览器
 .\run-lka-windows.ps1 -NoBackend -NoPet -OpenBrowser
-```
 
-浏览器打开聊天页后，可以进入工作台，也可直接访问：
-
-[打开本机工作台](http://127.0.0.1:8780/desktop-pet/chat.html?mode=work&backend=http%3A%2F%2F127.0.0.1%3A8765)
-
-**手机与平板：** 使用专门的 [移动工作台](http://127.0.0.1:8780/desktop-pet/mobile.html)。
-手机提供会话抽屉和底部导航，平板保留会话侧栏；项目、消息、记忆、文件与模型设置
-沿用桌面功能。访问同一页面时默认使用页面所在主机的后端 `8765` 端口，
-也可通过 `backend` 参数指定已有后端地址。交互及验证说明见 [移动工作台文档](docs/mobile-workbench.md)。
-
-**使用 Java 桌宠：** 安装 Java 21 后，准备环境并编译，再启动。
-首次编译需要下载 Gradle 及 Java 依赖。
-
-```powershell
+# 桌宠（首次需编译）
 .\scripts\setup-java-env.ps1
 .\desktop-pet-java\gradlew.bat -p desktop-pet-java compileJava
 .\run-lka-windows.ps1 -NoBackend
 ```
 
-`-NoBackend` 连接已有后端。后端在 WSL 时，先确认 Windows 能访问其监听地址；
-可通过 `-BackendHost`、`-BackendPort` 指定实际地址，通过 `-FrontendPort` 调整前端端口。
-
-启动器会将本机 `.env` 加载到 Python 服务。已有消息中心配对可使用
-`.runtime/message-control.dpapi`（Windows 当前用户 DPAPI 加密文件），或通过
-`-MessageControlCredentialPath` 指定已配对文件；迁移时保留原凭据，
-不要重新生成。启动器将解密值传给 Python，不传入 Java 或页面。
+工作台地址：
+`http://127.0.0.1:8780/desktop-pet/chat.html?mode=work&backend=http%3A%2F%2F127.0.0.1%3A8765`；
+移动布局：`/desktop-pet/mobile.html`。后端不在默认地址时用 `-BackendHost`、`-BackendPort`，
+前端端口用 `-FrontendPort`。
 
 <details>
-<summary><strong>Windows + WSL：由启动器启动后端</strong></summary>
+<summary><strong>其他启动方式</strong></summary>
 
-已在 WSL 安装并配置后端时，可以省略 `-NoBackend`。
-启动器默认寻找所选发行版当前用户的 `~/lka_backend`：
+由启动器在 WSL 中启动后端（默认 `~/lka_backend`，可用 `-BackendRoot` 指定）：
 
 ```powershell
 .\run-lka-windows.ps1 -WslDistro Ubuntu -OpenBrowser
 ```
 
-其他后端目录用 `-BackendRoot` 指定 WSL 路径。
-后端配置和数据库仍由后端项目管理。
-
-</details>
-
-<details>
-<summary><strong>全部在 Windows 原生运行</strong></summary>
-
-后端已完成原生 Windows 安装，且包含 `.venv` 与 `scripts/start_backend.py` 时：
+全部原生 Windows 运行，见 [原生运行说明](docs/windows-native-runtime-guide.md)：
 
 ```powershell
 .\run-lka-native-windows.ps1 -BackendRoot C:\Projects\lka_backend
 ```
 
-此启动器管理原生后端、前端服务与 Java 桌宠。
-仅使用浏览器可添加 `-NoPet -OpenBrowser`。
-详细步骤见 [Windows 原生运行说明](docs/windows-native-runtime-guide.md)。
+后端配置为 replica 节点时可加 `-RequireNode`。
 
 </details>
 
-### Windows 一键更新
+> [!TIP]
+> **更新**：`Check-LKA-Update.cmd` 检查版本，任务结束并退出前端后运行 `Update-LKA.cmd`。
+> 默认只更新前端，配置、数据库和配对凭据保留在本机。见 [Windows 更新](docs/windows-updates.md)。
 
-双击根目录 `Check-LKA-Update.cmd` 检查版本；任务结束、退出前端与本次要更新的
-原生后端后，双击 `Update-LKA.cmd` 备份并应用更新，再用原快捷方式启动。
-默认只更新 Windows 前端；纯 Windows 安装可配置同时更新配套后端。
-配置、数据库和配对凭据留在本机，失败可按保存的版本继续。
-具体模式、备份范围及发布步骤见 [Windows 更新说明](docs/windows-updates.md)。
-
-### 3. 配置与日常操作
-
-| 内容 | 位置或操作 |
+| 配置项 | 位置 |
 | :--- | :--- |
-| 前端本机配置 | 从 `.env.example` 创建 `.env`；模型服务配置位于后端 |
-| 模型与默认设置 | 工作台的运行设置；可用模型列表由后端提供 |
-| 默认工作区父目录 | 界面设置，或本机环境变量 `LKA_SESSION_WORKSPACE_BASE` |
-| 当前会话工作目录 | 工作区的“切换”入口，选择已有目录 |
-| 已删除会话 | 回收站中恢复；当前未实现超时自动永久删除 |
-| 发送与换行 | Enter 发送；Shift + Enter 换行 |
-| QQ 插件 | 默认关闭，按下方说明单独配置 |
+| 前端本机配置 | `.env`（模型配置在后端） |
+| 默认工作区父目录 | 界面设置或 `LKA_SESSION_WORKSPACE_BASE`，默认 `文档/Local Knowledge Agent/Workspaces` |
+| 消息中心配对 | `.runtime/message-control.dpapi` 或 `-MessageControlCredentialPath`；凭据只传给 Python，不进 Java 和页面 |
+| 云端 | `LKA_CLOUD_ORIGIN`、`LKA_CLOUD_SESSION_PATH` |
+
+<br>
 
 <a id="qq"></a>
 
-## 🔌 QQ 可选接入
+## 🔌 QQ 接入（可选，默认关闭）
 
-QQ 接入由 **Windows 侧 Python 插件**负责：连接本机 OneBot WebSocket，
-将标准化消息写入前端本地 SQLite，再通过鉴权接口同步到 LKA 后端。
-后端暂时离线时，待同步消息保留在本机；恢复后幂等补送。
-NapCat 断线期间的消息不保证完整补回。
+Windows 侧 Python 插件连接本机 OneBot WebSocket，把标准化消息写入前端本地 SQLite，
+再通过鉴权接口同步到后端。后端离线时消息留在本机，恢复后幂等补送；宿主断线期间的消息不保证补回。
 
 ```powershell
 .\.venv\Scripts\python.exe -m pip install -r requirements-qq-reader.txt
 ```
 
-按照 [QQ Reader 接入说明](docs/qq_reader_plugin_delivery_2026-10-02.md)
-把 `.env.qq-reader.example` 中需要的设置合并到本机 `.env`。
-QQ 宿主组件需另外安装和配置，仓库不包含登录会话或安装组件。
+把 `.env.qq-reader.example` 中需要的项合并到 `.env`，见 [Reader 插件说明](docs/qq_reader_plugin_delivery_2026-10-02.md)。
 
-- **采集与发送分别启用。** Reader 只接收事件；发送适配接口支持文字、图片、视频和表情等，需明确开启发送配置。接口说明见 [QQ 消息接口](docs/qq_messaging_interfaces_2026-10-04.md)。
-- **Agent 的 QQ 查询工具保持只读。** 前端发送接口的存在不代表 Agent 获得 QQ 发送、撤回或管理权限。
-- **凭据留在本机服务。** 浏览器不直接连接 NapCat，也不接触其 Token。Windows 与 WSL 各自管理 SQLite，通过接口同步。
+- **分开启用**：采集和发送分别启用；发送接口支持文字、图片、视频和表情，见 [消息接口](docs/qq_messaging_interfaces_2026-10-04.md)。
+- **只读**：Agent 的 QQ 工具是只读的，前端有发送接口不代表 Agent 能发送、撤回或管理。
+- **凭据隔离**：浏览器不直接连接 OneBot，也接触不到它的 Token。Windows 与 WSL 各自管理 SQLite。
 
-<details>
-<summary><strong>数据保存与模型服务</strong></summary>
+<br>
 
-真实配置、密钥、会话数据、QQ 数据库、媒体缓存与日志不纳入 Git。
-Reader 默认不保存完整原始事件；正常页面中的聊天与消息仍可能包含个人内容。
+<a id="dev"></a>
 
-使用远程模型时，对话及选取的上下文会发送给所配置的模型服务。
-启用后端消息分析时，相关消息内容也可能进入模型输入；
-采集权限与后端分析设置应分别配置。
-
-</details>
-
-<a id="development"></a>
-
-## 🧩 项目结构与验证
+## 🧩 开发
 
 | 目录 | 职责 |
 | :--- | :--- |
-| `app/web/pet/` | 共享聊天界面、工作台、消息中心、样式与静态资源 |
-| `desktop-pet-java/` | JavaFX / libGDX 桌宠、原生窗口与消息桥接 |
-| `app/plugins/`、`app/api/routes/` | QQ 插件、前端本地服务与后端适配接口 |
-| `data/pet/profiles.json` | 随仓库分发的角色、资源和动作定义 |
-| `scripts/`、`tests/` | 环境准备、启动辅助、提交检查与回归测试 |
-| `docs/` | 接入说明、接口文档和各阶段交付记录 |
+| `app/web/pet/` | 聊天界面、工作台、移动布局、消息中心、样式与资源 |
+| `desktop-pet-java/` | 桌宠、原生窗口与消息桥接 |
+| `app/main.py` · `app/api/routes/` · `app/plugins/` | 前端服务、后端适配接口、QQ 插件 |
+| `data/pet/profiles.json` | 角色、资源和动作定义 |
+| `scripts/` · `tests/` | 环境准备、启动辅助、仓库检查、回归测试 |
 
-当前入口仍引用 `app/agent/`、`app/rag/`、`app/runtime/` 中的兼容模块，
-因此保留相关源码和测试。日常 LKA 对话连接独立后端。
-个人窗口状态、依赖缓存、运行数据和构建输出保留在本机。
+`app/agent/`、`app/rag/`、`app/runtime/` 为兼容模块，仍被入口引用，日常对话走独立后端。
 
-<details>
-<summary><strong>开发检查命令</strong></summary>
-
-安装测试依赖后，根据修改的内容选择对应检查。
-提交前检查同时覆盖暂存内容和可达 Git 历史：
+按修改的层选择检查：
 
 ```powershell
+# 仓库检查（暂存内容与历史中的运行数据、密钥）
 .\.venv\Scripts\python.exe scripts/check-repository.py --staged --history
+
+# Python
 .\.venv\Scripts\python.exe -m pytest tests/test_qq_reader.py tests/test_qq_actions.py tests/test_message_reading_proxy.py -q
+
+# Java
 .\desktop-pet-java\gradlew.bat -p desktop-pet-java compileJava verifyPetMotion verifyPetInteraction verifyPetMemoryBridge
-```
 
-可选浏览器回归需要 Node.js 与本机 Chrome，使用合成 HTTP 服务：
-
-```powershell
+# 浏览器回归（Node.js + Chrome，合成 HTTP 服务）
 npm ci
-npm run test:sessions
 npm run test:chat
-npm run test:projects
-npm run test:matters
+npm run test:sessions
 npm run test:mobile
 ```
 
-其他 Chrome 安装路径用 `CHROME_PATH` 指定。在 WSL 中运行时，可用
-`npx playwright-core install chromium-headless-shell` 安装无界面浏览器并把 `CHROME_PATH` 指向它。
+其他浏览器测试有 `test:projects`、`test:matters`、`test:messages`；Chrome 路径用 `CHROME_PATH` 指定。
+后端新增接口时，更新 `tests/fixtures/backend_routes.json` 并运行
+`python -m unittest tests.test_workbench_route_sync`，前端转发层只放行白名单接口。
 
-前端转发层只放行白名单里的后端接口。后端新增接口后，更新
-`tests/fixtures/backend_routes.json` 并运行 `python -m unittest tests.test_workbench_route_sync`，
-确认工作台需要的接口都已放行。
-仓库检查会查找不应提交的运行数据和常见密钥格式，并检查必要资源与 Python 语法；
-其范围和历史隐私检查说明见 [仓库交付文档](docs/repository_delivery.md)。
+<br>
 
-</details>
+<a id="docs"></a>
 
-<a id="documentation"></a>
+## 📖 文档
 
-## 📖 阅读文档
-
-| 想了解什么 | 文档 |
+| 主题 | 文档 |
 | :--- | :--- |
-| Windows 原生环境与启动 | [原生运行说明](docs/windows-native-runtime-guide.md) |
-| 桌宠入口与宿主 | [桌宠入口](docs/desktop-pet-entry.md) · [前端说明](docs/windows-pet-frontend.md) |
-| UI 与工作台设计 | [界面交付记录](docs/frontend_ui_delivery_2026-09-30.md) |
-| 手机与平板布局 | [移动工作台](docs/mobile-workbench.md) |
-| 会话、草稿与删除恢复 | [会话交互交付](docs/frontend_session_ux_delivery_2026-10-06.md) |
-| 工作区目录选择 | [目录浏览](docs/workspace-browser.md) |
-| 待办与项目规划 | [清单与规划](docs/matters.md) |
-| 记忆与项目页面 | [记忆适配](docs/frontend_memory_delivery_2026-10-02.md) · [项目适配](docs/frontend_projects_delivery_2026-10-02.md) |
-| 消息浏览与原文上下文 | [消息中心交付](docs/frontend_messages_ui_delivery_2026-10-05.md) · [历史消息适配](docs/message_history_frontend.md) |
-| QQ 采集与发送接口 | [Reader 插件](docs/qq_reader_plugin_delivery_2026-10-02.md) · [消息接口](docs/qq_messaging_interfaces_2026-10-04.md) |
-| 分发范围、资源与隐私检查 | [仓库交付文档](docs/repository_delivery.md) |
-| 多台电脑与 Ubuntu 云端安装 | [部署说明](docs/deployment.md) · [多端协同](docs/multi-device.md) |
-| Agent、模型与后端配置 | [LKA Backend](https://github.com/Viottery/lka-backend) |
+| 安装与部署 | [deployment](docs/deployment.md) · [windows-native-runtime-guide](docs/windows-native-runtime-guide.md) · [windows-updates](docs/windows-updates.md) |
+| 多端协同 | [multi-device](docs/multi-device.md) · [mobile-workbench](docs/mobile-workbench.md) |
+| 桌宠 | [desktop-pet-entry](docs/desktop-pet-entry.md) · [windows-pet-frontend](docs/windows-pet-frontend.md) |
+| 真理与任务控制 | [global-assistant](docs/global-assistant.md) · [run-controls](docs/run-controls.md) |
+| 文件与工作区 | [workspace-files](docs/workspace-files.md) · [workspace-browser](docs/workspace-browser.md) · [image-input](docs/image-input.md) |
+| 待办 | [matters](docs/matters.md) |
+| 消息 | [message_history_frontend](docs/message_history_frontend.md) · [QQ 接口](docs/qq_messaging_interfaces_2026-10-04.md) |
+| 仓库范围与隐私检查 | [repository_delivery](docs/repository_delivery.md) |
 
-交付记录保留各阶段的实现与验证情况；当前安装入口以本 README 为准。
+带日期的文档是各阶段交付记录，当前安装方式以本 README 为准。
 
-## 📜 资源与许可
+## 📜 数据与许可
 
-角色及部分图标源于《明日方舟》相关资源，权益归原权利人所有。
-Spine、ArkPets、Pixi、Markdown-it 等第三方组件遵循各自许可，
-请同时查看仓库内保留的授权文件与原项目说明。
-本仓库没有为所有现有代码和第三方资源统一授予新的开源许可。
+真实配置、密钥、会话数据、QQ 数据库、媒体缓存和日志不进入 Git。使用远程模型时，
+对话与选中的上下文会发送给所配置的模型服务。
+
+角色及部分图标来自《明日方舟》相关资源，权益归原权利人所有。Spine、ArkPets、Pixi、
+Markdown-it 等第三方组件遵循各自许可，见仓库内保留的授权文件。本仓库未对现有代码和第三方资源统一授予新的开源许可。
 
 ---
 
 <div align="center">
-<p><strong>理事所</strong> · 在桌宠旁提问，到工作台查看文件和处理任务。</p>
-<p><a href="https://github.com/Viottery/lka-backend">LKA Backend</a> &nbsp; · &nbsp; <a href="#getting-started">开始使用</a></p>
+<sub>理事所 · LKA Desktop · 后端见 <a href="https://github.com/Viottery/lka-backend">LKA Backend</a></sub>
 </div>
