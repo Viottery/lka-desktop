@@ -2382,6 +2382,7 @@
       // Default to the only approved workspace; several require an explicit choice.
       if (nodeBoundary() && !session.nodeWorkspaceId) {
         var approved = await nodeWorkspaces();
+        if (approved === null) throw new Error("无法读取当前设备的授权工作区，请检查连接后重试。");
         if (approved.length === 1) { session.nodeWorkspaceId = approved[0]; persistSessions(); }
       }
       return session.workspace || "";
