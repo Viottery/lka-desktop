@@ -28,6 +28,9 @@ const server = http.createServer(async (req, res) => {
     const after = url.searchParams.get('after_message_id'), before = url.searchParams.get('before_message_id');
     if ((after || before) && !values.includes(Number(after || before))) return json(res, 409, { detail: 'history_cursor_invalid' });
     let selected = values.filter(id => after ? id > Number(after) : before ? id < Number(before) : true);
+    // Model a raw page where hidden background rows would occupy 28 of 30 slots.
+    // The conversation view filters those rows before choosing its 30 visible messages.
+    if (url.searchParams.get('message_view') !== 'conversation') selected = selected.filter(id => id % 15 === 0);
     const more = selected.length > 30;
     selected = after ? selected.slice(0, 30) : selected.slice(-30);
     return json(res, 200, { session: session(), messages: selected.map(id => ({ message_id: String(id), role: id % 2 ? 'user' : 'assistant', content: 'history-message-' + id })),
@@ -71,7 +74,7 @@ const server = http.createServer(async (req, res) => {
     await page.waitForFunction(() => window.LkaChatContext.get().sessionId === 'history-manager', null, { timeout: 5000 }).catch(async error => { console.error(await page.evaluate(() => ({ state: window.LkaChatContext.get(), status: document.querySelector('#runStatus').textContent, hostCalls: window.hostHistoryCalls })), calls, errors); throw error; });
     await page.waitForSelector('#loadEarlierMessagesButton');
     assert.equal(await page.locator('#messages .message').count(), 30);
-    assert((await page.evaluate(() => window.hostHistoryCalls)).includes('/sessions/history-manager?message_limit=30'), 'native-compatible host detail read is paged');
+    assert((await page.evaluate(() => window.hostHistoryCalls)).includes('/sessions/history-manager?message_limit=30&message_view=conversation'), 'native-compatible host detail read uses the filtered paged view');
     for (let i = 0; i < 7; i++) {
       const before = await page.locator('#messages .message').count();
       await page.locator('#loadEarlierMessagesButton').click();

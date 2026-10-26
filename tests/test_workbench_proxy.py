@@ -69,6 +69,12 @@ class WorkbenchProxyTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(self.calls[0].url.params["client_request_id"], "input-unique")
         self.assertEqual(self.calls[0].url.params["limit"], "2")
 
+    async def test_conversation_history_view_query_reaches_backend(self):
+        response = await self.request("sessions/synthetic?message_limit=30&message_view=conversation&before_message_id=m_1")
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(self.calls[-1].url.params["message_view"], "conversation")
+        self.assertEqual(self.calls[-1].url.params["before_message_id"], "m_1")
+
     async def test_verification_context_is_built_once_off_the_event_loop(self):
         import asyncio
         import ssl

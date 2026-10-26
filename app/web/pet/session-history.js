@@ -34,7 +34,7 @@
         while (true) {
           current();
           var cursor = direction === "before" ? draft.first : direction === "after" ? draft.last : "";
-          var path = "/sessions/" + encodeURIComponent(id) + "?message_limit=" + limit;
+          var path = "/sessions/" + encodeURIComponent(id) + "?message_limit=" + limit + "&message_view=conversation";
           if (cursor) path += "&" + (direction === "before" ? "before_message_id" : "after_message_id") + "=" + encodeURIComponent(cursor);
           if (draft.legacy) path = path.split("?")[0];
           var payload, request = settings.request || options.request;

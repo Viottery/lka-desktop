@@ -10,16 +10,16 @@ async function main() {
   let scope = 'accountA:hub';
   const store = create({ namespace: () => scope, request: async path => { requests.push(path); return queue.shift(); } });
   assert.deepEqual(ids(await store.load('s')), ['4', '5']);
-  assert.equal(requests[0], '/sessions/s?message_limit=30');
+  assert.equal(requests[0], '/sessions/s?message_limit=30&message_view=conversation');
   const first = store.load('s'), duplicate = store.load('s');
   assert.equal(first, duplicate);
   assert.deepEqual(ids(await first), ['4', '5', '6', '7', '8']);
-  assert.match(requests[1], /after_message_id=5$/); assert.match(requests[2], /after_message_id=7$/);
+  assert.match(requests[1], /message_view=conversation&after_message_id=5$/); assert.match(requests[2], /message_view=conversation&after_message_id=7$/);
   assert.equal(store.state('s').hasMore, true);
   assert.deepEqual(ids(await store.load('s', { before: true })), ['2', '3', '4', '5', '6', '7', '8']);
   assert.deepEqual(ids(await store.load('s', { before: true })), ['1', '2', '3', '4', '5', '6', '7', '8']);
   assert.equal(store.state('s').hasMore, false);
-  assert.match(requests[3], /before_message_id=4$/); assert.match(requests[4], /before_message_id=2$/);
+  assert.match(requests[3], /message_view=conversation&before_message_id=4$/); assert.match(requests[4], /message_view=conversation&before_message_id=2$/);
   // Cursor invalidation replaces history with a fresh recent page.
   let count = 0;
   const invalid = create({ request: async path => {
@@ -47,7 +47,7 @@ async function main() {
   const emptyCalls = [], emptyPages = [page([]), page(Array.from({ length: 30 }, (_, index) => index + 6), true)];
   const empty = create({ request: async path => { emptyCalls.push(path); return emptyPages.shift(); } });
   await empty.load('s'); assert.equal((await empty.load('s')).messages.length, 30);
-  assert.deepEqual(emptyCalls, ['/sessions/s?message_limit=30', '/sessions/s?message_limit=30']);
+  assert.deepEqual(emptyCalls, ['/sessions/s?message_limit=30&message_view=conversation', '/sessions/s?message_limit=30&message_view=conversation']);
   assert.equal(empty.state('s').hasMore, true);
   // Legacy servers keep full history and never show a false earlier-page affordance.
   const legacy = create({ request: async () => ({ session: { session_id: 's' }, messages: [row(1), row(2)] }) });
@@ -76,7 +76,7 @@ async function main() {
       return { session: { session_id: 's' }, messages: [row(1)] };
     } });
     await proxy.load('s'); await proxy.load('s');
-    assert.deepEqual(calls, ['/sessions/s?message_limit=30', '/sessions/s', '/sessions/s']);
+    assert.deepEqual(calls, ['/sessions/s?message_limit=30&message_view=conversation', '/sessions/s', '/sessions/s']);
   }
   for (const status of [401, 403, 404]) {
     let attempts = 0;

@@ -83,6 +83,10 @@ class CloudGatewayTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn("content-encoding", response.headers)
         self.assertEqual(self.calls[-1].headers["accept-encoding"], "gzip")
         self.assertEqual(self.calls[-1].url.params["after_message_id"], "m_1")
+        conversation = await self.request("/cloud/sessions/synthetic-history?message_limit=30&message_view=conversation&before_message_id=m_2")
+        self.assertEqual(conversation.status_code, 200)
+        self.assertEqual(self.calls[-1].url.params["message_view"], "conversation")
+        self.assertEqual(self.calls[-1].url.params["before_message_id"], "m_2")
         self.assertEqual((await self.request("/cloud/sessions/synthetic-history?unexpected=1")).status_code, 404)
 
     async def test_login_keeps_token_in_process_and_never_returns_it(self):
