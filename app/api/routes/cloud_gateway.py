@@ -46,7 +46,7 @@ _ROUTES = (
     ("GET", r"managers/" + _ID + r"/events", {"after", "limit"}),
     ("GET", r"managers/" + _ID + r"/executions", {"after", "limit"}),
     ("GET", r"managers/" + _ID + r"/deliveries", {"after", "limit"}),
-    ("GET", r"sessions/" + _ID, {"message_limit", "message_view", "before_message_id", "after_message_id"}),
+    ("GET", r"sessions/" + _ID, {"message_limit", "message_view", "before_message_id", "after_message_id", "around_message_id"}),
     ("PATCH", r"sessions/" + _ID, set()),
     ("GET", r"sessions/" + _ID + r"/runs", _PAGE | {"client_request_id"}),
     ("GET", r"sessions/" + _ID + r"/inputs", set()),

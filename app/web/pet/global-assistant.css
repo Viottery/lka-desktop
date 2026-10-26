@@ -31,6 +31,7 @@ body.work-mode #openGlobalAssistantQuick, body.quick-mode .ga-entry { display:no
 .ga-more { width:100%; background:white; border:1px solid var(--ga-line); border-radius:6px; font-size:12px!important; color:#587969; margin:16px 0; padding:9px; }
 .ga-list-note { font-size:12px; color:var(--ga-muted); line-height:1.8; padding:16px 0; }
 .ga-followup-foot { padding:14px 18px 18px; border-top:1px solid var(--ga-line); flex:0 0 auto; }.ga-followup-foot p { font-size:12px; line-height:1.9; color:#819187; margin:0 0 10px; }.ga-followup-foot button { width:100%; font-size:12px; padding:9px 8px; border:1px solid #cfdfd5; border-radius:7px; background:#edf4ef; color:#4a6f5b; }
+.ga-mode-help { padding:0 18px 10px; margin:0; color:#819187; font-size:12px; line-height:1.8; }.ga-recover { margin:0 18px 12px; padding:8px 12px; border:1px solid #d4aa62; border-radius:7px; background:#fff8e8; color:#805d22; font-size:12px; cursor:pointer; }.ga-recover[hidden] { display:none; }
 .ga-connection { order:1; display:flex; flex:1 1 auto; min-height:0; flex-direction:column; align-items:center; justify-content:center; padding:30px; gap:14px; text-align:center; }
 .ga-connection > .ga-emblem { font-size:36px; }.ga-connection h2 { margin:0; font-size:21px; font-weight:500; }.ga-connection p { max-width:34em; margin:0; color:#738883; font-size:12px; line-height:1.9; }
 body.global-assistant-open .context-rail, body.global-assistant-open .context-strip { display:none!important; }

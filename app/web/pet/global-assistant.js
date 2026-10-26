@@ -21,7 +21,8 @@
   root.innerHTML = '<div class="ga-followup-heading"><div><h2 id="gaTitle">跟进</h2><p id="gaUpdated">目标与需要你决定的事</p></div><button id="gaRefresh" type="button" aria-label="刷新跟进" title="刷新跟进">↻</button></div>' +
     '<div class="ga-controller"><span id="gaState" role="status">尚未连接</span><button id="gaReconnect" type="button" aria-label="重新连接默认助手" title="重新连接默认助手">↻</button><button id="gaToggle" type="button" hidden></button></div>' +
     '<div id="gaNotice" class="ga-notice" role="status" aria-live="polite" hidden></div>' +
-    '<div class="ga-tabs" role="tablist" aria-label="跟进视图"><button type="button" id="gaTab-attention" role="tab" data-tab="attention" aria-controls="gaRecords" aria-selected="true">待处理<span id="gaBadge" hidden></span></button><button type="button" id="gaTab-goals" role="tab" data-tab="goals" aria-controls="gaRecords" aria-selected="false" tabindex="-1">目标</button><button type="button" id="gaTab-deliveries" role="tab" data-tab="deliveries" aria-controls="gaRecords" aria-selected="false" tabindex="-1">交付记录</button></div><div id="gaRecords" class="ga-records" role="tabpanel" aria-labelledby="gaTab-attention" tabindex="0"></div><div class="ga-followup-foot"><p id="gaModeHelp">管理暂停时仍可对话、查看进展。启用后，助手可整理事项和委托任务。</p><button id="gaPlan" type="button">让真理整理接下来的安排</button></div>';
+    '<p id="gaModeHelp" class="ga-mode-help" role="status"></p><button id="gaRecover" class="ga-recover" type="button" hidden>恢复自动回报</button>' +
+    '<div class="ga-tabs" role="tablist" aria-label="跟进视图"><button type="button" id="gaTab-attention" role="tab" data-tab="attention" aria-controls="gaRecords" aria-selected="true">待处理<span id="gaBadge" hidden></span></button><button type="button" id="gaTab-goals" role="tab" data-tab="goals" aria-controls="gaRecords" aria-selected="false" tabindex="-1">目标</button><button type="button" id="gaTab-deliveries" role="tab" data-tab="deliveries" aria-controls="gaRecords" aria-selected="false" tabindex="-1">交付记录</button></div><div id="gaRecords" class="ga-records" role="tabpanel" aria-labelledby="gaTab-attention" tabindex="0"></div><div class="ga-followup-foot"><button id="gaPlan" type="button">让真理整理接下来的安排</button></div>';
   document.getElementById('chatShell').appendChild(root);
   var connection = document.createElement('div'); connection.id = 'gaConnection'; connection.className = 'ga-connection'; connection.hidden = true;
   connection.innerHTML = '<span class="ga-emblem" aria-hidden="true">✦</span><h2>真理</h2><p id="gaConnectionText">正在连接真理…</p><button id="gaRetry" type="button" hidden>重新连接</button>';
@@ -55,19 +56,40 @@
     // "管理" allows organizing and dispatching. Waking up on its own when a task
     // finishes is a separate server setting; say which one applies.
     var autonomy = manager && manager.autonomy, auto = !!(autonomy && autonomy.autonomous_enabled);
+    var health = autonomy && autonomy.status || {}, reason = health.reason || '';
+    var blocked = reason === 'failure_limit';
     var wake = !manager || !autonomy ? '' : auto ? '任务完成后，真理会在后台自动汇报。' : '任务完成后不会自动汇报；结果会等你下次发消息时处理（后台自动处理需在服务端开启）。';
-    el('gaModeHelp').textContent = (active ? '助手可整理事项、委托任务。暂停管理后，已委托的任务仍会独立运行。' : '管理暂停时仍可对话、查看进展。启用后，助手可整理事项和委托任务。') + (active && wake ? ' ' + wake : '');
+    var reasonText = {
+      ready: '自动回报已就绪。', idle: '当前没有待处理的自动回报。', user_input_pending: '真理正在处理你发送的消息。',
+      delegate_inactive: '事务线助理尚未启用，自动回报暂不处理。', controller_paused: '管理已暂停，后台任务状态已保留。',
+      management_disabled: '服务端尚未启用管理会话。', autonomy_disabled: '自动回报未启用；后台结果会在你下次对话时处理。',
+      durable_execution_disabled: '服务端后台执行未启用，自动回报暂不可用。', run_active: '后台任务正在运行。',
+      cooldown: '后台协调器正在等待下一次处理时点，不一定表示任务失败。', daily_limit: '已达到今天的后台任务上限。',
+      failure_limit: '连续后台任务失败，自动回报已暂停。', execution_guard: '服务端执行保护暂时阻止了后台任务。'
+    };
+    if (reason && reason !== 'ready') {
+      wake = (reasonText[reason] || '自动回报当前受服务端策略限制（' + reason + '）。')
+        + (Number(health.pending_event_count) > 0 ? ' 有 ' + health.pending_event_count + ' 条待处理更新。' : '');
+      if (health.latest_error_type) wake += ' 最近失败：' + health.latest_error_type + '。';
+    }
+    el('gaModeHelp').textContent = (active ? '助手可整理事项、委托任务。暂停管理后，已委托的任务仍会独立运行。' : '管理暂停时仍可对话、查看进展。启用后，助手可整理事项和委托任务。') + (manager && wake ? ' ' + wake : '');
+    el('gaRecover').hidden = !blocked; el('gaRecover').disabled = changing || connectionFailed || !!opening;
   }
   function managerPath(suffix) { return '/managers/' + encodeURIComponent(manager.session.session_id) + (suffix || ''); }
-  function chatUrl(sessionId, runId) {
-    var url = new URL('./chat.html', location.href), current = new URLSearchParams(location.search); url.search = '';
+  function chatUrl(sessionId, runId, messageId, cloudRecord) {
+    var current = new URLSearchParams(location.search), target = location.href;
+    // Published manager deliveries belong to the cloud even when this panel is
+    // open on a node. Opening their ID on the node returns an ordinary-session 403.
+    if (cloudRecord && viaHub && lkaHost.hub && lkaHost.hub.origin) target = lkaHost.hub.origin.replace(/\/+$/, '') + '/desktop-pet/';
+    var url = new URL('./chat.html', target); url.search = '';
     url.searchParams.set('mode', 'work');
     // Hosted pages carry their host role; local pages keep the gateway address.
-    if (window.LkaHost && window.LkaHost.hosted) url.searchParams.set('host', window.LkaHost.role);
+    if (window.LkaHost && window.LkaHost.hosted) url.searchParams.set('host', cloudRecord && viaHub ? 'hub' : window.LkaHost.role);
     else url.searchParams.set('backend', host.backend);
     if (current.get('layout') === 'mobile') url.searchParams.set('layout', 'mobile');
     url.searchParams.set('session_id', sessionId);
     if (runId) url.searchParams.set('run_id', runId);
+    if (messageId) url.searchParams.set('message_id', messageId);
     return url.href;
   }
   function time(value) { var d = new Date(value); return isNaN(d.getTime()) ? '' : d.toLocaleString('zh-CN', { month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' }); }
@@ -86,11 +108,14 @@
   // in the task report on the cloud); an ordinary task switches the conversation.
   // The href keeps host/layout/run for a deliberate new tab, which restores its
   // own session from the shared cookie.
-  function runLink(row, sessionId, runId, title, run) {
+  function runLink(row, sessionId, runId, title, run, delivery) {
     if (!sessionId || !runId) return;
-    var link = node('a', 'ga-record-link', title); link.href = chatUrl(sessionId, runId);
+    var link = node('a', 'ga-record-link', title); link.href = chatUrl(sessionId, runId, delivery && delivery.message_id, !!delivery);
     link.addEventListener('click', function (event) {
       if (event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey) return;
+      // Let the browser navigate to the session/run/message URL. The chat page
+      // will hydrate the exact history page before it scrolls to the delivery.
+      if (delivery) return;
       event.preventDefault();
       var remote = run && run.remote_execution;
       if (remote && remote.task_id && window.LkaCluster) { window.LkaCluster.openRemoteTask(remote.task_id); return; }
@@ -132,7 +157,7 @@
         // Older backends send no topic; keep the generic label for them.
         var row = record(delivery.topic || '一份跟进结果已送达', '', '');
         row.querySelector('.ga-record-heading').appendChild(node('small', 'ga-record-when', time(delivery.created_at)));
-        runLink(row, delivery.session_id, delivery.run_id, '查看本次对话记录', null); list.appendChild(row);
+        runLink(row, delivery.session_id, delivery.run_id, '查看本次对话记录', null, delivery); list.appendChild(row);
       });
       if (rows.length) list.appendChild(node('p', 'ga-list-note', '交付表示已有回复；目标是否完成，以目标状态和结果内容为准。'));
     }
@@ -325,6 +350,22 @@
     try { var value = validate(await host.request(managerPath(), 'PATCH', { expected_revision: manager.controller.revision, status: manager.controller.status === 'active' ? 'paused' : 'active' }), selectedId); if (scope === generation && (!manager || value.controller.revision >= manager.controller.revision)) manager = value; }
     catch (e) { if (scope !== generation) return; if (e.status === 409) { try { var latest = validate(await host.request(managerPath()), selectedId); if (scope === generation) manager = latest; } catch (_) {} } if (scope === generation) notice(problem(e), true); }
     finally { if (scope === generation) { changing = false; publishController(); saveContext(); controller(); } }
+  };
+  el('gaRecover').onclick = async function () {
+    if (!manager || changing || !selectedId) return;
+    var scope = generation;
+    changing = true; controller(); notice('', false);
+    try {
+      var value = validate(await host.request(managerPath(), 'PATCH', {
+        expected_revision: manager.controller.revision, status: 'active'
+      }), selectedId);
+      if (scope === generation && (!manager || value.controller.revision >= manager.controller.revision)) manager = value;
+      if (scope === generation) await refresh();
+    } catch (e) {
+      if (scope !== generation) return;
+      if (e.status === 409) { try { var latest = validate(await host.request(managerPath()), selectedId); if (scope === generation) manager = latest; } catch (_) {} }
+      if (scope === generation) notice(problem(e), true);
+    } finally { if (scope === generation) { changing = false; publishController(); saveContext(); controller(); } }
   };
   function reconnect() { return connect({ refresh: true }); }
   el('gaReconnect').onclick = reconnect;

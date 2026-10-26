@@ -28,6 +28,24 @@
     } catch (ignored) {}
     return result.slice(0, 6);
   }
+  function requireDirectNodeEntry() {
+    var status = el('workspacePickerStatus');
+    status.textContent = '当前工作台通过本机代理连接节点，代理没有节点的目录授权凭据，因此不能安全地代发完整文件树请求。请在该设备的安全入口打开工作台后选择目录。';
+    status.classList.add('error');
+    var host = window.LkaHost, info = host && host.info, id = info && (info.node_id || info.device_id);
+    var directory = host && host.directory ? host.directory() : null;
+    var devices = directory && Array.isArray(directory.devices) ? directory.devices : [];
+    var device = devices.find(function (item) { return id && (item.node_id || item.device_id) === id; });
+    var origin = device && (device.advertised_url || device.origin);
+    if (!origin) return;
+    try {
+      var url = new URL('/desktop-pet/connect.html', origin);
+      if (url.protocol !== 'https:' || !/\.ts\.net$/.test(url.hostname)) return;
+      var link = document.createElement('a'); link.href = url.href; link.target = '_blank'; link.rel = 'noopener';
+      link.textContent = '打开此设备的安全入口'; link.className = 'workspace-browser-node-entry';
+      status.appendChild(document.createTextNode(' ')); status.appendChild(link);
+    } catch (ignored) {}
+  }
   function renderPlaces() {
     var places = el('workspacePickerPlaces'); places.textContent = '';
     var heading = document.createElement('h3'); heading.textContent = '位置'; places.appendChild(heading);
@@ -57,10 +75,27 @@
     if (!append) el('workspacePickerList').textContent = '';
     el('workspacePickerMore').hidden = true;
     try {
+      var response, context = chat.get(), nodeBrowser = !!context.nodeBoundary;
+      if (context.hosted && !nodeBrowser) {
+        currentPath = ''; parentPath = ''; nextOffset = null;
+        el('workspacePickerList').textContent = '';
+        notice('云端助理工作台没有开放服务器目录浏览。请从设备切换器连接一台电脑，再从该电脑的工作台选择目录。', true);
+        el('workspacePickerSelection').textContent = '请先连接电脑';
+        return;
+      }
+      if (nodeBrowser && !context.nodeHosted) {
+        currentPath = ''; parentPath = ''; nextOffset = null;
+        el('workspacePickerList').textContent = '';
+        el('workspacePickerSelection').textContent = '请打开设备的安全工作台';
+        requireDirectNodeEntry();
+        return;
+      }
       var controller = new AbortController(), timeout = setTimeout(function () { controller.abort(); }, 15000);
-      var response;
       try {
-        response = await fetch('/pet/workspace-directories?path=' + encodeURIComponent(path || '') + '&query=' + encodeURIComponent(el('workspacePickerFilter').value.trim()) + '&offset=' + offset + '&limit=100',
+        var endpoint = nodeBrowser
+          ? String(context.backend || location.origin).replace(/\/+$/, '') + '/local/filesystem/entries'
+          : '/pet/workspace-directories';
+        response = await fetch(endpoint + '?path=' + encodeURIComponent(path || '') + '&query=' + encodeURIComponent(el('workspacePickerFilter').value.trim()) + '&offset=' + offset + '&limit=100',
           { headers: { Accept: 'application/json' }, signal: controller.signal });
       } finally { clearTimeout(timeout); }
       var data = await response.json();
@@ -68,12 +103,15 @@
         // A WSL-only or moved workspace cannot be enumerated by Windows. Offer
         // the frontend's default location without changing the session itself.
         if (initial && path && (response.status === 404 || response.status === 422)) return browse('');
-        var message = response.status === 403 ? (/permission denied/i.test(data.detail || '') ? '没有读取这个目录的权限，请选择其他位置。' : '此地址尚未允许浏览目录，请检查电脑端的工作台来源配置。') : response.status === 404 ? '目录不存在，检查路径或选择其他位置。' :
+        var message = response.status === 403 ? (nodeBrowser
+          ? '当前设备尚未启用完整目录浏览，或连接授权已失效。请检查设备端 filesystem_browser_enabled 设置并重新连接。'
+          : /permission denied/i.test(data.detail || '') ? '没有读取这个目录的权限，请选择其他位置。' : '此地址尚未允许浏览目录，请检查电脑端的工作台来源配置。') : response.status === 404 ? (nodeBrowser ? '当前设备尚未提供远程目录浏览接口，请更新设备端后再试。' : '目录不存在，检查路径或选择其他位置。') :
           response.status === 422 ? '无法浏览这个路径，请选择本机磁盘上的普通文件夹。' : '读取目录失败，请重试。';
         throw new Error(message);
       }
       if (requestId !== generation || overlay.hidden) return;
-      currentPath = data.path; parentPath = data.parent || ''; roots = data.roots || roots;
+      currentPath = data.path; parentPath = data.parent || '';
+      if (Array.isArray(data.roots) && data.roots.length) roots = data.roots;
       el('workspacePickerPath').value = currentPath;
       el('workspacePickerSelection').textContent = currentPath; el('workspacePickerSelection').title = currentPath;
       nextOffset = data.next_offset; renderPlaces();
@@ -127,7 +165,17 @@
     if (loading || applying || !currentPath) return;
     applying = true; setControls(); notice('正在切换工作区…');
     try {
-      if (!await chat.setWorkspace(currentPath, sessionId)) throw new Error(el('runStatus').textContent || '工作区切换失败，请重试。');
+      var context = chat.get(), nodeWorkspaceId = '';
+      if (context.nodeBoundary) {
+        var response = await fetch(String(context.backend || location.origin).replace(/\/+$/, '') + '/local/workspaces/selections', {
+          method: 'POST', headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+          body: JSON.stringify({ path: currentPath })
+        });
+        var selection = await response.json().catch(function () { return {}; });
+        if (!response.ok || !selection.workspace_id) throw new Error(selection.detail || '当前设备拒绝了这个目录。');
+        nodeWorkspaceId = selection.workspace_id;
+      }
+      if (!await chat.setWorkspace(currentPath, sessionId, nodeWorkspaceId)) throw new Error(el('runStatus').textContent || '工作区切换失败，请重试。');
       applying = false; close();
     } catch (error) { notice(error.message, true); }
     finally { applying = false; setControls(); }

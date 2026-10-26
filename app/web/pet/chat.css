@@ -363,6 +363,7 @@ body {
 .message {
   display: flex;
 }
+.message.delivery-message-target .bubble { outline: 2px solid var(--accent, #d6a84f); outline-offset: 4px; border-radius: 10px; }
 
 .message.user {
   justify-content: flex-end;
@@ -741,6 +742,9 @@ body.work-mode .run-status:not(:empty) { padding-inline: 30px; }
 .sidebar-tools input:focus { border-color: #89c8c1; background: #ffffff1c; outline: none; }
 .session-list { min-height: 0; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: #66888c transparent; scrollbar-width: thin; }
 .session-list-empty { margin: 18px 8px; color: #afc8c9; font-size: 12px; line-height: 1.5; }
+.legacy-cache-recovery { display:flex; flex-wrap:wrap; align-items:center; justify-content:space-between; gap:8px; padding:10px 12px; margin:4px 0 10px; border:1px solid rgba(214,168,79,.4); border-radius:10px; color:#e8d7a9; background:rgba(120,94,37,.16); font-size:11px; }
+.legacy-cache-recovery button { border:1px solid rgba(214,168,79,.6); border-radius:7px; padding:5px 8px; color:inherit; background:transparent; cursor:pointer; }
+.legacy-cache-recovery button:disabled { opacity:.72; cursor:default; }
 .messages { min-height: 0; overflow-y: auto; overscroll-behavior: contain; }
 .composer { flex: 0 0 auto; }
 .run-status { flex: 0 0 auto; max-height: 64px; overflow-y: auto; overflow-wrap: anywhere; }

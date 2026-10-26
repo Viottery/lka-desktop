@@ -38,7 +38,7 @@ _ROUTES = (
     ("GET", r"sessions/" + _ID + r"/attachments/att_[0-9a-f]{32}", set()),
     ("GET", r"sessions/" + _ID + r"/attachments/att_[0-9a-f]{32}/raw", set()),
     ("GET", r"sessions/deleted", {"limit", "offset", "q"}),
-    ("GET", r"sessions/" + _ID, {"message_limit", "message_view", "before_message_id", "after_message_id"}),
+    ("GET", r"sessions/" + _ID, {"message_limit", "message_view", "before_message_id", "after_message_id", "around_message_id"}),
     ("PATCH", r"sessions/" + _ID, set()),
     ("DELETE", r"sessions/" + _ID, {"only_if_empty", "expected_updated_at"}),
     ("POST", r"sessions/" + _ID + r"/restore", set()),

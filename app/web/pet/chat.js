@@ -75,6 +75,7 @@
   var workMode = urlParams.get("mode") === "work" || urlParams.get("layout") === "mobile";
   var requestedSessionId = safeText(urlParams.get("session_id")).trim();
   var requestedRunId = safeText(urlParams.get("run_id")).trim();
+  var requestedMessageId = safeText(urlParams.get("message_id")).trim();
   var managerEmbedding = window.parent !== window && urlParams.get("embedded") === "matter" && urlParams.get("assistant") === "global";
   var quickAssistantDefault = !workMode && urlParams.get("assistant") === "quick" && !requestedSessionId && !requestedRunId;
   var quickAssistantEpoch = 0, quickAssistantPromise = null, quickAssistantManager = null;
@@ -91,6 +92,9 @@
   var lkaHost = window.LkaHost || null;
   var hostedPage = !!(lkaHost && lkaHost.hosted);
   var nodeHosted = hostedPage && lkaHost.role === "replica";
+  var backendBaseUrl = resolveBackendBaseUrl();
+  var backendCacheTarget = backendBaseUrl;
+  try { var cacheTargetUrl = new URL(backendBaseUrl, window.location.origin); backendCacheTarget = cacheTargetUrl.origin + cacheTargetUrl.pathname; } catch (ignored) {}
   if (hostedPage) document.body.classList.add("lka-hosted-page", nodeHosted ? "lka-node-page" : "lka-hub-page");
   document.body.classList.toggle("work-mode", workMode);
   document.body.classList.toggle("quick-mode", !workMode);
@@ -101,9 +105,13 @@
 
   // v4: use unified conversation ids as session ids + editable titles.
   // Hosted pages keep a separate cache from the local 8780 workbench.
-  var sessionsKey = "agentic-rag-pet-chat-sessions-v4" + (hostedPage ? "-" + lkaHost.role : "");
+  // Hosted node caches used to share one replica namespace across every device.
+  // Keep old entries in storage, but do not let another origin's session IDs or
+  // run cursors become active on this node.
+  var cacheScope = encodeURIComponent(JSON.stringify([window.location.origin, hostedPage ? lkaHost.role : "local", backendCacheTarget, lkaHost && lkaHost.info && lkaHost.info.node_id || ""]));
+  var sessionsKey = "agentic-rag-pet-chat-sessions-v5-" + cacheScope;
   var runCursorKeyPrefix = sessionsKey + "-run-cursor-";
-  var activeSessionKey = "agentic-rag-pet-chat-active-session-v4" + (workMode ? "" : "-quick");
+  var activeSessionKey = "agentic-rag-pet-chat-active-session-v5-" + cacheScope + (workMode ? "" : "-quick");
   var deletedSessionsKey = sessionsKey + "-deleted";
   var deletedSnapshotsKey = sessionsKey + "-deleted-snapshots";
   var draftKeyPrefix = sessionsKey + "-draft-";
@@ -119,9 +127,6 @@
   var deletedSessionSnapshots = [];
   var backendDeletedSessions = [];
   var viewingDeletedSessions = false;
-  var previousSessionsKey = "agentic-rag-pet-chat-sessions-v3";
-  var previousActiveSessionKey = "agentic-rag-pet-chat-active-session-v3" + (workMode ? "" : "-quick");
-  var legacySessionsKey = "agentic-rag-pet-chat-sessions-v2";
   var sessions = [];
   var historyItems = [];
   var deletedHistoryItems = [];
@@ -173,7 +178,6 @@
   var renamingSessionId = "";
   var renameDraft = "";
   var backendOffline = false;
-  var backendBaseUrl = resolveBackendBaseUrl();
   function historyNamespace(sessionId) {
     var host = window.LkaHost || {}, cloud = host.clientMode === "cloud" || host.hosted && host.role === "hub" || !!(host.isCloudSession && host.isCloudSession(sessionId));
     var account = cloud ? host.cloud && host.cloud.account || host.hub && host.hub.account || host.principal : host.principal;
@@ -1118,21 +1122,13 @@
 
     try {
       var rawSessions = localStorage.getItem(sessionsKey);
-      if (!rawSessions) {
-        rawSessions = localStorage.getItem(previousSessionsKey);
-      }
-      if (!rawSessions) {
-        rawSessions = localStorage.getItem(legacySessionsKey);
-      }
       if (rawSessions) {
         var parsed = JSON.parse(rawSessions);
         if (Array.isArray(parsed)) {
           loadedSessions = parsed;
         }
       }
-      loadedActiveId = localStorage.getItem(activeSessionKey)
-        || localStorage.getItem(previousActiveSessionKey)
-        || "";
+      loadedActiveId = localStorage.getItem(activeSessionKey) || "";
     } catch (ignored) {
       loadedSessions = [];
       loadedActiveId = "";
@@ -1158,6 +1154,57 @@
       ? previousActive.id : safeText(loadedActiveId || (sessions[0] && sessions[0].id)).trim();
     if (awaitingQuickIdentity) { activeSessionId = ""; return; }
     if (preserveActiveSelection) ensureActiveSession();
+  }
+
+  function recoverableLocalCache() {
+    if (hostedPage) return { key: "", rows: [] };
+    var key = "agentic-rag-pet-chat-sessions-v4";
+    var marker = key + "-recovered-" + cacheScope;
+    try {
+      var rows = JSON.parse(localStorage.getItem(key) || "[]");
+      return { key: key, marker: marker, rows: localStorage.getItem(marker) ? [] : Array.isArray(rows) ? rows : [] };
+    } catch (ignored) { return { key: key, rows: [] }; }
+  }
+
+  async function recoverLegacyLocalCache(button) {
+    var archive = recoverableLocalCache();
+    if (!archive.rows.length || hostedPage || button.disabled) return;
+    if (!window.confirm("旧版本本机缓存没有记录它属于哪个后端。只会恢复能从当前连接重新读取的普通会话；无法核验的缓存和草稿会留在原存储中。继续？")) return;
+    button.disabled = true; button.textContent = "正在核对旧缓存…";
+    var imported = [], omitted = 0;
+    try {
+      if (lkaHost) await (lkaHost.routingReady ? lkaHost.routingReady() : lkaHost.ready);
+      for (var i = 0; i < archive.rows.length; i += 1) {
+        var raw = archive.rows[i], id = safeText(raw && (raw.id || raw.session_id)).trim();
+        if (!id || raw.kind === "manager" || lkaHost && lkaHost.isCloudSession && lkaHost.isCloudSession(id)) { omitted += 1; continue; }
+        try {
+          var response = await window.fetch(backendBaseUrl + "/sessions/" + encodeURIComponent(id)
+            + "?message_limit=30&message_view=conversation", { headers: { Accept: "application/json" } });
+          if (!response.ok) { omitted += 1; continue; }
+          var detail = await response.json(), restored = sessionFromBackendDetail(detail), cached = sanitizeSession(raw);
+          if (!restored || restored.id !== id || isManagerSession(restored)) { omitted += 1; continue; }
+          if (cached && cached.title_is_custom) { restored.title = cached.title; restored.title_is_custom = true; }
+          if (cached && cached.messages.some(function (message) { return message.queueRequest; })) restored.messages = mergeQueuedMessages(cached, restored);
+          var oldDraft = localStorage.getItem(archive.key + "-draft-" + encodeURIComponent(id));
+          if (oldDraft) writeDraft(id, oldDraft);
+          imported.push(restored);
+        } catch (ignoredSession) { omitted += 1; }
+      }
+      if (imported.length) {
+        var importIds = Object.create(null); imported.forEach(function (item) { importIds[item.id] = true; });
+        sessions = imported.concat(sessions.filter(function (item) { return !importIds[item.id]; }));
+        var oldActive = safeText(localStorage.getItem("agentic-rag-pet-chat-active-session-v4" + (workMode ? "" : "-quick"))).trim();
+        if (importIds[oldActive]) activeSessionId = oldActive;
+        normalizeSessionBounds(); persistSessions(); renderSessionList(); renderActiveMessages();
+        if (activeSessionId && importIds[activeSessionId]) { prepareSessionWorkspace(getActiveSession()); loadFileList(); }
+      }
+      button.textContent = imported.length ? "已恢复 " + imported.length + " 条；未核验 " + omitted + " 条留在旧缓存" : "未找到当前连接可核验的普通会话；旧缓存已保留";
+      button.disabled = omitted === 0;
+      if (omitted === 0) localStorage.setItem(archive.marker, "1");
+    } catch (error) {
+      button.textContent = "恢复失败：" + safeText(error.message || error);
+      button.disabled = false;
+    }
   }
 
   function timestampToMillis(rawValue) {
@@ -1797,6 +1844,7 @@
     var displayRole = managerInstruction ? "user" : role;
     article.className = "message " + displayRole + (isError ? " error" : "");
     if (details && details.clientId) article.dataset.clientId = details.clientId;
+    if (details && details.messageId) article.dataset.messageId = details.messageId;
 
     var bubble = document.createElement("div");
     bubble.className = "bubble";
@@ -2193,6 +2241,14 @@
   async function loadNodeFileList(session, generation) {
     var approved = await nodeWorkspaces(true);
     if (generation !== fileRequestGeneration || activeSessionId !== session.id) return;
+    if (approved === null) { showFilePanelMessage("无法读取当前设备的授权工作区，请检查连接后重试。", false); return; }
+    if (session.nodeWorkspaceId && approved.indexOf(session.nodeWorkspaceId) < 0) {
+      // A browser may retain a workspace ID from another node or an older grant.
+      // Drop only the stale binding; cached conversation text and drafts remain.
+      session.nodeWorkspaceId = ""; session.nodeWorkspaceBound = "";
+      session.workspace = ""; session.backendWorkspace = "";
+      persistSessions();
+    }
     if (!session.nodeWorkspaceId && approved.length === 1) session.nodeWorkspaceId = approved[0];
     fileList.textContent = "";
     var oldPicker = filesPanel && filesPanel.querySelector(".node-workspace-picker");
@@ -2309,9 +2365,10 @@
     if (nodeWorkspaceList && !refresh) return nodeWorkspaceList;
     try {
       var response = await fetch(backendBaseUrl + "/local/workspaces", { headers: { Accept: "application/json" } });
-      var data = response.ok ? await response.json() : { items: [] };
+      if (!response.ok) { nodeWorkspaceList = null; return null; }
+      var data = await response.json();
       nodeWorkspaceList = (data.items || []).map(function (item) { return safeText(item.workspace_id); }).filter(Boolean);
-    } catch (ignored) { nodeWorkspaceList = nodeWorkspaceList || []; }
+    } catch (ignored) { nodeWorkspaceList = null; }
     return nodeWorkspaceList;
   }
   function nodeFileUrl(workspaceId, kind, path) {
@@ -2455,6 +2512,14 @@
       }
     });
     var nodes = [], renameEditorCreated = false;
+    var legacyArchive = recoverableLocalCache();
+    if (legacyArchive.rows.length) {
+      var recovery = document.createElement("div"); recovery.className = "legacy-cache-recovery";
+      var explanation = document.createElement("span"); explanation.textContent = "发现 " + legacyArchive.rows.length + " 条未标注后端的旧缓存";
+      var recoverButton = document.createElement("button"); recoverButton.type = "button"; recoverButton.textContent = "核验并恢复";
+      recoverButton.addEventListener("click", function () { recoverLegacyLocalCache(recoverButton); });
+      recovery.appendChild(explanation); recovery.appendChild(recoverButton); nodes.push(recovery);
+    }
 
     var searchTerm = sessionSearchInput ? sessionSearchInput.value.trim().toLocaleLowerCase() : "";
     var ordered = sessions.filter(function (session) {
@@ -2801,6 +2866,23 @@
     }
   }
 
+  async function loadLatestMessages() {
+    var session = getActiveSession();
+    if (!session || !sessionHistory || !sessionHistory.state(session.id).anchored) return;
+    var expected = sessionMessageSnapshot(session.id);
+    try {
+      sessionHistory.clear(session.id);
+      var detail = await sessionHistory.load(session.id);
+      if (getActiveSession() !== session) return;
+      var remote = sessionFromBackendDetail(detail);
+      if (remote) mergeBackendSession(remote, expected);
+      renderActiveMessages(); messages.scrollTop = messages.scrollHeight;
+      setRunStatus("已回到最新消息");
+    } catch (error) {
+      if (activeSessionId === session.id) setRunStatus("载入最新消息失败：" + safeText(error.message || error), "error");
+    }
+  }
+
   function renderActiveMessagesContent() {
     var session = getActiveSession();
     if (session && session.pausedAnswer && !isTerminalRunStatus(session.runControlStatus) && !liveAnswers[session.id]) liveAnswers[session.id] = session.pausedAnswer;
@@ -2813,6 +2895,11 @@
       earlier.textContent = earlier.disabled ? "正在加载更早消息…" : "加载更早消息";
       earlier.addEventListener("click", loadEarlierMessages);
       messages.appendChild(earlier);
+    }
+    if (session && sessionHistory && sessionHistory.state(session.id).anchored) {
+      var latest = document.createElement("button"); latest.type = "button"; latest.id = "loadLatestMessagesButton";
+      latest.className = "side-action"; latest.textContent = "回到最新消息"; latest.addEventListener("click", loadLatestMessages);
+      messages.appendChild(latest);
     }
     if (!session) {
       if (workMode) appendMessageToDom("assistant", defaultGreetingMessage().text, false);
@@ -6642,9 +6729,32 @@
     if (discoveredRun && discoveredRun.run.status !== "completed" && discoveredRun.run.status !== "cancelled") {
       if (!requestedRunIsPausedManager && !(isManagerSession(session) && managerStreams[session.id] && managerStreams[session.id].runId === session.multiAgentRunId)) reconnectSavedRun(session, null);
     } else if (!discoveredRun) reconnectActiveSavedRun();
+    if (requestedMessageId && isManagerSession(session)) await revealRequestedMessage(session);
     loadFileList();
     persistSessions();
     focusComposer();
+  }
+  async function revealRequestedMessage(session) {
+    if (!sessionHistory || !requestedMessageId || !session) return;
+    try {
+      // Fetch directly around the published delivery message. This avoids
+      // landing at the newest part of a long manager conversation.
+      sessionHistory.clear(session.id);
+      var detail = await sessionHistory.load(session.id, { around: requestedMessageId });
+      if (activeSessionId !== session.id) return;
+      var loaded = sessionFromBackendDetail(detail);
+      if (loaded) mergeBackendSession(loaded, sessionMessageSnapshot(session.id));
+      renderActiveMessages();
+      var target = Array.prototype.find.call(messages.querySelectorAll(".message[data-message-id]"), function (item) {
+        return item.dataset.messageId === requestedMessageId;
+      });
+      if (!target) { setRunStatus("已打开交付会话，但目标消息不在后端返回的记录页中。", "error"); return; }
+      target.classList.add("delivery-message-target");
+      target.scrollIntoView({ block: "center", behavior: "smooth" });
+      setTimeout(function () { if (target.isConnected) target.classList.remove("delivery-message-target"); }, 5000);
+    } catch (error) {
+      if (activeSessionId === session.id) setRunStatus("交付记录定位失败：" + safeText(error.message || error), "error");
+    }
   }
   function setSettingsOpen(open) {
     if (railDocked()) setWorkbenchPanelVisible("rail", open);
@@ -6792,13 +6902,15 @@
     if (workspaceParentInput) workspaceParentInput.value = "";
     saveDefaultPreferences();
   });
-  function switchWorkspace(requestedWorkspace, expectedSessionId) {
+  function switchWorkspace(requestedWorkspace, expectedSessionId, selectedNodeWorkspaceId) {
     var session = getActiveSession();
     if (!session || (expectedSessionId && expectedSessionId !== session.id)) throw new Error("会话已改变，请重新选择工作目录。");
     if (managerEmbedding || isManagerSession(session)) throw new Error("真理不绑定工作目录，请在普通任务会话中操作文件。");
     if (pendingState) throw new Error("请等待当前任务完成后切换工作目录。");
     requestedWorkspace = safeText(requestedWorkspace).trim();
-    if (requestedWorkspace === safeText(session.workspace).trim()) return Promise.resolve(true);
+    selectedNodeWorkspaceId = safeText(selectedNodeWorkspaceId).trim();
+    if (nodeBoundary() && selectedNodeWorkspaceId && selectedNodeWorkspaceId === session.nodeWorkspaceId
+        || !selectedNodeWorkspaceId && requestedWorkspace === safeText(session.workspace).trim()) return Promise.resolve(true);
     if (!requestedWorkspace) {
       renderWorkspaceSummary(session);
       setRunStatus("请输入要切换到的工作目录", "error");
@@ -6811,9 +6923,13 @@
         // A user-chosen directory is an explicit workspace, never a reserved default.
         var previousReserved = session.workspaceReserved;
         session.workspaceReserved = false;
-        try { await bindSessionWorkspace(session, requestedWorkspace); }
+        try { await bindSessionWorkspace(session, nodeBoundary() && selectedNodeWorkspaceId ? selectedNodeWorkspaceId : requestedWorkspace); }
         catch (bindError) { session.workspaceReserved = previousReserved; throw bindError; }
         session.workspace = requestedWorkspace;
+        if (nodeBoundary() && selectedNodeWorkspaceId) {
+          session.nodeWorkspaceId = selectedNodeWorkspaceId;
+          session.nodeWorkspaceBound = selectedNodeWorkspaceId;
+        }
         runSettings.workspace = requestedWorkspace;
         persistSessions();
         if (activeSessionId === session.id) {
