@@ -127,24 +127,11 @@ Windows 桌宠负责快速提问，工作台用于会话、文件、项目、记
 
 前端可以连接单机后端，也可以接入云端 hub 和多台电脑节点。
 
-```mermaid
-flowchart LR
-    subgraph Win["🪟 Windows 电脑"]
-        Pet["Java 桌宠"] --> FE["前端服务 :8780<br/>白名单转发 · /cloud 网关"]
-        Browser["浏览器工作台"] --> FE
-        QQ["QQ 插件（可选）"] --> FE
-    end
-    FE -->|loopback| Local["本机 / WSL 后端 :8765<br/>replica 节点"]
-    Local <-->|同步 · 任务| Hub["☁️ 云端 hub<br/>真理 · 待办 · 项目 · 共享记忆"]
-    Phone["📱 手机"] -->|HTTPS /desktop-pet/connect.html| Hub
-    Phone -.->|一次性授权| Local
-    classDef hub fill:#ede9fe,stroke:#6b46c1,color:#1a1a1a
-    classDef node fill:#e0f2fe,stroke:#0369a1,color:#1a1a1a
-    classDef phone fill:#fef3c7,stroke:#b45309,color:#1a1a1a
-    class Hub hub
-    class Local,FE node
-    class Phone phone
-```
+<p align="center">
+<img src="docs/assets/deployment-topology.svg" width="100%" alt="部署结构：手机经 Tailscale 登录云端 hub，hub 与电脑节点同步，手机可凭一次性授权直连节点">
+</p>
+
+在每台 Windows 电脑上，桌宠、浏览器工作台和可选的 QQ 插件都经本机前端服务（:8780）访问 loopback 后端（:8765），这个后端就是图中的节点。
 
 | 位置 | 提供什么 |
 | :--- | :--- |
